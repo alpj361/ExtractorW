@@ -1,9 +1,14 @@
 const express = require('express');
 const cors = require('cors');
-const fetch = require('node-fetch');
+// Usa fetch nativo si tienes Node 18+, si no, descomenta la siguiente línea:
+// const fetch = require('node-fetch');
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: '*', // O pon tu frontend, ej: 'http://localhost:3000'
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -13,19 +18,17 @@ app.post('/api/processTrends', async (req, res) => {
   try {
     let rawTrendsData = req.body.rawData;
 
-    // Si no hay rawData, obtenerlo del VPS_API_URL
     if (!rawTrendsData && VPS_API_URL) {
       const response = await fetch(VPS_API_URL);
       rawTrendsData = await response.json();
     }
 
-    // Llamada a OpenRouter AI
     const openrouterResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-        'HTTP-Referer': 'https://TU_DOMINIO_RENDER.com/', // Cambia por tu dominio real
+        'HTTP-Referer': 'https://extractorw.onrender.com/', // Cambia por tu dominio real
         'X-Title': 'PulseJ Dashboard'
       },
       body: JSON.stringify({
@@ -61,9 +64,14 @@ app.post('/api/processTrends', async (req, res) => {
       return res.status(500).json({ error: 'OpenRouter API error', message: errorText });
     }
 
-    const aiResponse = await openrouterResponse.json();
-    const content = aiResponse.choices[0].message.content;
-    const processedData = JSON.parse(content);
+    let processedData;
+    try {
+      const aiResponse = await openrouterResponse.json();
+      const content = aiResponse.choices[0].message.content;
+      processedData = JSON.parse(content);
+    } catch (err) {
+      return res.status(500).json({ error: 'Error parsing AI response', message: err.message });
+    }
 
     res.json(processedData);
   } catch (error) {
