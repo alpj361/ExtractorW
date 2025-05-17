@@ -23,6 +23,11 @@ app.post('/api/processTrends', async (req, res) => {
       rawTrendsData = await response.json();
     }
 
+    // Asegura que el campo timestamp tenga la fecha actual
+    if (rawTrendsData && typeof rawTrendsData === 'object') {
+      rawTrendsData.timestamp = new Date().toISOString();
+    }
+
     const openrouterResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
