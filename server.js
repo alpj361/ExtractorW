@@ -14,6 +14,12 @@ app.use(express.json());
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const VPS_API_URL = process.env.VPS_API_URL;
 
+// Supabase
+const { createClient } = require('@supabase/supabase-js');
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
 app.post('/api/processTrends', async (req, res) => {
   try {
     let rawTrendsData = req.body.rawData;
@@ -74,6 +80,25 @@ app.post('/api/processTrends', async (req, res) => {
       const aiResponse = await openrouterResponse.json();
       const content = aiResponse.choices[0].message.content;
       processedData = JSON.parse(content);
+
+      // Guarda en Supabase
+      try {
+        const { error } = await supabase
+          .from('trends')
+          .insert([
+            {
+              timestamp: processedData.timestamp,
+              word_cloud_data: processedData.wordCloudData,
+              top_keywords: processedData.topKeywords,
+              category_data: processedData.categoryData
+            }
+          ]);
+        if (error) {
+          console.error('Error al guardar en Supabase:', error);
+        }
+      } catch (err) {
+        console.error('Error inesperado al guardar en Supabase:', err);
+      }
     } catch (err) {
       return res.status(500).json({ error: 'Error parsing AI response', message: err.message });
     }
