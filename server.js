@@ -577,6 +577,11 @@ app.post('/api/processTrends', async (req, res) => {
           // Procesamos secuencialmente para evitar errores de concurrencia
           for (const trend of processedData.topKeywords) {
             try {
+              console.log('Guardando en trend_details:', {
+                keyword: trend.keyword,
+                about: trend.about,
+                count: trend.count
+              });
               const { error: detailError } = await supabase
                 .from('trend_details')
                 .upsert({
