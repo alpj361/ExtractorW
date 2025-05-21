@@ -12,6 +12,9 @@ const path = require('path');
 // Cargar dotenv para tener acceso a variables de entorno
 require('dotenv').config();
 
+// Importar colores del servidor
+const { COLORS } = require('./server');
+
 // Función para analizar la estructura de datos JSON
 function analyzeStructure(data, path = 'root') {
   if (data === null) {
@@ -45,8 +48,8 @@ function analyzeStructure(data, path = 'root') {
       }
       
       // Verificar propiedades comunes que necesitamos
-      const keyNames = ['name', 'keyword', 'text', 'value'];
-      const volumeNames = ['volume', 'count', 'value'];
+      const keyNames = ['name', 'keyword', 'text', 'value', 'title'];
+      const volumeNames = ['volume', 'count', 'value', 'weight'];
       
       if (typeof data[0] === 'object' && data[0] !== null) {
         const hasNameKey = keyNames.some(key => data[0][key]);
@@ -92,6 +95,110 @@ function analyzeStructure(data, path = 'root') {
   }
   
   return { type: typeof data, value: data, path };
+}
+
+// Función para procesar datos (similar a la del servidor pero simplificada)
+function processTrendsData(rawData) {
+  console.log('\n🔍 Procesando datos...');
+  
+  // Extraer y ordenar las tendencias
+  let trends = [];
+  
+  if (Array.isArray(rawData)) {
+    console.log('rawData es un array');
+    trends = rawData;
+  } else if (rawData.trends && Array.isArray(rawData.trends)) {
+    console.log('rawData tiene propiedad trends');
+    trends = rawData.trends;
+  } else {
+    console.log('Buscando array de tendencias en el objeto');
+    // Buscar cualquier array en el objeto que podría contener tendencias
+    const props = Object.keys(rawData);
+    for (const prop of props) {
+      if (Array.isArray(rawData[prop]) && rawData[prop].length > 0) {
+        trends = rawData[prop];
+        console.log(`Encontrado array en rawData.${prop}`);
+        break;
+      }
+    }
+  }
+  
+  // Si no se encontraron tendencias, mostrar un error
+  if (!trends || trends.length === 0) {
+    console.log('❌ No se encontraron tendencias en los datos');
+    return null;
+  }
+  
+  console.log(`✅ Se encontraron ${trends.length} tendencias para procesar`);
+  
+  // Convertir a formato uniforme
+  const uniformTrends = trends.map(trend => {
+    // Extraer nombre del trend
+    const name = trend.name || trend.keyword || trend.text || trend.title || 'Sin nombre';
+    // Extraer valor/conteo/volumen
+    const volume = trend.volume || trend.count || trend.value || 1;
+    // Extraer categoría
+    const category = trend.category || 'General';
+    
+    return { name, volume, category };
+  });
+  
+  // Ordenar por volumen descendente
+  uniformTrends.sort((a, b) => b.volume - a.volume);
+  
+  // Tomar las 10 principales tendencias
+  const top10 = uniformTrends.slice(0, 10);
+  
+  // Si hay menos de 10, repetir para completar
+  while (top10.length < 10) {
+    top10.push({...top10[top10.length % Math.max(1, top10.length)]});
+  }
+  
+  // A. TopKeywords - Simplemente nombres y conteos
+  const topKeywords = top10.map(({name, volume}) => ({
+    keyword: name,
+    count: volume
+  }));
+  
+  // B. WordCloudData - Para la nube de palabras
+  // Calcular valores min-max para escalar adecuadamente
+  const volumes = top10.map(t => t.volume);
+  const minVol = Math.min(...volumes);
+  const maxVol = Math.max(...volumes);
+  
+  const wordCloudData = top10.map((trend, index) => {
+    // Calcular un valor escalado entre 20 y 100 para el tamaño
+    const scaledValue = minVol === maxVol
+      ? 60 // Si todos tienen el mismo valor, usar un tamaño medio
+      : 20 + ((trend.volume - minVol) / (maxVol - minVol)) * 80;
+      
+    return {
+      text: trend.name,
+      value: scaledValue,
+      color: COLORS[index % COLORS.length]
+    };
+  });
+  
+  // C. CategoryData - Agrupar por categorías
+  const categoryMap = {};
+  top10.forEach(trend => {
+    if (categoryMap[trend.category]) {
+      categoryMap[trend.category] += 1;
+    } else {
+      categoryMap[trend.category] = 1;
+    }
+  });
+  
+  const categoryData = Object.entries(categoryMap).map(([category, count]) => ({
+    category,
+    count
+  })).sort((a, b) => b.count - a.count);
+  
+  return {
+    topKeywords,
+    wordCloudData,
+    categoryData
+  };
 }
 
 // Detectar la estructura de un archivo JSON
@@ -153,15 +260,12 @@ function main() {
     // Analizar la estructura
     detectJsonStructure(fileContent);
     
-    console.log('\n🧪 Simulando procesamiento con el parser de tendencias...');
-    // Importar funciones del servidor
-    const { processLocalTrends } = require('./server');
-    
-    if (typeof processLocalTrends === 'function') {
-      try {
-        const jsonData = JSON.parse(fileContent);
-        const processed = processLocalTrends(jsonData);
-        
+    console.log('\n🧪 Simulando procesamiento de tendencias...');
+    try {
+      const jsonData = JSON.parse(fileContent);
+      const processed = processTrendsData(jsonData);
+      
+      if (processed) {
         console.log('\n✅ Procesamiento exitoso:');
         if (processed.topKeywords && processed.topKeywords.length > 0) {
           console.log('📊 Top Keywords:');
@@ -169,11 +273,16 @@ function main() {
             console.log(`   ${i+1}. ${kw.keyword} (${kw.count})`);
           });
         }
-      } catch (e) {
-        console.error('\n❌ Error al procesar los datos:', e);
+        
+        console.log('\n🔢 Número total de elementos:');
+        console.log(`   TopKeywords: ${processed.topKeywords.length} elementos`);
+        console.log(`   WordCloudData: ${processed.wordCloudData.length} elementos`);
+        console.log(`   CategoryData: ${processed.categoryData.length} elementos`);
+      } else {
+        console.log('\n❌ No se pudieron procesar los datos correctamente');
       }
-    } else {
-      console.log('\n⚠️ La función processLocalTrends no está disponible para pruebas');
+    } catch (e) {
+      console.error('\n❌ Error al procesar los datos:', e);
     }
     
   } catch (error) {

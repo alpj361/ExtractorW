@@ -9,7 +9,7 @@ app.use(cors({
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
-app.use(express.json());
+app.use(express.json({limit: '10mb'}));
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const VPS_API_URL = process.env.VPS_API_URL;
@@ -185,127 +185,226 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// Colores para la nube de palabras
+const COLORS = [
+  '#3B82F6', '#0EA5E9', '#14B8A6', '#10B981', '#F97316', 
+  '#8B5CF6', '#EC4899', '#EF4444', '#F59E0B', '#84CC16'
+];
+
 app.post('/api/processTrends', async (req, res) => {
+  console.time('procesamiento-total');
+  console.log(`[${new Date().toISOString()}] Solicitud recibida en /api/processTrends`);
+  
   try {
-    let rawTrendsData = req.body.rawData;
-
-    if (!rawTrendsData && VPS_API_URL) {
+    // 1. Obtener datos crudos
+    console.time('obtencion-datos');
+    let rawData = req.body.rawData;
+    
+    if (!rawData && VPS_API_URL) {
+      console.log('Datos no proporcionados, obteniendo de VPS API...');
       const response = await fetch(VPS_API_URL);
-      rawTrendsData = await response.json();
+      if (!response.ok) {
+        throw new Error(`Error al obtener datos de la API: ${response.status} ${response.statusText}`);
+      }
+      rawData = await response.json();
+      console.log('Datos obtenidos de VPS API exitosamente');
     }
-
-    // Asegura que el campo timestamp tenga la fecha actual
-    if (rawTrendsData && typeof rawTrendsData === 'object') {
-      rawTrendsData.timestamp = new Date().toISOString();
-    }
-
-    let processedData;
     
-    // Usar procesamiento local o con IA según la configuración
-    if (!USE_AI) {
-      console.log('Usando procesamiento local (sin IA)');
-      processedData = processLocalTrends(rawTrendsData);
+    if (!rawData) {
+      console.log('No se pudieron obtener datos, generando datos mock');
+      rawData = { 
+        trends: Array(15).fill().map((_, i) => ({
+          name: `Tendencia ${i+1}`,
+          volume: 100 - i*5,
+          category: ['Política', 'Economía', 'Deportes', 'Tecnología', 'Entretenimiento'][i % 5]
+        }))
+      };
+    }
+    console.timeEnd('obtencion-datos');
+    
+    // 2. Procesar datos (sin IA)
+    console.time('procesamiento-datos');
+    console.log('Iniciando procesamiento de datos sin IA');
+    
+    // Extraer y ordenar las tendencias
+    let trends = [];
+    
+    if (Array.isArray(rawData)) {
+      console.log('rawData es un array');
+      trends = rawData;
+    } else if (rawData.trends && Array.isArray(rawData.trends)) {
+      console.log('rawData tiene propiedad trends');
+      trends = rawData.trends;
     } else {
-      console.log('Usando procesamiento con IA (OpenRouter)');
-      const openrouterResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-          'HTTP-Referer': 'https://extractorw.onrender.com/', // Cambia por tu dominio real
-          'X-Title': 'PulseJ Dashboard'
-        },
-        body: JSON.stringify({
-          model: 'openai/gpt-4-turbo',
-          messages: [
-            {
-              role: 'system',
-              content: `You are an AI that processes trending data and converts it into structured JSON for a visualization dashboard. 
-              You need to return JSON containing:
-              1. wordCloudData: Array of objects with { text: string, value: number, color: string }
-              2. topKeywords: Array of EXACTLY 10 objects with { keyword: string, count: number }
-              3. categoryData: Array of objects with { category: string, count: number }
-              4. timestamp: Current ISO timestamp
-              
-              The value for wordCloudData should be scaled appropriately for visualization (typically 20-100).
-              Colors should be attractive hexadecimal values.
-              Categories should be extracted or inferred from the trends.
-              
-              IMPORTANT: You MUST include exactly 10 topKeywords, no more, no less.
-              If the input has fewer than 10, repeat the most important ones. 
-              If it has more than 10, select the most important 10.
-              
-              Return ONLY the JSON object, no explanations or other text.`
-            },
-            {
-              role: 'user',
-              content: `Process these trending topics into the required JSON format: 
-              ${JSON.stringify(rawTrendsData)}`
-            }
-          ],
-          temperature: 0.2,
-          response_format: { type: "json_object" }
-        })
-      });
-
-      if (!openrouterResponse.ok) {
-        const errorText = await openrouterResponse.text();
-        return res.status(500).json({ error: 'OpenRouter API error', message: errorText });
+      console.log('Buscando array de tendencias en el objeto');
+      // Buscar cualquier array en el objeto que podría contener tendencias
+      const props = Object.keys(rawData);
+      for (const prop of props) {
+        if (Array.isArray(rawData[prop]) && rawData[prop].length > 0) {
+          trends = rawData[prop];
+          console.log(`Encontrado array en rawData.${prop}`);
+          break;
+        }
       }
-
-      try {
-        const aiResponse = await openrouterResponse.json();
-        const content = aiResponse.choices[0].message.content;
-        processedData = JSON.parse(content);
-      } catch (err) {
-        // Si hay error con la IA, usar procesamiento local como fallback
-        console.error('Error processing AI response, using local processing as fallback:', err.message);
-        processedData = processLocalTrends(rawTrendsData);
-      }
-    }
-
-    // Asegurar que hay timestamp
-    if (!processedData.timestamp) {
-      processedData.timestamp = new Date().toISOString();
     }
     
-    // Si no hay exactamente 10 topKeywords, ajustar con procesamiento local
-    if (!processedData.topKeywords || processedData.topKeywords.length !== 10) {
-      console.log(`Ajustando topKeywords: recibidos ${processedData.topKeywords?.length || 0}, necesarios 10`);
-      const localProcessed = processLocalTrends(rawTrendsData);
-      processedData.topKeywords = localProcessed.topKeywords;
+    // Si no se encontraron tendencias, crear algunas de ejemplo
+    if (!trends || trends.length === 0) {
+      console.log('No se encontraron tendencias, usando datos de ejemplo');
+      trends = Array(15).fill().map((_, i) => ({
+        name: `Tendencia ${i+1}`,
+        volume: 100 - i*5,
+        category: ['Política', 'Economía', 'Deportes', 'Tecnología', 'Entretenimiento'][i % 5]
+      }));
     }
-
-    // Guarda en Supabase
-    try {
-      const { error } = await supabase
-        .from('trends')
-        .insert([
-          {
+    
+    console.log(`Se encontraron ${trends.length} tendencias para procesar`);
+    
+    // Convertir a formato uniforme
+    const uniformTrends = trends.map(trend => {
+      // Extraer nombre del trend
+      const name = trend.name || trend.keyword || trend.text || trend.title || 'Sin nombre';
+      // Extraer valor/conteo/volumen
+      const volume = trend.volume || trend.count || trend.value || 1;
+      // Extraer categoría
+      const category = trend.category || 'General';
+      
+      return { name, volume, category };
+    });
+    
+    // Ordenar por volumen descendente
+    uniformTrends.sort((a, b) => b.volume - a.volume);
+    
+    // Tomar las 10 principales tendencias
+    const top10 = uniformTrends.slice(0, 10);
+    
+    // Si hay menos de 10, repetir para completar
+    while (top10.length < 10) {
+      top10.push({...top10[top10.length % Math.max(1, top10.length)]});
+    }
+    
+    // 3. Crear estructuras de datos requeridas
+    
+    // A. TopKeywords - Simplemente nombres y conteos
+    const topKeywords = top10.map(({name, volume}) => ({
+      keyword: name,
+      count: volume
+    }));
+    
+    // B. WordCloudData - Para la nube de palabras
+    // Calcular valores min-max para escalar adecuadamente
+    const volumes = top10.map(t => t.volume);
+    const minVol = Math.min(...volumes);
+    const maxVol = Math.max(...volumes);
+    
+    const wordCloudData = top10.map((trend, index) => {
+      // Calcular un valor escalado entre 20 y 100 para el tamaño
+      const scaledValue = minVol === maxVol
+        ? 60 // Si todos tienen el mismo valor, usar un tamaño medio
+        : 20 + ((trend.volume - minVol) / (maxVol - minVol)) * 80;
+        
+      return {
+        text: trend.name,
+        value: scaledValue,
+        color: COLORS[index % COLORS.length]
+      };
+    });
+    
+    // C. CategoryData - Agrupar por categorías
+    const categoryMap = {};
+    top10.forEach(trend => {
+      if (categoryMap[trend.category]) {
+        categoryMap[trend.category] += 1;
+      } else {
+        categoryMap[trend.category] = 1;
+      }
+    });
+    
+    const categoryData = Object.entries(categoryMap).map(([category, count]) => ({
+      category,
+      count
+    })).sort((a, b) => b.count - a.count);
+    
+    console.timeEnd('procesamiento-datos');
+    
+    // 4. Crear objeto de respuesta
+    const processedData = {
+      topKeywords,
+      wordCloudData,
+      categoryData,
+      timestamp: new Date().toISOString()
+    };
+    
+    // 5. Guardar en Supabase
+    console.time('guardado-supabase');
+    if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+      try {
+        console.log('Guardando datos en Supabase...');
+        const { error } = await supabase
+          .from('trends')
+          .insert([{
             timestamp: processedData.timestamp,
             word_cloud_data: processedData.wordCloudData,
             top_keywords: processedData.topKeywords,
             category_data: processedData.categoryData,
-            raw_data: rawTrendsData
-          }
-        ]);
-      if (error) {
-        console.error('Error al guardar en Supabase:', error);
+            raw_data: rawData
+          }]);
+        
+        if (error) {
+          console.error('Error al guardar en Supabase:', error);
+        } else {
+          console.log('Datos guardados exitosamente en Supabase');
+        }
+      } catch (err) {
+        console.error('Error al intentar guardar en Supabase:', err);
       }
-    } catch (err) {
-      console.error('Error inesperado al guardar en Supabase:', err);
+    } else {
+      console.log('Credenciales de Supabase no configuradas, omitiendo guardado');
     }
-
+    console.timeEnd('guardado-supabase');
+    
+    // 6. Responder al cliente
+    console.log('Enviando respuesta al cliente');
+    console.timeEnd('procesamiento-total');
     res.json(processedData);
+    
   } catch (error) {
-    res.status(500).json({ error: 'Error processing trends', message: error.message });
+    console.error('Error en /api/processTrends:', error);
+    res.status(500).json({ 
+      error: 'Error processing trends', 
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
   }
 });
 
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// Endpoints adicionales para diagnóstico
+
+// Endpoint de health check
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
 });
 
-// Exportamos la función para que pueda ser utilizada por otros scripts
-module.exports = { processLocalTrends }; 
+// Iniciar el servidor
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
+  console.log(`[${new Date().toISOString()}] Servidor iniciado en puerto ${PORT}`);
+  console.log(`- Modo de procesamiento: Sin IA (procesamiento local)`);
+  if (VPS_API_URL) {
+    console.log(`- VPS API configurada: ${VPS_API_URL}`);
+  } else {
+    console.log('- VPS API no configurada, usando datos de la solicitud o generando datos mock');
+  }
+  if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+    console.log(`- Supabase configurado: ${SUPABASE_URL}`);
+  } else {
+    console.log('- Supabase no configurado, no se guardarán datos');
+  }
+});
+
+// Exportar para testing y depuración
+module.exports = { COLORS }; 
