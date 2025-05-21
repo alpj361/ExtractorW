@@ -14,6 +14,7 @@ app.use(express.json({limit: '10mb'}));
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const VPS_API_URL = process.env.VPS_API_URL;
 const USE_AI = process.env.USE_AI === 'true'; // Nueva variable de entorno
+const USE_WEB_SEARCH = true; // Indicar si queremos usar búsqueda web para tendencias
 
 // Colores para la nube de palabras
 const COLORS = [
@@ -44,7 +45,7 @@ function mapRange(value, inMin, inMax, outMin, outMax) {
 }
 
 // Función para procesar tendencias localmente (sin IA)
-function processLocalTrends(rawData) {
+async function processLocalTrends(rawData) {
   try {
     console.log('Iniciando procesamiento local con estructura:', typeof rawData);
     
@@ -135,6 +136,33 @@ function processLocalTrends(rawData) {
       keyword: trend.name || trend.keyword || `Tendencia ${index + 1}`,
       count: trend.volume || trend.count || 1
     }));
+    
+    // Enriquecer con información sobre cada tendencia si USE_WEB_SEARCH está habilitado
+    if (USE_WEB_SEARCH) {
+      console.log('Obteniendo información adicional sobre tendencias (processLocalTrends)...');
+      
+      try {
+        // Solo procesamos las 5 tendencias principales para esta función
+        for (let i = 0; i < Math.min(5, topKeywords.length); i++) {
+          const trend = topKeywords[i];
+          trend.about = await searchTrendInfo(trend.keyword);
+          console.log(`Información obtenida para ${trend.keyword}: ${trend.about.substring(0, 50)}...`);
+        }
+        
+        // Para el resto usamos información genérica
+        for (let i = 5; i < topKeywords.length; i++) {
+          topKeywords[i].about = `Información sobre ${topKeywords[i].keyword}`;
+        }
+      } catch (error) {
+        console.error('Error al enriquecer tendencias:', error);
+        // Agregar información genérica en caso de error
+        topKeywords.forEach(trend => {
+          if (!trend.about) {
+            trend.about = `Tendencia relacionada con ${trend.keyword}`;
+          }
+        });
+      }
+    }
     
     // Crear estructura para wordCloudData
     const wordCloudData = top10.map((trend, index) => {
@@ -362,6 +390,53 @@ app.post('/api/processTrends', async (req, res) => {
       count: volume
     }));
     
+    // Enriquecer con información sobre cada tendencia si USE_WEB_SEARCH está habilitado
+    if (USE_WEB_SEARCH) {
+      console.time('enriquecimiento-tendencias');
+      console.log('Obteniendo información adicional sobre tendencias...');
+      
+      try {
+        // Procesamos las 5 tendencias principales para no retrasar demasiado la respuesta
+        for (let i = 0; i < Math.min(5, topKeywords.length); i++) {
+          const trend = topKeywords[i];
+          trend.about = await searchTrendInfo(trend.keyword);
+          console.log(`Información obtenida para ${trend.keyword}: ${trend.about.substring(0, 50)}...`);
+        }
+        
+        // Para el resto de tendencias, lo haremos de forma asíncrona después
+        // y lo actualizaremos en Supabase, pero no retrasamos la respuesta inicial
+        if (topKeywords.length > 5) {
+          (async () => {
+            for (let i = 5; i < topKeywords.length; i++) {
+              const trend = topKeywords[i];
+              trend.about = await searchTrendInfo(trend.keyword);
+              console.log(`Información posterior obtenida para ${trend.keyword}`);
+              
+              // Actualizar en Supabase si está configurado
+              if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+                try {
+                  await supabase
+                    .from('trend_details')
+                    .upsert({
+                      keyword: trend.keyword,
+                      about: trend.about,
+                      count: trend.count,
+                      updated_at: new Date().toISOString()
+                    });
+                } catch (err) {
+                  console.error(`Error al actualizar información en Supabase: ${err.message}`);
+                }
+              }
+            }
+          })();
+        }
+      } catch (error) {
+        console.error('Error al enriquecer tendencias:', error);
+      }
+      
+      console.timeEnd('enriquecimiento-tendencias');
+    }
+    
     // B. WordCloudData - Para la nube de palabras
     // Calcular valores min-max para escalar adecuadamente
     const volumes = top10.map(t => t.volume);
@@ -486,6 +561,29 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Endpoint adicional para probar la búsqueda de información
+app.get('/api/searchTrendInfo/:trend', async (req, res) => {
+  try {
+    const trend = req.params.trend;
+    console.log(`Solicitud de información para tendencia: ${trend}`);
+    
+    const info = await searchTrendInfo(trend);
+    
+    res.json({
+      trend,
+      about: info,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error en /api/searchTrendInfo:', error);
+    res.status(500).json({
+      error: 'Error al buscar información',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Iniciar el servidor
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
@@ -504,4 +602,82 @@ app.listen(PORT, () => {
 });
 
 // Exportar para testing y depuración
-module.exports = { COLORS }; 
+module.exports = { COLORS };
+
+// Función para buscar información sobre una tendencia
+async function searchTrendInfo(trend) {
+  try {
+    console.log(`Buscando información sobre: ${trend}`);
+    
+    // Usar Perplexity API si está disponible (requiere API key)
+    const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
+    
+    if (PERPLEXITY_API_KEY) {
+      const response = await fetch('https://api.perplexity.ai/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${PERPLEXITY_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: 'mixtral-8x7b-instruct',
+          messages: [
+            {
+              role: 'system',
+              content: 'Eres un asistente que proporciona información concisa sobre temas tendencia. Responde en 2-3 oraciones máximo.'
+            },
+            {
+              role: 'user',
+              content: `¿De qué trata el tema o tendencia "${trend}"? Responde de forma breve y concisa.`
+            }
+          ]
+        })
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.choices && data.choices[0] && data.choices[0].message) {
+          return data.choices[0].message.content;
+        }
+      }
+    }
+    
+    // Alternativa: Usar OpenRouter API como fallback
+    if (OPENROUTER_API_KEY) {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+          'HTTP-Referer': 'https://pulse.domain.com'
+        },
+        body: JSON.stringify({
+          model: 'anthropic/claude-3-haiku',
+          messages: [
+            {
+              role: 'system',
+              content: 'Eres un asistente que proporciona información concisa sobre temas tendencia.'
+            },
+            {
+              role: 'user',
+              content: `Explica brevemente en 1-2 oraciones de qué trata la tendencia o tema "${trend}".`
+            }
+          ]
+        })
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.choices && data.choices[0] && data.choices[0].message) {
+          return data.choices[0].message.content;
+        }
+      }
+    }
+    
+    // Si todo falla, proporcionar un mensaje genérico
+    return `Tendencia relacionada con ${trend}`;
+  } catch (error) {
+    console.error(`Error al buscar información sobre ${trend}:`, error);
+    return `Tendencia popular: ${trend}`;
+  }
+} 
