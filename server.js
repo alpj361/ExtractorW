@@ -3,6 +3,12 @@ const cors = require('cors');
 // Usa fetch nativo si tienes Node 18+, si no, descomenta la siguiente línea:
 // const fetch = require('node-fetch');
 
+// Colores para la nube de palabras
+const COLORS = [
+  '#3B82F6', '#0EA5E9', '#14B8A6', '#10B981', '#F97316', 
+  '#8B5CF6', '#EC4899', '#EF4444', '#F59E0B', '#84CC16'
+];
+
 const app = express();
 app.use(cors({
   origin: '*', // O pon tu frontend, ej: 'http://localhost:3000'
@@ -15,12 +21,6 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const VPS_API_URL = process.env.VPS_API_URL;
 const USE_AI = process.env.USE_AI === 'true'; // Nueva variable de entorno
 const USE_WEB_SEARCH = true; // Indicar si queremos usar búsqueda web para tendencias
-
-// Colores para la nube de palabras
-const COLORS = [
-  '#3B82F6', '#0EA5E9', '#14B8A6', '#10B981', '#F97316', 
-  '#8B5CF6', '#EC4899', '#EF4444', '#F59E0B', '#84CC16'
-];
 
 // Función para generar color aleatorio
 function getRandomColor() {
@@ -239,7 +239,14 @@ async function processLocalTrends(rawData) {
 const { createClient } = require('@supabase/supabase-js');
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Initialize Supabase client only if credentials are available
+let supabase = null;
+if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+  supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  console.log('Supabase client initialized');
+} else {
+  console.log('Supabase credentials not found, database features will be disabled');
+}
 
 app.post('/api/processTrends', async (req, res) => {
   console.time('procesamiento-total');
@@ -290,6 +297,12 @@ app.post('/api/processTrends', async (req, res) => {
     } else if (rawData.trends && Array.isArray(rawData.trends)) {
       console.log('rawData tiene propiedad trends');
       trends = rawData.trends;
+    } else if (rawData.twitter_trends && Array.isArray(rawData.twitter_trends)) {
+      console.log('rawData tiene propiedad twitter_trends');
+      trends = rawData.twitter_trends;
+    } else if (rawData.trends24_trends && Array.isArray(rawData.trends24_trends)) {
+      console.log('rawData tiene propiedad trends24_trends');
+      trends = rawData.trends24_trends;
     } else {
       console.log('Buscando array de tendencias en el objeto');
       // Buscar cualquier array en el objeto que podría contener tendencias
@@ -301,6 +314,29 @@ app.post('/api/processTrends', async (req, res) => {
           break;
         }
       }
+    }
+    
+    // Procesar formato específico de ExtractorT si detectamos ese patrón (por ejemplo: "1. Tendencia")
+    if (trends.length > 0 && trends.some(item => {
+      return typeof item === 'string' && /^\d+\.\s+.+/.test(item); // Patrón "1. Texto"
+    })) {
+      console.log('Detectado formato de ExtractorT con prefijos numéricos');
+      trends = trends.map((item, index) => {
+        if (typeof item === 'string') {
+          // Extraer el texto sin el prefijo numérico (ej: "1. Tendencia" -> "Tendencia")
+          const match = item.match(/^\d+\.\s+(.+)/);
+          const text = match ? match[1].trim() : item;
+          
+          return {
+            name: text,
+            text: text,
+            volume: 100 - (index * 5), // Volumen decreciente según la posición
+            position: index + 1,
+            category: 'General'
+          };
+        }
+        return item;
+      });
     }
     
     // Si no se encontraron tendencias, crear algunas de ejemplo
@@ -384,11 +420,74 @@ app.post('/api/processTrends', async (req, res) => {
     
     // 3. Crear estructuras de datos requeridas
     
-    // A. TopKeywords - Simplemente nombres y conteos
-    const topKeywords = top10.map(({name, volume}, index) => ({
-      keyword: name !== 'Sin nombre' ? name : `Tendencia ${index + 1}`,
-      count: volume
-    }));
+    // A. TopKeywords - Preparación de nombres y conteos
+    // Creamos una función auxiliar para mejorar la consistencia con wordCloudData
+    const getKeywordName = (trend, index) => {
+      if (trend.name !== 'Sin nombre') {
+        return trend.name;
+      }
+      
+      // Ya que los nombres serán usados en topKeywords y wordCloudData,
+      // guardamos el nombre recuperado en el trend original para consistencia
+      
+      // Intentar buscar en el trend original
+      if (Array.isArray(trends) && trends[index]) {
+        const originalTrend = trends[index];
+        // Buscar cualquier campo string que pueda contener el nombre
+        if (typeof originalTrend === 'object') {
+          for (const [key, value] of Object.entries(originalTrend)) {
+            if (typeof value === 'string' && value.trim() && 
+                key !== 'category' && key !== 'color' &&
+                !['id', 'count', 'volume', 'frequency'].includes(key.toLowerCase())) {
+              console.log(`Recuperado nombre "${value.trim()}" desde trends[${index}].${key}`);
+              return value.trim();
+            }
+          }
+        } else if (typeof originalTrend === 'string') {
+          return originalTrend.trim();
+        }
+      }
+      
+      // Si no se encontró en trends, buscar en rawData
+      if (rawData && typeof rawData === 'object') {
+        const originalArray = Array.isArray(rawData) ? rawData : 
+                            (rawData.trends && Array.isArray(rawData.trends)) ? rawData.trends : 
+                            (rawData.twitter_trends && Array.isArray(rawData.twitter_trends)) ? rawData.twitter_trends : 
+                            null;
+        
+        if (originalArray && originalArray[index]) {
+          const rawTrend = originalArray[index];
+          
+          if (typeof rawTrend === 'string') {
+            return rawTrend.trim();
+          } else if (typeof rawTrend === 'object') {
+            // Buscar campos que puedan contener el nombre
+            for (const [key, value] of Object.entries(rawTrend)) {
+              if (typeof value === 'string' && value.trim() && 
+                  key !== 'category' && key !== 'color' &&
+                  !['id', 'count', 'volume', 'frequency'].includes(key.toLowerCase())) {
+                console.log(`Recuperado nombre "${value.trim()}" desde rawData[${index}].${key}`);
+                return value.trim();
+              }
+            }
+          }
+        }
+      }
+      
+      // Si todo falla, usar nombre genérico
+      return `Tendencia ${index + 1}`;
+    };
+    
+    // Aplicamos la función a cada trend para extraer nombres consistentes
+    const topKeywords = top10.map((trend, index) => {
+      const keywordName = getKeywordName(trend, index);
+      // Actualizar el nombre en el trend original para wordCloudData
+      trend.name = keywordName; 
+      return {
+        keyword: keywordName,
+        count: trend.volume
+      };
+    });
     
     // Enriquecer con información sobre cada tendencia si USE_WEB_SEARCH está habilitado
     if (USE_WEB_SEARCH) {
@@ -413,7 +512,7 @@ app.post('/api/processTrends', async (req, res) => {
               console.log(`Información posterior obtenida para ${trend.keyword}`);
               
               // Actualizar en Supabase si está configurado
-              if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+              if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase) {
                 try {
                   await supabase
                     .from('trend_details')
@@ -445,6 +544,8 @@ app.post('/api/processTrends', async (req, res) => {
     
     console.log(`Rango de volúmenes: min=${minVol}, max=${maxVol}`);
     
+    // Ahora wordCloudData puede usar directamente los nombres ya recuperados y normalizados
+    // No necesitamos repetir la lógica de recuperación porque ya se aplicó en topKeywords
     const wordCloudData = top10.map((trend, index) => {
       // Calcular un valor escalado entre 20 y 100 para el tamaño
       let scaledValue = 60; // Valor predeterminado
@@ -453,25 +554,10 @@ app.post('/api/processTrends', async (req, res) => {
         scaledValue = Math.round(20 + ((trend.volume - minVol) / (maxVol - minVol)) * 80);
       }
       
-      // Verificar que el nombre no sea 'Sin nombre' si hay datos en raw_data
-      if (trend.name === 'Sin nombre' && rawData && Array.isArray(rawData) && rawData[index]) {
-        // Intentar obtener el texto de la tendencia directamente de raw_data
-        const rawTrend = rawData[index];
-        if (typeof rawTrend === 'object') {
-          for (const [key, value] of Object.entries(rawTrend)) {
-            if (typeof value === 'string' && value.trim() && key !== 'category' && key !== 'color') {
-              trend.name = value.trim();
-              break;
-            }
-          }
-        }
-      }
-      
-      // Asegurar que tenemos un texto válido
-      const text = trend.name !== 'Sin nombre' ? trend.name : `Tendencia ${index + 1}`;
-      
+      // trend.name ya fue actualizado en la generación de topKeywords
+      // Usar directamente el nombre del trend
       return {
-        text: text,
+        text: trend.name,
         value: scaledValue,
         color: COLORS[index % COLORS.length]
       };
@@ -504,7 +590,7 @@ app.post('/api/processTrends', async (req, res) => {
     
     // 5. Guardar en Supabase
     console.time('guardado-supabase');
-    if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+    if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase) {
       try {
         console.log('Guardando datos en Supabase...');
         const { error } = await supabase
@@ -526,16 +612,28 @@ app.post('/api/processTrends', async (req, res) => {
         console.error('Error al intentar guardar en Supabase:', err);
       }
     } else {
-      console.log('Credenciales de Supabase no configuradas, omitiendo guardado');
+      console.log('Credenciales de Supabase no configuradas o cliente no inicializado, omitiendo guardado');
     }
     console.timeEnd('guardado-supabase');
     
     // 6. Responder al cliente
     console.log('Enviando respuesta al cliente');
     
-    // Muestra los primeros 3 items para debug
-    console.log('Primeros 3 items de wordCloudData:', processedData.wordCloudData.slice(0, 3));
-    console.log('Primeros 3 items de topKeywords:', processedData.topKeywords.slice(0, 3));
+    // Información de diagnóstico completa
+    console.log('DIAGNÓSTICO: wordCloudData ----------');
+    processedData.wordCloudData.forEach((item, index) => {
+      console.log(`[${index}] text: "${item.text}", value: ${item.value}, color: ${item.color}`);
+    });
+    
+    console.log('\nDIAGNÓSTICO: topKeywords ----------');
+    processedData.topKeywords.forEach((item, index) => {
+      console.log(`[${index}] keyword: "${item.keyword}", count: ${item.count}`);
+    });
+    
+    console.log('\nDIAGNÓSTICO: categoryData ----------');
+    processedData.categoryData.forEach((item, index) => {
+      console.log(`[${index}] category: "${item.category}", count: ${item.count}`);
+    });
     
     console.timeEnd('procesamiento-total');
     res.json(processedData);
@@ -594,10 +692,10 @@ app.listen(PORT, () => {
   } else {
     console.log('- VPS API no configurada, usando datos de la solicitud o generando datos mock');
   }
-  if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+  if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase) {
     console.log(`- Supabase configurado: ${SUPABASE_URL}`);
   } else {
-    console.log('- Supabase no configurado, no se guardarán datos');
+    console.log('- Supabase no configurado o no inicializado, no se guardarán datos');
   }
 });
 

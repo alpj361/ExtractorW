@@ -1,0 +1,66 @@
+{
+  "rawData": {
+    "trends": [
+      {
+        "name": "Guatemala",
+        "volume": 100,
+        "category": "Política"
+      },
+      {
+        "name": "Tecnología",
+        "volume": 85,
+        "category": "Tecnología"
+      },
+      {
+        "name": "COVID-19",
+        "volume": 70,
+        "category": "Salud"
+      },
+      {
+        "name": "Economía",
+        "volume": 65,
+        "category": "Economía"
+      },
+      {
+        "name": "Deportes",
+        "volume": 60,
+        "category": "Deportes"
+      },
+      {
+        "name": "Clima",
+        "volume": 55,
+        "category": "Naturaleza"
+      },
+      {
+        "name": "Educación",
+        "volume": 50,
+        "category": "Educación"
+      },
+      {
+        "name": "Elecciones",
+        "volume": 45,
+        "category": "Política"
+      },
+      {
+        "name": "Turismo",
+        "volume": 40,
+        "category": "Turismo"
+      },
+      {
+        "name": "Cultura",
+        "volume": 35,
+        "category": "Cultura"
+      },
+      {
+        "name": "Medicina",
+        "volume": 30,
+        "category": "Salud"
+      },
+      {
+        "name": "Tecnología 5G",
+        "volume": 25,
+        "category": "Tecnología"
+      }
+    ]
+  }
+} 
