@@ -1,0 +1,27 @@
+[
+  {
+    "name": "Política",
+    "count": 10,
+    "category": "Política"
+  },
+  {
+    "name": "Economía",
+    "count": 8,
+    "category": "Economía"
+  },
+  {
+    "name": "Tecnología",
+    "count": 7,
+    "category": "Tecnología"
+  },
+  {
+    "name": "Deportes",
+    "count": 5,
+    "category": "Deportes"
+  },
+  {
+    "name": "Cultura",
+    "count": 3,
+    "category": "Cultura"
+  }
+] 

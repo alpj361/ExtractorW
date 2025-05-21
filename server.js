@@ -67,11 +67,58 @@ async function processLocalTrends(rawData) {
       console.log(`rawData es un array con ${rawData.length} elementos`);
       trendsArray = rawData.map(item => {
         // Intentar extraer nombre y volumen según diferentes formatos
-        return {
-          name: item.name || item.keyword || item.text || item.value || 'Desconocido',
-          volume: item.volume || item.count || item.value || 1,
-          category: item.category || 'General'
-        };
+        const name = item.name || item.keyword || item.text || item.value || 'Desconocido';
+        const volume = item.volume || item.count || item.value || 1;
+        // Si no hay categoría, asignar una basada en el nombre
+        let category = item.category || 'General';
+        
+        // Generar una categoría si no existe
+        if (!item.category && name !== 'Desconocido') {
+          // Categorías comunes
+          const categories = {
+            'política': 'Política',
+            'gobierno': 'Política',
+            'presidente': 'Política',
+            'elecciones': 'Política',
+            'congreso': 'Política',
+            'deporte': 'Deportes',
+            'fútbol': 'Deportes',
+            'baloncesto': 'Deportes',
+            'atleta': 'Deportes',
+            'economía': 'Economía',
+            'finanzas': 'Economía',
+            'dinero': 'Economía',
+            'mercado': 'Economía',
+            'tecnología': 'Tecnología',
+            'tech': 'Tecnología',
+            'digital': 'Tecnología',
+            'internet': 'Tecnología',
+            'app': 'Tecnología',
+            'salud': 'Salud',
+            'covid': 'Salud',
+            'hospital': 'Salud',
+            'enfermedad': 'Salud',
+            'vacuna': 'Salud',
+            'educación': 'Educación',
+            'escuela': 'Educación',
+            'universidad': 'Educación',
+            'cultura': 'Cultura',
+            'música': 'Cultura',
+            'cine': 'Cultura',
+            'arte': 'Cultura',
+            'libro': 'Cultura'
+          };
+          
+          const nameLower = name.toLowerCase();
+          for (const [keyword, cat] of Object.entries(categories)) {
+            if (nameLower.includes(keyword)) {
+              category = cat;
+              break;
+            }
+          }
+        }
+        
+        return { name, volume, category };
       });
     } else if (typeof rawData === 'object') {
       console.log('rawData es un objeto, buscando elementos de tendencia');
@@ -146,7 +193,7 @@ async function processLocalTrends(rawData) {
         for (let i = 0; i < Math.min(5, topKeywords.length); i++) {
           const trend = topKeywords[i];
           trend.about = await searchTrendInfo(trend.keyword);
-          console.log(`Información obtenida para ${trend.keyword}: ${trend.about.substring(0, 50)}...`);
+          console.log(`Información obtenida para ${trend.keyword}: ${trend.about ? trend.about.substring(0, 50) + '...' : 'No se pudo obtener información'}`);
         }
         
         // Para el resto usamos información genérica
@@ -404,6 +451,11 @@ app.post('/api/processTrends', async (req, res) => {
           }
         }
         
+        // NUEVO: Si aún no hay nombre pero hay una categoría, usar la categoría como nombre
+        if (uniformTrend.name === 'Sin nombre' && trend.category && typeof trend.category === 'string') {
+          uniformTrend.name = `${trend.category}`;
+        }
+        
         // Extraer valor/conteo/volumen con más opciones
         const possibleVolumeKeys = ['volume', 'count', 'value', 'weight', 'size', 'frequency'];
         for (const key of possibleVolumeKeys) {
@@ -421,7 +473,7 @@ app.post('/api/processTrends', async (req, res) => {
         // Preservar campo about si existe
         if (trend.about && typeof trend.about === 'string') {
           uniformTrend.about = trend.about;
-          console.log(`Preservando campo about: "${uniformTrend.about.substring(0, 50)}..."`);
+          console.log(`Preservando campo about: "${uniformTrend.about ? uniformTrend.about.substring(0, 50) + '...' : 'No hay información'}"`);
         }
       }
       
@@ -540,9 +592,9 @@ app.post('/api/processTrends', async (req, res) => {
           // Solo buscar información si no se proporcionó en los datos originales
           if (!trend.about) {
             trend.about = await searchTrendInfo(trend.keyword);
-            console.log(`Información obtenida para ${trend.keyword}: ${trend.about.substring(0, 50)}...`);
+            console.log(`Información obtenida para ${trend.keyword}: ${trend.about ? trend.about.substring(0, 50) + '...' : 'No se pudo obtener información'}`);
           } else {
-            console.log(`Usando información existente para ${trend.keyword}: ${trend.about.substring(0, 50)}...`);
+            console.log(`Usando información existente para ${trend.keyword}: ${trend.about ? trend.about.substring(0, 50) + '...' : 'No hay información'}`);
           }
         }
         
