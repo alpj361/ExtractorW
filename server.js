@@ -193,7 +193,7 @@ async function processLocalTrends(rawData) {
         for (let i = 0; i < Math.min(5, topKeywords.length); i++) {
           const trend = topKeywords[i];
           trend.about = await searchTrendInfo(trend.keyword);
-          console.log(`Información obtenida para ${trend.keyword}: ${trend.about ? trend.about.substring(0, 50) + '...' : 'No se pudo obtener información'}`);
+          console.log(`Información obtenida para ${trend.keyword}: ${typeof trend.about === 'string' ? trend.about.substring(0, 50) + '...' : 'No se pudo obtener información'}`);
         }
         
         // Para el resto usamos información genérica
@@ -473,7 +473,7 @@ app.post('/api/processTrends', async (req, res) => {
         // Preservar campo about si existe
         if (trend.about && typeof trend.about === 'string') {
           uniformTrend.about = trend.about;
-          console.log(`Preservando campo about: "${uniformTrend.about ? uniformTrend.about.substring(0, 50) + '...' : 'No hay información'}"`);
+          console.log(`Preservando campo about: "${typeof uniformTrend.about === 'string' ? uniformTrend.about.substring(0, 50) + '...' : 'No hay información'}"`);
         }
       }
       
@@ -592,9 +592,9 @@ app.post('/api/processTrends', async (req, res) => {
           // Solo buscar información si no se proporcionó en los datos originales
           if (!trend.about) {
             trend.about = await searchTrendInfo(trend.keyword);
-            console.log(`Información obtenida para ${trend.keyword}: ${trend.about ? trend.about.substring(0, 50) + '...' : 'No se pudo obtener información'}`);
+            console.log(`Información obtenida para ${trend.keyword}: ${typeof trend.about === 'string' ? trend.about.substring(0, 50) + '...' : 'No se pudo obtener información'}`);
           } else {
-            console.log(`Usando información existente para ${trend.keyword}: ${trend.about ? trend.about.substring(0, 50) + '...' : 'No hay información'}`);
+            console.log(`Usando información existente para ${trend.keyword}: ${typeof trend.about === 'string' ? trend.about.substring(0, 50) + '...' : 'No hay información'}`);
           }
         }
         
@@ -768,8 +768,8 @@ app.post('/api/processTrends', async (req, res) => {
     
     console.log('\nDIAGNÓSTICO: topKeywords ----------');
     processedData.topKeywords.forEach((item, index) => {
-      const aboutPreview = item.about 
-        ? `about: "${item.about.substring(0, 30)}..."` 
+      const aboutPreview = typeof item.about === 'string'
+        ? `about: "${item.about.substring(0, 30)}..."`
         : "about: no definido";
       console.log(`[${index}] keyword: "${item.keyword}", count: ${item.count}, ${aboutPreview}`);
     });
