@@ -293,7 +293,24 @@ app.post('/api/processTrends', async (req, res) => {
     
     if (Array.isArray(rawData)) {
       console.log('rawData es un array');
-      trends = rawData;
+      // Verificar si el array contiene objetos con estructura completa (ya formateada)
+      if (rawData.length > 0 && 
+          rawData[0].keyword !== undefined && 
+          rawData[0].count !== undefined) {
+        console.log('Detectado array de objetos ya formateados con keyword y count');
+        // En este caso, ya tenemos datos pre-formateados, los adaptamos al formato interno
+        trends = rawData.map(item => ({
+          name: item.keyword || 'Sin nombre',
+          volume: item.count || 1,
+          category: item.category || 'General',
+          // Preservar el campo about si existe
+          ...(item.about && { about: item.about })
+        }));
+        console.log('Tendencias formateadas preservando campos existentes:', 
+                   JSON.stringify(trends.slice(0, 2), null, 2));
+      } else {
+        trends = rawData;
+      }
     } else if (rawData.trends && Array.isArray(rawData.trends)) {
       console.log('rawData tiene propiedad trends');
       trends = rawData.trends;
@@ -356,55 +373,62 @@ app.post('/api/processTrends', async (req, res) => {
       // Instrucciones de depuración
       console.log('Estructura del trend:', JSON.stringify(trend, null, 2));
       
+      // Objeto base para almacenar todas las propiedades procesadas
+      let uniformTrend = {
+        name: 'Sin nombre',
+        volume: 1,
+        category: 'General'
+      };
+      
       // Extraer nombre del trend (ampliando las posibilidades)
-      let name = 'Sin nombre';
       if (typeof trend === 'string') {
-        name = trend;
+        uniformTrend.name = trend;
       } else if (typeof trend === 'object') {
         // Comprobar todas las claves posibles para extraer un nombre
         const possibleNameKeys = ['name', 'keyword', 'text', 'title', 'word', 'term'];
         for (const key of possibleNameKeys) {
           if (trend[key] && typeof trend[key] === 'string' && trend[key].trim()) {
-            name = trend[key].trim();
+            uniformTrend.name = trend[key].trim();
             break;
           }
         }
         
         // Si todavía no tenemos un nombre y hay un atributo que es string, usarlo como nombre
-        if (name === 'Sin nombre') {
+        if (uniformTrend.name === 'Sin nombre') {
           for (const [key, value] of Object.entries(trend)) {
-            if (typeof value === 'string' && value.trim() && key !== 'category' && key !== 'color') {
-              name = value.trim();
+            if (typeof value === 'string' && value.trim() && 
+                key !== 'category' && key !== 'color' && key !== 'about') {
+              uniformTrend.name = value.trim();
               break;
             }
           }
         }
-      }
-      
-      // Extraer valor/conteo/volumen con más opciones
-      let volume = 1;
-      if (typeof trend === 'number') {
-        volume = trend;
-      } else if (typeof trend === 'object') {
+        
+        // Extraer valor/conteo/volumen con más opciones
         const possibleVolumeKeys = ['volume', 'count', 'value', 'weight', 'size', 'frequency'];
         for (const key of possibleVolumeKeys) {
           if (trend[key] && !isNaN(Number(trend[key]))) {
-            volume = Number(trend[key]);
+            uniformTrend.volume = Number(trend[key]);
             break;
           }
         }
-      }
-      
-      // Extraer categoría
-      let category = 'General';
-      if (typeof trend === 'object' && trend.category && typeof trend.category === 'string') {
-        category = trend.category;
+        
+        // Extraer categoría
+        if (trend.category && typeof trend.category === 'string') {
+          uniformTrend.category = trend.category;
+        }
+        
+        // Preservar campo about si existe
+        if (trend.about && typeof trend.about === 'string') {
+          uniformTrend.about = trend.about;
+          console.log(`Preservando campo about: "${uniformTrend.about.substring(0, 50)}..."`);
+        }
       }
       
       // Log del resultado final para depuración
-      console.log(`Procesado: name=${name}, volume=${volume}, category=${category}`);
+      console.log(`Procesado: name=${uniformTrend.name}, volume=${uniformTrend.volume}, category=${uniformTrend.category}`);
       
-      return { name, volume, category };
+      return uniformTrend;
     });
     
     // Ordenar por volumen descendente
@@ -483,10 +507,24 @@ app.post('/api/processTrends', async (req, res) => {
       const keywordName = getKeywordName(trend, index);
       // Actualizar el nombre en el trend original para wordCloudData
       trend.name = keywordName; 
-      return {
+      
+      // Crear objeto base para cada keyword
+      let keywordObj = {
         keyword: keywordName,
         count: trend.volume
       };
+      
+      // Preservar el campo 'about' si existe en el trend original
+      if (trend.about) {
+        keywordObj.about = trend.about;
+      }
+      
+      // También revisar si el trend original tiene el campo about en otra estructura
+      if (Array.isArray(trends) && trends[index] && trends[index].about) {
+        keywordObj.about = trends[index].about;
+      }
+      
+      return keywordObj;
     });
     
     // Enriquecer con información sobre cada tendencia si USE_WEB_SEARCH está habilitado
@@ -498,8 +536,14 @@ app.post('/api/processTrends', async (req, res) => {
         // Procesamos las 5 tendencias principales para no retrasar demasiado la respuesta
         for (let i = 0; i < Math.min(5, topKeywords.length); i++) {
           const trend = topKeywords[i];
-          trend.about = await searchTrendInfo(trend.keyword);
-          console.log(`Información obtenida para ${trend.keyword}: ${trend.about.substring(0, 50)}...`);
+          
+          // Solo buscar información si no se proporcionó en los datos originales
+          if (!trend.about) {
+            trend.about = await searchTrendInfo(trend.keyword);
+            console.log(`Información obtenida para ${trend.keyword}: ${trend.about.substring(0, 50)}...`);
+          } else {
+            console.log(`Usando información existente para ${trend.keyword}: ${trend.about.substring(0, 50)}...`);
+          }
         }
         
         // Para el resto de tendencias, lo haremos de forma asíncrona después
@@ -508,22 +552,26 @@ app.post('/api/processTrends', async (req, res) => {
           (async () => {
             for (let i = 5; i < topKeywords.length; i++) {
               const trend = topKeywords[i];
-              trend.about = await searchTrendInfo(trend.keyword);
-              console.log(`Información posterior obtenida para ${trend.keyword}`);
               
-              // Actualizar en Supabase si está configurado
-              if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase) {
-                try {
-                  await supabase
-                    .from('trend_details')
-                    .upsert({
-                      keyword: trend.keyword,
-                      about: trend.about,
-                      count: trend.count,
-                      updated_at: new Date().toISOString()
-                    });
-                } catch (err) {
-                  console.error(`Error al actualizar información en Supabase: ${err.message}`);
+              // Solo buscar información si no se proporcionó en los datos originales
+              if (!trend.about) {
+                trend.about = await searchTrendInfo(trend.keyword);
+                console.log(`Información posterior obtenida para ${trend.keyword}`);
+                
+                // Actualizar en Supabase si está configurado
+                if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase) {
+                  try {
+                    await supabase
+                      .from('trend_details')
+                      .upsert({
+                        keyword: trend.keyword,
+                        about: trend.about,
+                        count: trend.count,
+                        updated_at: new Date().toISOString()
+                      });
+                  } catch (err) {
+                    console.error(`Error al actualizar información en Supabase: ${err.message}`);
+                  }
                 }
               }
             }
@@ -544,8 +592,17 @@ app.post('/api/processTrends', async (req, res) => {
     
     console.log(`Rango de volúmenes: min=${minVol}, max=${maxVol}`);
     
+    // Crear una función para asegurar que los nombres de tendencias sean consistentes
+    // entre wordCloudData y topKeywords
+    const getConsistentName = (trend, index) => {
+      // Si ya se asignó un keyword en topKeywords, usar ese mismo valor para consistencia
+      if (topKeywords[index] && topKeywords[index].keyword) {
+        return topKeywords[index].keyword;
+      }
+      return trend.name;
+    };
+    
     // Ahora wordCloudData puede usar directamente los nombres ya recuperados y normalizados
-    // No necesitamos repetir la lógica de recuperación porque ya se aplicó en topKeywords
     const wordCloudData = top10.map((trend, index) => {
       // Calcular un valor escalado entre 20 y 100 para el tamaño
       let scaledValue = 60; // Valor predeterminado
@@ -554,11 +611,15 @@ app.post('/api/processTrends', async (req, res) => {
         scaledValue = Math.round(20 + ((trend.volume - minVol) / (maxVol - minVol)) * 80);
       }
       
-      // trend.name ya fue actualizado en la generación de topKeywords
-      // Usar directamente el nombre del trend
+      // Asegurar que el texto sea siempre consistente con los keywords
+      const trendText = getConsistentName(trend, index);
+      
+      // Asegurarnos de tener valores válidos para la visualización
+      const visualValue = isNaN(scaledValue) ? 60 : Math.max(20, Math.min(100, scaledValue));
+      
       return {
-        text: trend.name,
-        value: scaledValue,
+        text: trendText,
+        value: visualValue,
         color: COLORS[index % COLORS.length]
       };
     });
@@ -588,11 +649,13 @@ app.post('/api/processTrends', async (req, res) => {
       timestamp: new Date().toISOString()
     };
     
-    // 5. Guardar en Supabase
+        // 5. Guardar en Supabase
     console.time('guardado-supabase');
     if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase) {
       try {
         console.log('Guardando datos en Supabase...');
+        
+        // Guardar la tendencia principal en la tabla 'trends'
         const { error } = await supabase
           .from('trends')
           .insert([{
@@ -604,9 +667,35 @@ app.post('/api/processTrends', async (req, res) => {
           }]);
         
         if (error) {
-          console.error('Error al guardar en Supabase:', error);
+          console.error('Error al guardar en Supabase (tabla trends):', error);
         } else {
-          console.log('Datos guardados exitosamente en Supabase');
+          console.log('Datos guardados exitosamente en tabla trends');
+          
+          // También guardar cada keyword individual en la tabla 'trend_details'
+          // para facilitar consultas específicas
+          console.log('Guardando detalles de cada tendencia en tabla trend_details...');
+          
+          // Procesamos secuencialmente para evitar errores de concurrencia
+          for (const trend of processedData.topKeywords) {
+            try {
+              const { error: detailError } = await supabase
+                .from('trend_details')
+                .upsert({
+                  keyword: trend.keyword,
+                  about: trend.about || null,  // Aseguramos que about se guarde en su propia columna
+                  count: trend.count,
+                  updated_at: new Date().toISOString()
+                });
+                
+              if (detailError) {
+                console.error(`Error al guardar detalles para ${trend.keyword}:`, detailError);
+              }
+            } catch (detailErr) {
+              console.error(`Error en proceso de upsert para ${trend.keyword}:`, detailErr);
+            }
+          }
+          
+          console.log('Proceso de guardado completo');
         }
       } catch (err) {
         console.error('Error al intentar guardar en Supabase:', err);
@@ -627,12 +716,30 @@ app.post('/api/processTrends', async (req, res) => {
     
     console.log('\nDIAGNÓSTICO: topKeywords ----------');
     processedData.topKeywords.forEach((item, index) => {
-      console.log(`[${index}] keyword: "${item.keyword}", count: ${item.count}`);
+      const aboutPreview = item.about 
+        ? `about: "${item.about.substring(0, 30)}..."` 
+        : "about: no definido";
+      console.log(`[${index}] keyword: "${item.keyword}", count: ${item.count}, ${aboutPreview}`);
     });
     
     console.log('\nDIAGNÓSTICO: categoryData ----------');
     processedData.categoryData.forEach((item, index) => {
       console.log(`[${index}] category: "${item.category}", count: ${item.count}`);
+    });
+    
+    // Validación final para verificar consistencia entre wordCloudData y topKeywords
+    console.log('\nVALIDACIÓN DE CONSISTENCIA:');
+    processedData.wordCloudData.forEach((item, index) => {
+      if (index < processedData.topKeywords.length) {
+        const keyword = processedData.topKeywords[index].keyword;
+        const text = item.text;
+        const isConsistent = keyword === text;
+        console.log(`[${index}] wordCloud.text: "${text}" ${isConsistent ? '=' : '!='} topKeywords.keyword: "${keyword}"`);
+        
+        if (!isConsistent) {
+          console.warn(`⚠️ Inconsistencia detectada en índice ${index}`);
+        }
+      }
     });
     
     console.timeEnd('procesamiento-total');
