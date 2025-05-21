@@ -193,19 +193,27 @@ async function processLocalTrends(rawData) {
         for (let i = 0; i < Math.min(5, topKeywords.length); i++) {
           const trend = topKeywords[i];
           trend.about = await searchTrendInfo(trend.keyword);
-          console.log(`Información obtenida para ${trend.keyword}: ${typeof trend.about === 'string' ? trend.about.substring(0, 50) + '...' : 'No se pudo obtener información'}`);
+          console.log(`Información obtenida para ${trend.keyword}: ${typeof trend.about.summary === 'string' ? trend.about.summary.substring(0, 50) + '...' : 'No se pudo obtener información'}`);
         }
         
         // Para el resto usamos información genérica
         for (let i = 5; i < topKeywords.length; i++) {
-          topKeywords[i].about = `Información sobre ${topKeywords[i].keyword}`;
+          topKeywords[i].about = {
+            summary: `Información sobre ${topKeywords[i].keyword}`,
+            source: 'default',
+            model: 'default'
+          };
         }
       } catch (error) {
         console.error('Error al enriquecer tendencias:', error);
         // Agregar información genérica en caso de error
         topKeywords.forEach(trend => {
           if (!trend.about) {
-            trend.about = `Tendencia relacionada con ${trend.keyword}`;
+            trend.about = {
+              summary: `Tendencia relacionada con ${trend.keyword}`,
+              source: 'default',
+              model: 'default'
+            };
           }
         });
       }
@@ -585,54 +593,30 @@ app.post('/api/processTrends', async (req, res) => {
       console.log('Obteniendo información adicional sobre tendencias...');
       
       try {
-        // Procesamos las 5 tendencias principales para no retrasar demasiado la respuesta
         for (let i = 0; i < Math.min(5, topKeywords.length); i++) {
           const trend = topKeywords[i];
-          
-          // Solo buscar información si no se proporcionó en los datos originales
-          if (!trend.about) {
-            trend.about = await searchTrendInfo(trend.keyword);
-            console.log(`Información obtenida para ${trend.keyword}: ${typeof trend.about === 'string' ? trend.about.substring(0, 50) + '...' : 'No se pudo obtener información'}`);
-          } else {
-            console.log(`Usando información existente para ${trend.keyword}: ${typeof trend.about === 'string' ? trend.about.substring(0, 50) + '...' : 'No hay información'}`);
-          }
+          trend.about = await searchTrendInfo(trend.keyword);
+          console.log(`Información obtenida para ${trend.keyword}: ${typeof trend.about.summary === 'string' ? trend.about.summary.substring(0, 50) + '...' : 'No se pudo obtener información'}`);
         }
-        
-        // Para el resto de tendencias, lo haremos de forma asíncrona después
-        // y lo actualizaremos en Supabase, pero no retrasamos la respuesta inicial
-        if (topKeywords.length > 5) {
-          (async () => {
-            for (let i = 5; i < topKeywords.length; i++) {
-              const trend = topKeywords[i];
-              
-              // Solo buscar información si no se proporcionó en los datos originales
-              if (!trend.about) {
-                trend.about = await searchTrendInfo(trend.keyword);
-                console.log(`Información posterior obtenida para ${trend.keyword}`);
-                
-                // Actualizar en Supabase si está configurado
-                if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase) {
-                  try {
-                    await supabase
-                      .from('trend_details')
-                      .upsert({
-                        keyword: trend.keyword,
-                        about: trend.about,
-                        count: trend.count,
-                        updated_at: new Date().toISOString()
-                      });
-                  } catch (err) {
-                    console.error(`Error al actualizar información en Supabase: ${err.message}`);
-                  }
-                }
-              }
-            }
-          })();
+        for (let i = 5; i < topKeywords.length; i++) {
+          topKeywords[i].about = {
+            summary: `Información sobre ${topKeywords[i].keyword}`,
+            source: 'default',
+            model: 'default'
+          };
         }
       } catch (error) {
         console.error('Error al enriquecer tendencias:', error);
+        topKeywords.forEach(trend => {
+          if (!trend.about) {
+            trend.about = {
+              summary: `Tendencia relacionada con ${trend.keyword}`,
+              source: 'default',
+              model: 'default'
+            };
+          }
+        });
       }
-      
       console.timeEnd('enriquecimiento-tendencias');
     }
     
@@ -734,7 +718,7 @@ app.post('/api/processTrends', async (req, res) => {
                 .from('trend_details')
                 .upsert({
                   keyword: trend.keyword,
-                  about: trend.about || null,  // Aseguramos que about se guarde en su propia columna
+                  about: JSON.stringify(trend.about || null),  // Aseguramos que about se guarde como JSON
                   count: trend.count,
                   updated_at: new Date().toISOString()
                 });
@@ -769,7 +753,7 @@ app.post('/api/processTrends', async (req, res) => {
     console.log('\nDIAGNÓSTICO: topKeywords ----------');
     processedData.topKeywords.forEach((item, index) => {
       const aboutPreview = typeof item.about === 'string'
-        ? `about: "${item.about.substring(0, 30)}..."`
+        ? `about: "${item.about.summary.substring(0, 30)}..."`
         : "about: no definido";
       console.log(`[${index}] keyword: "${item.keyword}", count: ${item.count}, ${aboutPreview}`);
     });
@@ -861,14 +845,12 @@ app.listen(PORT, () => {
 // Exportar para testing y depuración
 module.exports = { COLORS };
 
-// Función para buscar información sobre una tendencia
+// Función para buscar información sobre una tendencia (solo para about)
 async function searchTrendInfo(trend) {
   try {
     console.log(`Buscando información sobre: ${trend}`);
-    
-    // Usar Perplexity API si está disponible (requiere API key)
+    // Usar Perplexity API si está disponible (para about)
     const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
-    
     if (PERPLEXITY_API_KEY) {
       const response = await fetch('https://api.perplexity.ai/chat/completions', {
         method: 'POST',
@@ -890,16 +872,18 @@ async function searchTrendInfo(trend) {
           ]
         })
       });
-      
       if (response.ok) {
         const data = await response.json();
         if (data.choices && data.choices[0] && data.choices[0].message) {
-          return data.choices[0].message.content;
+          return {
+            summary: data.choices[0].message.content,
+            source: 'perplexity',
+            model: 'mixtral-8x7b-instruct'
+          };
         }
       }
     }
-    
-    // Alternativa: Usar OpenRouter API como fallback
+    // Fallback: OpenRouter API (también para about)
     if (OPENROUTER_API_KEY) {
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
@@ -922,19 +906,29 @@ async function searchTrendInfo(trend) {
           ]
         })
       });
-      
       if (response.ok) {
         const data = await response.json();
         if (data.choices && data.choices[0] && data.choices[0].message) {
-          return data.choices[0].message.content;
+          return {
+            summary: data.choices[0].message.content,
+            source: 'openrouter',
+            model: 'anthropic/claude-3-haiku'
+          };
         }
       }
     }
-    
     // Si todo falla, proporcionar un mensaje genérico
-    return `Tendencia relacionada con ${trend}`;
+    return {
+      summary: `Tendencia relacionada con ${trend}`,
+      source: 'default',
+      model: 'default'
+    };
   } catch (error) {
     console.error(`Error al buscar información sobre ${trend}:`, error);
-    return `Tendencia popular: ${trend}`;
+    return {
+      summary: `Tendencia popular: ${trend}`,
+      source: 'default',
+      model: 'default'
+    };
   }
 } 
