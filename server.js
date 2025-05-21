@@ -728,7 +728,7 @@ async function searchTrendInfo(trend) {
           'HTTP-Referer': 'https://pulse.domain.com'
         },
         body: JSON.stringify({
-          model: 'perplexity/sonar-large-online',
+          model: 'perplexity/sonar-pro',
           messages: [
             {
               role: 'system',
@@ -747,7 +747,7 @@ async function searchTrendInfo(trend) {
           return {
             summary: data.choices[0].message.content,
             source: 'openrouter',
-            model: 'perplexity/sonar-large-online'
+            model: 'perplexity/sonar-pro'
           };
         }
       } else {
