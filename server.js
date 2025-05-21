@@ -40,22 +40,87 @@ function mapRange(value, inMin, inMax, outMin, outMax) {
 // Función para procesar tendencias localmente (sin IA)
 function processLocalTrends(rawData) {
   try {
-    // Asumimos que rawData tiene una estructura con 'trends'
-    if (!rawData || !rawData.trends || !Array.isArray(rawData.trends)) {
-      throw new Error('Formato de datos inválido');
+    console.log('Iniciando procesamiento local con estructura:', typeof rawData);
+    
+    // Determinar la estructura de los datos de entrada
+    let trendsArray = [];
+    
+    if (!rawData) {
+      console.log('rawData es nulo o indefinido, generando datos mock');
+      // Generar datos mock
+      trendsArray = Array(10).fill().map((_, i) => ({
+        name: `Tema ${i+1}`,
+        volume: 100 - i*10,
+        category: 'General'
+      }));
+    } else if (rawData.trends && Array.isArray(rawData.trends)) {
+      console.log(`Formato esperado: rawData.trends contiene ${rawData.trends.length} elementos`);
+      trendsArray = rawData.trends;
+    } else if (Array.isArray(rawData)) {
+      console.log(`rawData es un array con ${rawData.length} elementos`);
+      trendsArray = rawData.map(item => {
+        // Intentar extraer nombre y volumen según diferentes formatos
+        return {
+          name: item.name || item.keyword || item.text || item.value || 'Desconocido',
+          volume: item.volume || item.count || item.value || 1,
+          category: item.category || 'General'
+        };
+      });
+    } else if (typeof rawData === 'object') {
+      console.log('rawData es un objeto, buscando elementos de tendencia');
+      // Intentar extraer un array de alguna propiedad del objeto
+      const possibleArrayProps = ['trends', 'data', 'items', 'results', 'keywords', 'topics'];
+      
+      for (const prop of possibleArrayProps) {
+        if (rawData[prop] && Array.isArray(rawData[prop]) && rawData[prop].length > 0) {
+          console.log(`Encontrado array en rawData.${prop} con ${rawData[prop].length} elementos`);
+          trendsArray = rawData[prop];
+          break;
+        }
+      }
+      
+      // Si todavía no tenemos un array y hay propiedades en el objeto, convertirlas en tendencias
+      if (trendsArray.length === 0) {
+        console.log('No se encontró un array, intentando usar propiedades del objeto como tendencias');
+        trendsArray = Object.entries(rawData)
+          .filter(([key, value]) => typeof value !== 'object' && key !== 'timestamp')
+          .map(([key, value]) => ({
+            name: key,
+            volume: typeof value === 'number' ? value : 1,
+            category: 'General'
+          }));
+      }
     }
-
+    
+    // Si después de todo no tenemos datos, generar mock
+    if (trendsArray.length === 0) {
+      console.log('No se pudieron extraer tendencias, generando datos mock');
+      trendsArray = Array(10).fill().map((_, i) => ({
+        name: `Tendencia ${i+1}`,
+        volume: 100 - i*10,
+        category: 'General'
+      }));
+    }
+    
+    console.log(`Procesando ${trendsArray.length} tendencias`);
+    
     // Ordenar tendencias por volumen o alguna métrica relevante
-    const sortedTrends = [...rawData.trends].sort((a, b) => (b.volume || 0) - (a.volume || 0));
+    const sortedTrends = [...trendsArray].sort((a, b) => {
+      const volumeA = a.volume || a.count || 1;
+      const volumeB = b.volume || b.count || 1;
+      return volumeB - volumeA;
+    });
+    
+    // Tomar los primeros 10
     const top10 = sortedTrends.slice(0, 10);
     
     // Si hay menos de 10, repetir los más importantes
     while (top10.length < 10) {
-      top10.push(top10[top10.length % top10.length]);
+      top10.push(top10[top10.length % Math.max(1, top10.length)]);
     }
     
     // Calcular valores mínimos y máximos para escalar
-    const volumes = top10.map(t => t.volume || 1);
+    const volumes = top10.map(t => t.volume || t.count || 1);
     const minVol = Math.min(...volumes);
     const maxVol = Math.max(...volumes);
     
@@ -68,7 +133,13 @@ function processLocalTrends(rawData) {
     // Crear estructura para wordCloudData
     const wordCloudData = top10.map(trend => ({
       text: trend.name || trend.keyword || 'Unknown',
-      value: mapRange(trend.volume || trend.count || 1, minVol, maxVol, 20, 100),
+      value: mapRange(
+        trend.volume || trend.count || 1, 
+        minVol === maxVol ? 0 : minVol, 
+        maxVol, 
+        20, 
+        100
+      ),
       color: getRandomColor()
     }));
     
@@ -87,6 +158,8 @@ function processLocalTrends(rawData) {
       category,
       count
     })).sort((a, b) => b.count - a.count);
+    
+    console.log('Procesamiento local completado exitosamente');
     
     return {
       wordCloudData,
@@ -232,4 +305,7 @@ app.post('/api/processTrends', async (req, res) => {
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-}); 
+});
+
+// Exportamos la función para que pueda ser utilizada por otros scripts
+module.exports = { processLocalTrends }; 

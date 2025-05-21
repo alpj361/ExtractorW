@@ -35,13 +35,69 @@ function mapRange(value, inMin, inMax, outMin, outMax) {
 // Función para procesar localmente los datos crudos
 function processRawData(rawData) {
   try {
-    // Verificar si tenemos datos válidos
-    if (!rawData || !rawData.trends || !Array.isArray(rawData.trends)) {
-      throw new Error('Formato de datos inválido');
+    console.log('Iniciando procesamiento de datos históricos con estructura:', typeof rawData);
+    
+    // Determinar la estructura de los datos de entrada
+    let trendsArray = [];
+    
+    if (!rawData) {
+      console.log('rawData es nulo o indefinido');
+      return null;
+    } else if (rawData.trends && Array.isArray(rawData.trends)) {
+      console.log(`Formato esperado: rawData.trends contiene ${rawData.trends.length} elementos`);
+      trendsArray = rawData.trends;
+    } else if (Array.isArray(rawData)) {
+      console.log(`rawData es un array con ${rawData.length} elementos`);
+      trendsArray = rawData.map(item => {
+        // Intentar extraer nombre y volumen según diferentes formatos
+        return {
+          name: item.name || item.keyword || item.text || item.value || 'Desconocido',
+          volume: item.volume || item.count || item.value || 1,
+          category: item.category || 'General'
+        };
+      });
+    } else if (typeof rawData === 'object') {
+      console.log('rawData es un objeto, buscando elementos de tendencia');
+      // Intentar extraer un array de alguna propiedad del objeto
+      const possibleArrayProps = ['trends', 'data', 'items', 'results', 'keywords', 'topics'];
+      
+      for (const prop of possibleArrayProps) {
+        if (rawData[prop] && Array.isArray(rawData[prop]) && rawData[prop].length > 0) {
+          console.log(`Encontrado array en rawData.${prop} con ${rawData[prop].length} elementos`);
+          trendsArray = rawData[prop];
+          break;
+        }
+      }
+      
+      // Si todavía no tenemos un array y hay propiedades en el objeto, convertirlas en tendencias
+      if (trendsArray.length === 0) {
+        console.log('No se encontró un array, intentando usar propiedades del objeto como tendencias');
+        trendsArray = Object.entries(rawData)
+          .filter(([key, value]) => typeof value !== 'object' && key !== 'timestamp')
+          .map(([key, value]) => ({
+            name: key,
+            volume: typeof value === 'number' ? value : 1,
+            category: 'General'
+          }));
+      }
     }
-
-    // Ordenar por volumen o métrica relevante
-    const sortedTrends = [...rawData.trends].sort((a, b) => (b.volume || 0) - (a.volume || 0));
+    
+    // Si no tenemos datos, retornar null
+    if (trendsArray.length === 0) {
+      console.log('No se pudieron extraer tendencias del registro');
+      return null;
+    }
+    
+    console.log(`Procesando ${trendsArray.length} tendencias históricas`);
+    
+    // Ordenar tendencias por volumen o métrica relevante
+    const sortedTrends = [...trendsArray].sort((a, b) => {
+      const volumeA = a.volume || a.count || 1;
+      const volumeB = b.volume || b.count || 1;
+      return volumeB - volumeA;
+    });
+    
+    // Tomar los primeros 10
     const top10 = sortedTrends.slice(0, 10);
     
     // Si hay menos de 10, repetir los primeros
@@ -50,7 +106,7 @@ function processRawData(rawData) {
     }
     
     // Calcular valores para escalar
-    const volumes = top10.map(t => t.volume || 1);
+    const volumes = top10.map(t => t.volume || t.count || 1);
     const minVol = Math.min(...volumes);
     const maxVol = Math.max(...volumes);
     
@@ -63,7 +119,13 @@ function processRawData(rawData) {
     // Crear estructura para wordCloudData
     const wordCloudData = top10.map(trend => ({
       text: trend.name || trend.keyword || 'Unknown',
-      value: mapRange(trend.volume || trend.count || 1, minVol, maxVol, 20, 100),
+      value: mapRange(
+        trend.volume || trend.count || 1, 
+        minVol === maxVol ? 0 : minVol, 
+        maxVol, 
+        20, 
+        100
+      ),
       color: getRandomColor()
     }));
     
@@ -83,13 +145,15 @@ function processRawData(rawData) {
       count
     })).sort((a, b) => b.count - a.count);
     
+    console.log('Procesamiento de datos históricos completado exitosamente');
+    
     return {
       topKeywords,
       wordCloudData,
       categoryData
     };
   } catch (error) {
-    console.error('Error procesando datos:', error);
+    console.error('Error procesando datos históricos:', error);
     return null;
   }
 }

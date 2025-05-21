@@ -72,6 +72,19 @@ Si deseas actualizar los datos históricos en Supabase para asegurar que todos t
 npm run process-historical
 ```
 
+### Depurar problemas de datos
+
+Si encuentras errores relacionados con los datos recibidos, puedes usar el script de depuración:
+
+1. Guarda los datos JSON problemáticos en un archivo (por ejemplo, `error-data.json`)
+2. Ejecuta el script de depuración:
+
+```bash
+npm run debug error-data.json
+```
+
+Este script analizará la estructura de los datos, identificará problemas potenciales y simulará el procesamiento, ayudándote a diagnosticar la causa del error.
+
 ## API Endpoints
 
 ### POST /api/processTrends
