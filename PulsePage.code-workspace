@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../PulseJ"
+		},
+		{
+			"path": "../ExtractorT"
 		}
 	],
 	"settings": {}
