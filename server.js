@@ -562,7 +562,8 @@ app.post('/api/processTrends', async (req, res) => {
             word_cloud_data: processedData.wordCloudData,
             top_keywords: processedData.topKeywords,
             category_data: processedData.categoryData,
-            raw_data: rawData
+            raw_data: rawData,
+            about: processedData.topKeywords[0]?.about || null // Guardar el about de la tendencia principal
           }]);
         
         if (error) {
@@ -749,6 +750,9 @@ async function searchTrendInfo(trend) {
             model: 'perplexity/sonar-large-online'
           };
         }
+      } else {
+        const errorText = await response.text();
+        console.error('Error OpenRouter Perplexity:', errorText);
       }
     }
     // Si todo falla, proporcionar un mensaje genérico
