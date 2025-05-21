@@ -15,6 +15,12 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const VPS_API_URL = process.env.VPS_API_URL;
 const USE_AI = process.env.USE_AI === 'true'; // Nueva variable de entorno
 
+// Colores para la nube de palabras
+const COLORS = [
+  '#3B82F6', '#0EA5E9', '#14B8A6', '#10B981', '#F97316', 
+  '#8B5CF6', '#EC4899', '#EF4444', '#F59E0B', '#84CC16'
+];
+
 // Función para generar color aleatorio
 function getRandomColor() {
   const colors = [
@@ -125,23 +131,45 @@ function processLocalTrends(rawData) {
     const maxVol = Math.max(...volumes);
     
     // Crear estructura para topKeywords
-    const topKeywords = top10.map(trend => ({
-      keyword: trend.name || trend.keyword || 'Unknown',
+    const topKeywords = top10.map((trend, index) => ({
+      keyword: trend.name || trend.keyword || `Tendencia ${index + 1}`,
       count: trend.volume || trend.count || 1
     }));
     
     // Crear estructura para wordCloudData
-    const wordCloudData = top10.map(trend => ({
-      text: trend.name || trend.keyword || 'Unknown',
-      value: mapRange(
-        trend.volume || trend.count || 1, 
-        minVol === maxVol ? 0 : minVol, 
-        maxVol, 
-        20, 
-        100
-      ),
-      color: getRandomColor()
-    }));
+    const wordCloudData = top10.map((trend, index) => {
+      // Calcular un valor escalado entre 20 y 100 para el tamaño
+      let scaledValue = 60; // Valor predeterminado
+      
+      if (minVol !== maxVol) {
+        scaledValue = Math.round(20 + ((trend.volume - minVol) / (maxVol - minVol)) * 80);
+      }
+      
+      // Verificar que el nombre no sea 'Sin nombre' si hay datos en raw_data
+      if (trend.name === 'Sin nombre' && rawData && Array.isArray(rawData) && rawData[index]) {
+        // Intentar obtener el texto de la tendencia directamente de raw_data
+        const rawTrend = rawData[index];
+        if (typeof rawTrend === 'object') {
+          for (const [key, value] of Object.entries(rawTrend)) {
+            if (typeof value === 'string' && value.trim() && key !== 'category' && key !== 'color') {
+              trend.name = value.trim();
+              break;
+            }
+          }
+        }
+      }
+      
+      // Asegurar que tenemos un texto válido
+      const text = trend.name !== 'Sin nombre' ? trend.name : `Tendencia ${index + 1}`;
+      
+      console.log(`WordCloud item ${index}: text=${text}, value=${scaledValue}, color=${COLORS[index % COLORS.length]}`);
+      
+      return {
+        text: text,
+        value: scaledValue,
+        color: COLORS[index % COLORS.length]
+      };
+    });
     
     // Extraer o generar categorías
     const categories = {};
@@ -185,12 +213,6 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// Colores para la nube de palabras
-const COLORS = [
-  '#3B82F6', '#0EA5E9', '#14B8A6', '#10B981', '#F97316', 
-  '#8B5CF6', '#EC4899', '#EF4444', '#F59E0B', '#84CC16'
-];
-
 app.post('/api/processTrends', async (req, res) => {
   console.time('procesamiento-total');
   console.log(`[${new Date().toISOString()}] Solicitud recibida en /api/processTrends`);
@@ -199,6 +221,11 @@ app.post('/api/processTrends', async (req, res) => {
     // 1. Obtener datos crudos
     console.time('obtencion-datos');
     let rawData = req.body.rawData;
+    
+    // Depuración - Mostrar estructura completa de los datos recibidos
+    console.log('Estructura de rawData recibida:');
+    console.log(typeof rawData);
+    console.log(JSON.stringify(rawData, null, 2).substring(0, 500) + '...'); // Mostrar los primeros 500 caracteres
     
     if (!rawData && VPS_API_URL) {
       console.log('Datos no proporcionados, obteniendo de VPS API...');
@@ -262,12 +289,56 @@ app.post('/api/processTrends', async (req, res) => {
     
     // Convertir a formato uniforme
     const uniformTrends = trends.map(trend => {
-      // Extraer nombre del trend
-      const name = trend.name || trend.keyword || trend.text || trend.title || 'Sin nombre';
-      // Extraer valor/conteo/volumen
-      const volume = trend.volume || trend.count || trend.value || 1;
+      // Instrucciones de depuración
+      console.log('Estructura del trend:', JSON.stringify(trend, null, 2));
+      
+      // Extraer nombre del trend (ampliando las posibilidades)
+      let name = 'Sin nombre';
+      if (typeof trend === 'string') {
+        name = trend;
+      } else if (typeof trend === 'object') {
+        // Comprobar todas las claves posibles para extraer un nombre
+        const possibleNameKeys = ['name', 'keyword', 'text', 'title', 'word', 'term'];
+        for (const key of possibleNameKeys) {
+          if (trend[key] && typeof trend[key] === 'string' && trend[key].trim()) {
+            name = trend[key].trim();
+            break;
+          }
+        }
+        
+        // Si todavía no tenemos un nombre y hay un atributo que es string, usarlo como nombre
+        if (name === 'Sin nombre') {
+          for (const [key, value] of Object.entries(trend)) {
+            if (typeof value === 'string' && value.trim() && key !== 'category' && key !== 'color') {
+              name = value.trim();
+              break;
+            }
+          }
+        }
+      }
+      
+      // Extraer valor/conteo/volumen con más opciones
+      let volume = 1;
+      if (typeof trend === 'number') {
+        volume = trend;
+      } else if (typeof trend === 'object') {
+        const possibleVolumeKeys = ['volume', 'count', 'value', 'weight', 'size', 'frequency'];
+        for (const key of possibleVolumeKeys) {
+          if (trend[key] && !isNaN(Number(trend[key]))) {
+            volume = Number(trend[key]);
+            break;
+          }
+        }
+      }
+      
       // Extraer categoría
-      const category = trend.category || 'General';
+      let category = 'General';
+      if (typeof trend === 'object' && trend.category && typeof trend.category === 'string') {
+        category = trend.category;
+      }
+      
+      // Log del resultado final para depuración
+      console.log(`Procesado: name=${name}, volume=${volume}, category=${category}`);
       
       return { name, volume, category };
     });
@@ -286,8 +357,8 @@ app.post('/api/processTrends', async (req, res) => {
     // 3. Crear estructuras de datos requeridas
     
     // A. TopKeywords - Simplemente nombres y conteos
-    const topKeywords = top10.map(({name, volume}) => ({
-      keyword: name,
+    const topKeywords = top10.map(({name, volume}, index) => ({
+      keyword: name !== 'Sin nombre' ? name : `Tendencia ${index + 1}`,
       count: volume
     }));
     
@@ -297,14 +368,35 @@ app.post('/api/processTrends', async (req, res) => {
     const minVol = Math.min(...volumes);
     const maxVol = Math.max(...volumes);
     
+    console.log(`Rango de volúmenes: min=${minVol}, max=${maxVol}`);
+    
     const wordCloudData = top10.map((trend, index) => {
       // Calcular un valor escalado entre 20 y 100 para el tamaño
-      const scaledValue = minVol === maxVol
-        ? 60 // Si todos tienen el mismo valor, usar un tamaño medio
-        : 20 + ((trend.volume - minVol) / (maxVol - minVol)) * 80;
-        
+      let scaledValue = 60; // Valor predeterminado
+      
+      if (minVol !== maxVol) {
+        scaledValue = Math.round(20 + ((trend.volume - minVol) / (maxVol - minVol)) * 80);
+      }
+      
+      // Verificar que el nombre no sea 'Sin nombre' si hay datos en raw_data
+      if (trend.name === 'Sin nombre' && rawData && Array.isArray(rawData) && rawData[index]) {
+        // Intentar obtener el texto de la tendencia directamente de raw_data
+        const rawTrend = rawData[index];
+        if (typeof rawTrend === 'object') {
+          for (const [key, value] of Object.entries(rawTrend)) {
+            if (typeof value === 'string' && value.trim() && key !== 'category' && key !== 'color') {
+              trend.name = value.trim();
+              break;
+            }
+          }
+        }
+      }
+      
+      // Asegurar que tenemos un texto válido
+      const text = trend.name !== 'Sin nombre' ? trend.name : `Tendencia ${index + 1}`;
+      
       return {
-        text: trend.name,
+        text: text,
         value: scaledValue,
         color: COLORS[index % COLORS.length]
       };
@@ -365,6 +457,11 @@ app.post('/api/processTrends', async (req, res) => {
     
     // 6. Responder al cliente
     console.log('Enviando respuesta al cliente');
+    
+    // Muestra los primeros 3 items para debug
+    console.log('Primeros 3 items de wordCloudData:', processedData.wordCloudData.slice(0, 3));
+    console.log('Primeros 3 items de topKeywords:', processedData.topKeywords.slice(0, 3));
+    
     console.timeEnd('procesamiento-total');
     res.json(processedData);
     
