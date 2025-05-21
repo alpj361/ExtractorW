@@ -581,7 +581,7 @@ app.post('/api/processTrends', async (req, res) => {
                 .from('trend_details')
                 .upsert({
                   keyword: trend.keyword,
-                  about: JSON.stringify(trend.about || null),  // Aseguramos que about se guarde como JSON
+                  about: trend.about || null,  // Guardar como objeto JSON directamente
                   count: trend.count,
                   updated_at: new Date().toISOString()
                 });
