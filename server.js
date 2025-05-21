@@ -502,174 +502,33 @@ app.post('/api/processTrends', async (req, res) => {
       top10.push({...top10[top10.length % Math.max(1, top10.length)]});
     }
     
-    // 3. Crear estructuras de datos requeridas
-    
-    // A. TopKeywords - Preparación de nombres y conteos
-    // Creamos una función auxiliar para mejorar la consistencia con wordCloudData
-    const getKeywordName = (trend, index) => {
-      if (trend.name !== 'Sin nombre') {
-        return trend.name;
-      }
-      
-      // Ya que los nombres serán usados en topKeywords y wordCloudData,
-      // guardamos el nombre recuperado en el trend original para consistencia
-      
-      // Intentar buscar en el trend original
-      if (Array.isArray(trends) && trends[index]) {
-        const originalTrend = trends[index];
-        // Buscar cualquier campo string que pueda contener el nombre
-        if (typeof originalTrend === 'object') {
-          for (const [key, value] of Object.entries(originalTrend)) {
-            if (typeof value === 'string' && value.trim() && 
-                key !== 'category' && key !== 'color' &&
-                !['id', 'count', 'volume', 'frequency'].includes(key.toLowerCase())) {
-              console.log(`Recuperado nombre "${value.trim()}" desde trends[${index}].${key}`);
-              return value.trim();
-            }
-          }
-        } else if (typeof originalTrend === 'string') {
-          return originalTrend.trim();
-        }
-      }
-      
-      // Si no se encontró en trends, buscar en rawData
-      if (rawData && typeof rawData === 'object') {
-        const originalArray = Array.isArray(rawData) ? rawData : 
-                            (rawData.trends && Array.isArray(rawData.trends)) ? rawData.trends : 
-                            (rawData.twitter_trends && Array.isArray(rawData.twitter_trends)) ? rawData.twitter_trends : 
-                            null;
-        
-        if (originalArray && originalArray[index]) {
-          const rawTrend = originalArray[index];
-          
-          if (typeof rawTrend === 'string') {
-            return rawTrend.trim();
-          } else if (typeof rawTrend === 'object') {
-            // Buscar campos que puedan contener el nombre
-            for (const [key, value] of Object.entries(rawTrend)) {
-              if (typeof value === 'string' && value.trim() && 
-                  key !== 'category' && key !== 'color' &&
-                  !['id', 'count', 'volume', 'frequency'].includes(key.toLowerCase())) {
-                console.log(`Recuperado nombre "${value.trim()}" desde rawData[${index}].${key}`);
-                return value.trim();
-              }
-            }
-          }
-        }
-      }
-      
-      // Si todo falla, usar nombre genérico
-      return `Tendencia ${index + 1}`;
-    };
-    
-    // Aplicamos la función a cada trend para extraer nombres consistentes
-    const topKeywords = top10.map((trend, index) => {
-      const keywordName = getKeywordName(trend, index);
-      // Actualizar el nombre en el trend original para wordCloudData
-      trend.name = keywordName; 
-      
-      // Crear objeto base para cada keyword
-      let keywordObj = {
-        keyword: keywordName,
-        count: trend.volume
-      };
-      
-      // Preservar el campo 'about' si existe en el trend original
-      if (trend.about) {
-        keywordObj.about = trend.about;
-      }
-      
-      // También revisar si el trend original tiene el campo about en otra estructura
-      if (Array.isArray(trends) && trends[index] && trends[index].about) {
-        keywordObj.about = trends[index].about;
-      }
-      
-      return keywordObj;
-    });
-    
-    // Enriquecer con información sobre cada tendencia si USE_WEB_SEARCH está habilitado
-    if (USE_WEB_SEARCH) {
-      console.time('enriquecimiento-tendencias');
-      console.log('Obteniendo información adicional sobre tendencias...');
-      
-      try {
-        for (let i = 0; i < Math.min(5, topKeywords.length); i++) {
-          const trend = topKeywords[i];
-          trend.about = await searchTrendInfo(trend.keyword);
-          console.log(`Información obtenida para ${trend.keyword}: ${typeof trend.about.summary === 'string' ? trend.about.summary.substring(0, 50) + '...' : 'No se pudo obtener información'}`);
-        }
-        for (let i = 5; i < topKeywords.length; i++) {
-          topKeywords[i].about = {
-            summary: `Información sobre ${topKeywords[i].keyword}`,
-            source: 'default',
-            model: 'default'
-          };
-        }
-      } catch (error) {
-        console.error('Error al enriquecer tendencias:', error);
-        topKeywords.forEach(trend => {
-          if (!trend.about) {
-            trend.about = {
-              summary: `Tendencia relacionada con ${trend.keyword}`,
-              source: 'default',
-              model: 'default'
-            };
-          }
-        });
-      }
-      console.timeEnd('enriquecimiento-tendencias');
-    }
-    
-    // B. WordCloudData - Para la nube de palabras
-    // Calcular valores min-max para escalar adecuadamente
-    const volumes = top10.map(t => t.volume);
-    const minVol = Math.min(...volumes);
-    const maxVol = Math.max(...volumes);
-    
-    console.log(`Rango de volúmenes: min=${minVol}, max=${maxVol}`);
-    
-    // Crear una función para asegurar que los nombres de tendencias sean consistentes
-    // entre wordCloudData y topKeywords
-    const getConsistentName = (trend, index) => {
-      // Si ya se asignó un keyword en topKeywords, usar ese mismo valor para consistencia
-      if (topKeywords[index] && topKeywords[index].keyword) {
-        return topKeywords[index].keyword;
-      }
-      return trend.name;
-    };
-    
-    // Ahora wordCloudData puede usar directamente los nombres ya recuperados y normalizados
-    const wordCloudData = top10.map((trend, index) => {
-      // Calcular un valor escalado entre 20 y 100 para el tamaño
-      let scaledValue = 60; // Valor predeterminado
-      
-      if (minVol !== maxVol) {
-        scaledValue = Math.round(20 + ((trend.volume - minVol) / (maxVol - minVol)) * 80);
-      }
-      
-      // Asegurar que el texto sea siempre consistente con los keywords
-      const trendText = getConsistentName(trend, index);
-      
-      // Asegurarnos de tener valores válidos para la visualización
-      const visualValue = isNaN(scaledValue) ? 60 : Math.max(20, Math.min(100, scaledValue));
-      
+    // IA: Categorizar y obtener about para cada tendencia
+    const categorizedTrends = await Promise.all(top10.map(async (trend) => {
+      // Categorizar con IA
+      const categoriaIA = await categorizeTrendWithAI(trend.name);
+      // Obtener about con Perplexity (OpenRouter)
+      const aboutIA = await searchTrendInfo(trend.name);
       return {
-        text: trendText,
-        value: visualValue,
-        color: COLORS[index % COLORS.length]
+        ...trend,
+        category: categoriaIA,
+        about: aboutIA
       };
-    });
-    
-    // C. CategoryData - Agrupar por categorías
+    }));
+    // Ahora, topKeywords y categoryData usan los datos IA
+    const topKeywords = categorizedTrends.map(trend => ({
+      keyword: trend.name,
+      count: trend.volume,
+      about: trend.about
+    }));
+    // Agrupar por categoría IA
     const categoryMap = {};
-    top10.forEach(trend => {
+    categorizedTrends.forEach(trend => {
       if (categoryMap[trend.category]) {
         categoryMap[trend.category] += 1;
       } else {
         categoryMap[trend.category] = 1;
       }
     });
-    
     const categoryData = Object.entries(categoryMap).map(([category, count]) => ({
       category,
       count
@@ -680,7 +539,11 @@ app.post('/api/processTrends', async (req, res) => {
     // 4. Crear objeto de respuesta
     const processedData = {
       topKeywords,
-      wordCloudData,
+      wordCloudData: categorizedTrends.map(trend => ({
+        text: trend.name,
+        value: trend.volume,
+        color: getRandomColor()
+      })),
       categoryData,
       timestamp: new Date().toISOString()
     };
@@ -849,42 +712,8 @@ module.exports = { COLORS };
 async function searchTrendInfo(trend) {
   try {
     console.log(`Buscando información sobre: ${trend}`);
-    // Usar Perplexity API si está disponible (para about)
-    const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
-    if (PERPLEXITY_API_KEY) {
-      const response = await fetch('https://api.perplexity.ai/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${PERPLEXITY_API_KEY}`
-        },
-        body: JSON.stringify({
-          model: 'mixtral-8x7b-instruct',
-          messages: [
-            {
-              role: 'system',
-              content: 'Eres un asistente que proporciona información concisa sobre temas tendencia. Responde en 2-3 oraciones máximo.'
-            },
-            {
-              role: 'user',
-              content: `¿De qué trata el tema o tendencia "${trend}"? Responde de forma breve y concisa.`
-            }
-          ]
-        })
-      });
-      if (response.ok) {
-        const data = await response.json();
-        if (data.choices && data.choices[0] && data.choices[0].message) {
-          return {
-            summary: data.choices[0].message.content,
-            source: 'perplexity',
-            model: 'mixtral-8x7b-instruct'
-          };
-        }
-      }
-    }
-    // Fallback: OpenRouter API (también para about)
     if (OPENROUTER_API_KEY) {
+      // Usar el modelo Perplexity más reciente disponible en OpenRouter
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -893,15 +722,15 @@ async function searchTrendInfo(trend) {
           'HTTP-Referer': 'https://pulse.domain.com'
         },
         body: JSON.stringify({
-          model: 'anthropic/claude-3-haiku',
+          model: 'perplexity/sonar-large-online',
           messages: [
             {
               role: 'system',
-              content: 'Eres un asistente que proporciona información concisa sobre temas tendencia.'
+              content: 'Eres un asistente que proporciona información concisa sobre temas tendencia. Responde en español en 2-3 oraciones máximo.'
             },
             {
               role: 'user',
-              content: `Explica brevemente en 1-2 oraciones de qué trata la tendencia o tema "${trend}".`
+              content: `¿De qué trata el tema o tendencia "${trend}"? Responde de forma breve y concisa en español.`
             }
           ]
         })
@@ -912,7 +741,7 @@ async function searchTrendInfo(trend) {
           return {
             summary: data.choices[0].message.content,
             source: 'openrouter',
-            model: 'anthropic/claude-3-haiku'
+            model: 'perplexity/sonar-large-online'
           };
         }
       }
@@ -931,4 +760,44 @@ async function searchTrendInfo(trend) {
       model: 'default'
     };
   }
-} 
+}
+
+// --- INICIO: Función para categorizar con IA (GPT-4 Turbo OpenRouter) ---
+async function categorizeTrendWithAI(trendName) {
+  if (!OPENROUTER_API_KEY) return 'General';
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+        'HTTP-Referer': 'https://pulse.domain.com'
+      },
+      body: JSON.stringify({
+        model: 'openai/gpt-4-turbo',
+        messages: [
+          {
+            role: 'system',
+            content: 'Eres un asistente que categoriza tendencias de redes sociales. Devuelve solo la categoría más adecuada en español, de una sola palabra o frase corta. Ejemplos: Política, Deportes, Entretenimiento, Tecnología, Economía, Salud, Cultura, Educación, Sociedad, Internacional, Ciencia, Medio ambiente, Otros.'
+          },
+          {
+            role: 'user',
+            content: `¿A qué categoría principal pertenece la tendencia o tema "${trendName}"? Responde solo con la categoría, sin explicación.`
+          }
+        ]
+      })
+    });
+    if (response.ok) {
+      const data = await response.json();
+      if (data.choices && data.choices[0] && data.choices[0].message) {
+        // Limpiar la respuesta para que sea solo la categoría
+        return data.choices[0].message.content.trim().replace(/^[\d\-\.\s]+/, '');
+      }
+    }
+    return 'General';
+  } catch (error) {
+    console.error('Error en categorizeTrendWithAI:', error);
+    return 'General';
+  }
+}
+// --- FIN: Función para categorizar con IA --- 
