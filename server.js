@@ -563,7 +563,7 @@ app.post('/api/processTrends', async (req, res) => {
             top_keywords: processedData.topKeywords,
             category_data: processedData.categoryData,
             raw_data: rawData,
-            about: processedData.topKeywords[0]?.about || null // Guardar el about de la tendencia principal
+            about: processedData.topKeywords.map(t => t.about) || null // Guardar el about de las 10 tendencias principales como array JSON
           }]);
         
         if (error) {
@@ -719,7 +719,12 @@ async function searchTrendInfo(trend) {
   try {
     console.log(`Buscando información sobre: ${trend}`);
     if (OPENROUTER_API_KEY) {
-      // Usar el modelo Perplexity más reciente disponible en OpenRouter
+      // Usar GPT-4 Turbo con búsqueda web (web search)
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = now.toLocaleString('es-ES', { month: 'long' });
+      const location = 'Guatemala'; // Puedes cambiar esto si tienes una variable dinámica
+      const userPrompt = `¿De qué trata el tema o tendencia "${trend}"? Responde de forma breve y concisa en español, en un solo párrafo, considerando el contexto social, político y de ubicación actual.\nDe qué trata la tendencia ${trend} en ${location} ${year} ${month}`;
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -728,15 +733,15 @@ async function searchTrendInfo(trend) {
           'HTTP-Referer': 'https://pulse.domain.com'
         },
         body: JSON.stringify({
-          model: 'perplexity/sonar-pro',
+          model: 'openai/gpt-4-turbo',
           messages: [
             {
               role: 'system',
-              content: 'Eres un asistente que proporciona información concisa sobre temas tendencia. Responde en español en 2-3 oraciones máximo.'
+              content: 'Eres un buscador web, que asocia el contexto social, político, y de ubicación para poder resolver dudas. El usuario te dará un hashtag o tendencia, por favor resúmelo en un párrafo en base a lo sucedido hoy. Responde en español.'
             },
             {
               role: 'user',
-              content: `¿De qué trata el tema o tendencia "${trend}"? Responde de forma breve y concisa en español.`
+              content: userPrompt
             }
           ]
         })
@@ -747,12 +752,12 @@ async function searchTrendInfo(trend) {
           return {
             summary: data.choices[0].message.content,
             source: 'openrouter',
-            model: 'perplexity/sonar-pro'
+            model: 'openai/gpt-4-turbo'
           };
         }
       } else {
         const errorText = await response.text();
-        console.error('Error OpenRouter Perplexity:', errorText);
+        console.error('Error OpenRouter GPT-4 Turbo:', errorText);
       }
     }
     // Si todo falla, proporcionar un mensaje genérico
