@@ -737,7 +737,7 @@ async function searchTrendInfo(trend) {
   try {
     console.log(`Buscando información sobre: ${trend}`);
     if (OPENROUTER_API_KEY) {
-      // Usar GPT-4 Turbo con búsqueda web (web search)
+      // Usar GPT-4o online para about
       const now = new Date();
       const year = now.getFullYear();
       const month = now.toLocaleString('es-ES', { month: 'long' });
@@ -751,7 +751,7 @@ async function searchTrendInfo(trend) {
           'HTTP-Referer': 'https://pulse.domain.com'
         },
         body: JSON.stringify({
-          model: 'openai/gpt-4-turbo',
+          model: 'openai/gpt-4o:online',
           messages: [
             {
               role: 'system',
@@ -770,7 +770,7 @@ async function searchTrendInfo(trend) {
           return {
             summary: data.choices[0].message.content,
             source: 'openrouter',
-            model: 'openai/gpt-4-turbo'
+            model: 'openai/gpt-4o:online'
           };
         }
       } else {
@@ -806,11 +806,11 @@ async function categorizeTrendWithAI(trendName) {
         'HTTP-Referer': 'https://pulse.domain.com'
       },
       body: JSON.stringify({
-        model: 'openai/gpt-4-turbo',
+        model: 'openai/gpt-4o:online',
         messages: [
           {
             role: 'system',
-            content: 'Eres un asistente que categoriza tendencias de redes sociales. Devuelve solo la categoría más adecuada en español, de una sola palabra o frase corta. Ejemplos: Política, Deportes, Entretenimiento, Tecnología, Economía, Salud, Cultura, Educación, Sociedad, Internacional, Ciencia, Medio ambiente, Otros.'
+            content: 'Eres un asistente experto en categorizar tendencias de redes sociales. Devuelve solo la categoría más adecuada y específica en español, de una sola palabra o frase corta. Ejemplos: Entretenimiento, Deportes, Música, Cine, Política, Economía, Tecnología, Salud, Cultura, Educación, Sociedad, Internacional, Ciencia, Medio ambiente, Moda, Farándula, Otros. Elige la categoría más precisa posible según el contexto.'
           },
           {
             role: 'user',
