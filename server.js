@@ -739,7 +739,7 @@ async function searchTrendInfo(trend) {
           'HTTP-Referer': 'https://pulse.domain.com'
         },
         body: JSON.stringify({
-          model: 'openai/gpt-4o:online',
+          model: 'openai/gpt-4-turbo:online',
           messages: [
             {
               role: 'system',
