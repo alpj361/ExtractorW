@@ -437,7 +437,20 @@ app.post('/api/processTrends', async (req, res) => {
       
       // Extraer nombre del trend (ampliando las posibilidades)
       if (typeof trend === 'string') {
-        uniformTrend.name = trend;
+        // Separar nombre y menciones si viene con número al final (ej: Roberto20k)
+        const match = trend.match(/^(.+?)(\d+(k)?)$/i);
+        if (match) {
+          uniformTrend.name = match[1].trim();
+          let num = match[2].toLowerCase();
+          if (num.endsWith('k')) {
+            num = parseInt(num) * 1000;
+          } else {
+            num = parseInt(num);
+          }
+          uniformTrend.menciones = num;
+        } else {
+          uniformTrend.name = trend;
+        }
       } else if (typeof trend === 'object') {
         // Comprobar todas las claves posibles para extraer un nombre
         const possibleNameKeys = ['name', 'keyword', 'text', 'title', 'word', 'term'];
@@ -471,6 +484,11 @@ app.post('/api/processTrends', async (req, res) => {
             uniformTrend.volume = Number(trend[key]);
             break;
           }
+        }
+        
+        // Si no hay volumen pero hay menciones extraídas del nombre, usarlo
+        if ((!uniformTrend.volume || uniformTrend.volume === 1) && uniformTrend.menciones) {
+          uniformTrend.volume = uniformTrend.menciones;
         }
         
         // Extraer categoría
