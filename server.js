@@ -423,25 +423,20 @@ app.post('/api/processTrends', async (req, res) => {
     
     console.log(`Se encontraron ${trends.length} tendencias para procesar`);
     
-    // Usar IA para separar nombre y menciones antes de categorizar y enriquecer
-    const uniformTrends = await Promise.all(trends.map(async trend => {
-      console.log('Estructura del trend:', JSON.stringify(trend, null, 2));
+    // Convertir a formato uniforme y separar nombre/menciones manualmente
+    const uniformTrends = trends.map(trend => {
       let uniformTrend = {
         name: 'Sin nombre',
         volume: 1,
-        category: 'General'
+        category: 'General',
+        menciones: null,
+        about: 'próximamente'
       };
+      let baseName = null;
       if (typeof trend === 'string') {
-        // Usar IA para separar nombre y menciones
-        const aiSplit = await splitNameMentionsWithAI(trend);
-        uniformTrend.name = aiSplit.name || trend;
-        if (aiSplit.menciones) {
-          uniformTrend.menciones = aiSplit.menciones;
-        }
+        baseName = trend;
       } else if (typeof trend === 'object') {
-        // Comprobar todas las claves posibles para extraer un nombre
         const possibleNameKeys = ['name', 'keyword', 'text', 'title', 'word', 'term'];
-        let baseName = null;
         for (const key of possibleNameKeys) {
           if (trend[key] && typeof trend[key] === 'string' && trend[key].trim()) {
             baseName = trend[key].trim();
@@ -450,25 +445,32 @@ app.post('/api/processTrends', async (req, res) => {
         }
         if (!baseName) {
           for (const [key, value] of Object.entries(trend)) {
-            if (typeof value === 'string' && value.trim() && 
-                key !== 'category' && key !== 'color' && key !== 'about') {
+            if (typeof value === 'string' && value.trim() && key !== 'category' && key !== 'color' && key !== 'about') {
               baseName = value.trim();
               break;
             }
           }
         }
-        if (!baseName && trend.category && typeof trend.category === 'string') {
-          baseName = `${trend.category}`;
-        }
-        // Usar IA para separar nombre y menciones si hay baseName
-        if (baseName) {
-          const aiSplit = await splitNameMentionsWithAI(baseName);
-          uniformTrend.name = aiSplit.name || baseName;
-          if (aiSplit.menciones) {
-            uniformTrend.menciones = aiSplit.menciones;
+      }
+      // Separar nombre y menciones con regex
+      if (baseName) {
+        const match = baseName.match(/^(.+?)(\d+)(k)?$/i);
+        if (match) {
+          uniformTrend.name = match[1].replace(/[#_]/g, '').trim();
+          let num = match[2];
+          if (match[3]) {
+            num = parseInt(num) * 1000;
+          } else {
+            num = parseInt(num);
           }
+          uniformTrend.menciones = num;
+          uniformTrend.volume = num;
+        } else {
+          uniformTrend.name = baseName.replace(/[#_]/g, '').trim();
         }
-        // Extraer valor/conteo/volumen con más opciones
+      }
+      // Extraer volumen si viene explícito
+      if (typeof trend === 'object') {
         const possibleVolumeKeys = ['volume', 'count', 'value', 'weight', 'size', 'frequency'];
         for (const key of possibleVolumeKeys) {
           if (trend[key] && !isNaN(Number(trend[key]))) {
@@ -476,59 +478,63 @@ app.post('/api/processTrends', async (req, res) => {
             break;
           }
         }
-        // Si no hay volumen pero hay menciones extraídas del nombre, usarlo
-        if ((!uniformTrend.volume || uniformTrend.volume === 1) && uniformTrend.menciones) {
-          uniformTrend.volume = uniformTrend.menciones;
-        }
-        // Extraer categoría
         if (trend.category && typeof trend.category === 'string') {
           uniformTrend.category = trend.category;
         }
-        // Preservar campo about si existe
-        if (trend.about && typeof trend.about === 'string') {
-          uniformTrend.about = trend.about;
-          console.log(`Preservando campo about: "${typeof uniformTrend.about === 'string' ? uniformTrend.about.substring(0, 50) + '...' : 'No hay información'}"`);
-        }
       }
-      console.log(`Procesado: name=${uniformTrend.name}, volume=${uniformTrend.volume}, category=${uniformTrend.category}`);
+      // Categorización manual básica
+      const nameLower = uniformTrend.name.toLowerCase();
+      if (/futbol|deporte|liga|baloncesto|tenis|nba|mlb|gol|partido|juego/.test(nameLower)) {
+        uniformTrend.category = 'Deportes';
+      } else if (/presidente|gobierno|congreso|eleccion|politica|alcalde|ministro|senador|diputado/.test(nameLower)) {
+        uniformTrend.category = 'Política';
+      } else if (/musica|cancion|banda|concierto|album|artista|pop|rock|reggaeton/.test(nameLower)) {
+        uniformTrend.category = 'Música';
+      } else if (/cine|pelicula|actor|actriz|oscar|premio|serie|tv|netflix/.test(nameLower)) {
+        uniformTrend.category = 'Entretenimiento';
+      } else if (/dinero|economia|finanza|mercado|banco|dolar|peso|euro/.test(nameLower)) {
+        uniformTrend.category = 'Economía';
+      } else if (/tecnologia|tech|app|software|hardware|internet|red|ai|ia|robot/.test(nameLower)) {
+        uniformTrend.category = 'Tecnología';
+      } else if (/salud|covid|hospital|medico|enfermedad|vacuna/.test(nameLower)) {
+        uniformTrend.category = 'Salud';
+      } else if (/educacion|escuela|universidad|maestro|profesor|clase/.test(nameLower)) {
+        uniformTrend.category = 'Educación';
+      } else if (/cultura|arte|libro|pintura|danza|teatro/.test(nameLower)) {
+        uniformTrend.category = 'Cultura';
+      } else if (/moda|ropa|tendencia|fashion|desfile/.test(nameLower)) {
+        uniformTrend.category = 'Moda';
+      } else if (/sociedad|familia|comunidad|evento|fiesta/.test(nameLower)) {
+        uniformTrend.category = 'Sociedad';
+      } else if (/medio ambiente|clima|calentamiento|ecologia|sostenible/.test(nameLower)) {
+        uniformTrend.category = 'Medio ambiente';
+      } else {
+        uniformTrend.category = 'Otros';
+      }
       return uniformTrend;
-    }));
-    
+    });
     // Ordenar por volumen descendente
     uniformTrends.sort((a, b) => b.volume - a.volume);
-    
     // Tomar las 10 principales tendencias
     const top10 = uniformTrends.slice(0, 10);
-    
     // Si hay menos de 10, repetir para completar
     while (top10.length < 10) {
       top10.push({...top10[top10.length % Math.max(1, top10.length)]});
     }
-    
-    // IA: Categorizar y obtener about para cada tendencia
-    const categorizedTrends = await Promise.all(top10.map(async (trend) => {
-      // Log para ver el nombre limpio antes de categorizar/enriquecer
-      console.log('[IA Split] Nombre limpio:', trend.name, '| Menciones:', trend.menciones);
-      // Categorizar con IA usando el nombre limpio
-      const categoriaIA = await categorizeTrendWithAI(trend.name);
-      // Obtener about usando el nombre limpio
-      const aboutIA = await searchTrendInfo(trend.name);
-      return {
-        ...trend,
-        name: trend.name, // Asegura que el nombre limpio se propague
-        category: categoriaIA,
-        about: aboutIA
-      };
-    }));
-    // Ahora, topKeywords y categoryData usan los datos IA
-    const topKeywords = categorizedTrends.map(trend => ({
-      keyword: trend.name, // nombre limpio
+    // topKeywords y wordCloudData manual
+    const topKeywords = top10.map(trend => ({
+      keyword: trend.name,
       count: trend.volume,
       about: trend.about
     }));
-    // Agrupar por categoría IA
+    const wordCloudData = top10.map((trend, index) => ({
+      text: trend.name,
+      value: trend.volume,
+      color: COLORS[index % COLORS.length]
+    }));
+    // Agrupar por categoría
     const categoryMap = {};
-    categorizedTrends.forEach(trend => {
+    top10.forEach(trend => {
       if (categoryMap[trend.category]) {
         categoryMap[trend.category] += 1;
       } else {
@@ -539,22 +545,15 @@ app.post('/api/processTrends', async (req, res) => {
       category,
       count
     })).sort((a, b) => b.count - a.count);
-    
-    console.timeEnd('procesamiento-datos');
-    
-    // 4. Crear objeto de respuesta
+    // Procesamiento manual completado
     const processedData = {
       topKeywords,
-      wordCloudData: categorizedTrends.map(trend => ({
-        text: trend.name, // nombre limpio
-        value: trend.volume,
-        color: getRandomColor()
-      })),
+      wordCloudData,
       categoryData,
       timestamp: new Date().toISOString()
     };
     
-        // 5. Guardar en Supabase
+    // 5. Guardar en Supabase
     console.time('guardado-supabase');
     if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase) {
       try {
@@ -834,11 +833,11 @@ async function splitNameMentionsWithAI(trendRaw) {
         'HTTP-Referer': 'https://pulse.domain.com'
       },
       body: JSON.stringify({
-        model: 'openai/gpt-4o:online',
+        model: 'openai/gpt-4-turbo:online',
         messages: [
           {
             role: 'system',
-            content: 'Eres un asistente que separa nombres de personas o hashtags de números de menciones. Si recibes una tendencia como "Roberto20k" responde solo con el nombre y el número de menciones por separado. Si el número termina en k, multiplícalo por 1000. Responde en formato JSON: { "name": <nombre>, "menciones": <numero> }. Si no hay número, menciones es null.'
+            content: 'Recibirás una palabra o hashtag que puede tener un número de menciones al final (ejemplo: Roberto20k, Maria15, #Evento2024). Devuelve solo el nombre (sin números ni k) y el número de menciones como entero (si termina en k, multiplica por 1000). Si no hay número, menciones es null. Responde SOLO en formato JSON: { "name": <nombre>, "menciones": <numero|null> }.'
           },
           {
             role: 'user',
@@ -850,11 +849,25 @@ async function splitNameMentionsWithAI(trendRaw) {
     if (response.ok) {
       const data = await response.json();
       if (data.choices && data.choices[0] && data.choices[0].message) {
+        const raw = data.choices[0].message.content;
+        console.log('[IA Split][RAW]', raw);
         try {
-          const parsed = JSON.parse(data.choices[0].message.content);
+          // Intentar parsear como JSON directo
+          const parsed = JSON.parse(raw);
           return parsed;
         } catch (e) {
-          // Si la IA no responde en JSON, fallback
+          // Si la IA no responde en JSON puro, intentar extraer con regex
+          const match = raw.match(/\{[^}]+\}/);
+          if (match) {
+            try {
+              const parsed = JSON.parse(match[0]);
+              return parsed;
+            } catch (e2) {
+              // Fallback
+              return { name: trendRaw, menciones: null };
+            }
+          }
+          // Fallback
           return { name: trendRaw, menciones: null };
         }
       }
