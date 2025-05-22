@@ -507,19 +507,22 @@ app.post('/api/processTrends', async (req, res) => {
     
     // IA: Categorizar y obtener about para cada tendencia
     const categorizedTrends = await Promise.all(top10.map(async (trend) => {
-      // Categorizar con IA
+      // Log para ver el nombre limpio antes de categorizar/enriquecer
+      console.log('[IA Split] Nombre limpio:', trend.name, '| Menciones:', trend.menciones);
+      // Categorizar con IA usando el nombre limpio
       const categoriaIA = await categorizeTrendWithAI(trend.name);
-      // Obtener about con Perplexity (OpenRouter)
+      // Obtener about usando el nombre limpio
       const aboutIA = await searchTrendInfo(trend.name);
       return {
         ...trend,
+        name: trend.name, // Asegura que el nombre limpio se propague
         category: categoriaIA,
         about: aboutIA
       };
     }));
     // Ahora, topKeywords y categoryData usan los datos IA
     const topKeywords = categorizedTrends.map(trend => ({
-      keyword: trend.name,
+      keyword: trend.name, // nombre limpio
       count: trend.volume,
       about: trend.about
     }));
@@ -543,7 +546,7 @@ app.post('/api/processTrends', async (req, res) => {
     const processedData = {
       topKeywords,
       wordCloudData: categorizedTrends.map(trend => ({
-        text: trend.name,
+        text: trend.name, // nombre limpio
         value: trend.volume,
         color: getRandomColor()
       })),
