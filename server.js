@@ -521,12 +521,20 @@ app.post('/api/processTrends', async (req, res) => {
     while (top10.length < 10) {
       top10.push({...top10[top10.length % Math.max(1, top10.length)]});
     }
-    // topKeywords y wordCloudData manual
+
+    // --- INICIO: Generar array 'about' usando Perplexity ---
+    const location = 'Guatemala'; // Puedes hacerlo dinámico si lo necesitas
+    const about = await Promise.all(
+      top10.map(trend => getAboutFromPerplexity(trend.name, location))
+    );
+    // --- FIN: Generar array 'about' ---
+
+    // Construir topKeywords SIN el campo about
     const topKeywords = top10.map(trend => ({
       keyword: trend.name,
-      count: trend.volume,
-      about: trend.about
+      count: trend.volume
     }));
+
     const wordCloudData = top10.map((trend, index) => ({
       text: trend.name,
       value: trend.volume,
@@ -550,6 +558,7 @@ app.post('/api/processTrends', async (req, res) => {
       topKeywords,
       wordCloudData,
       categoryData,
+      about, // <-- sección propia
       timestamp: new Date().toISOString()
     };
     
@@ -568,31 +577,30 @@ app.post('/api/processTrends', async (req, res) => {
             top_keywords: processedData.topKeywords,
             category_data: processedData.categoryData,
             raw_data: rawData,
-            about: processedData.topKeywords.map(t => t.about) || null // Guardar el about de las 10 tendencias principales como array JSON
+            about: processedData.about // Guardar el about como array JSON
           }]);
         
         if (error) {
           console.error('Error al guardar en Supabase (tabla trends):', error);
         } else {
           console.log('Datos guardados exitosamente en tabla trends');
-          
           // También guardar cada keyword individual en la tabla 'trend_details'
           // para facilitar consultas específicas
           console.log('Guardando detalles de cada tendencia en tabla trend_details...');
-          
           // Procesamos secuencialmente para evitar errores de concurrencia
-          for (const trend of processedData.topKeywords) {
+          for (let i = 0; i < processedData.topKeywords.length; i++) {
+            const trend = processedData.topKeywords[i];
             try {
               console.log('Guardando en trend_details:', {
                 keyword: trend.keyword,
-                about: trend.about,
+                about: processedData.about[i],
                 count: trend.count
               });
               const { error: detailError } = await supabase
                 .from('trend_details')
                 .upsert({
                   keyword: trend.keyword,
-                  about: trend.about || null,  // Guardar como objeto JSON directamente
+                  about: processedData.about[i] || null,  // Guardar como objeto JSON directamente
                   count: trend.count,
                   updated_at: new Date().toISOString()
                 });
@@ -617,7 +625,6 @@ app.post('/api/processTrends', async (req, res) => {
     
     // 6. Responder al cliente
     console.log('Enviando respuesta al cliente');
-    
     // Información de diagnóstico completa
     console.log('DIAGNÓSTICO: wordCloudData ----------');
     processedData.wordCloudData.forEach((item, index) => {
@@ -626,10 +633,15 @@ app.post('/api/processTrends', async (req, res) => {
     
     console.log('\nDIAGNÓSTICO: topKeywords ----------');
     processedData.topKeywords.forEach((item, index) => {
-      const aboutPreview = typeof item.about === 'string'
-        ? `about: "${item.about.summary.substring(0, 30)}..."`
+      console.log(`[${index}] keyword: "${item.keyword}", count: ${item.count}`);
+    });
+    
+    console.log('\nDIAGNÓSTICO: about ----------');
+    processedData.about.forEach((item, index) => {
+      const aboutPreview = typeof item.summary === 'string'
+        ? `about: "${item.summary.substring(0, 30)}..."`
         : "about: no definido";
-      console.log(`[${index}] keyword: "${item.keyword}", count: ${item.count}, ${aboutPreview}`);
+      console.log(`[${index}] about: ${aboutPreview}`);
     });
     
     console.log('\nDIAGNÓSTICO: categoryData ----------');
@@ -645,7 +657,6 @@ app.post('/api/processTrends', async (req, res) => {
         const text = item.text;
         const isConsistent = keyword === text;
         console.log(`[${index}] wordCloud.text: "${text}" ${isConsistent ? '=' : '!='} topKeywords.keyword: "${keyword}"`);
-        
         if (!isConsistent) {
           console.warn(`⚠️ Inconsistencia detectada en índice ${index}`);
         }
@@ -878,4 +889,61 @@ async function splitNameMentionsWithAI(trendRaw) {
     return { name: trendRaw, menciones: null };
   }
 }
-// --- FIN: splitNameMentionsWithAI --- 
+
+// --- INICIO: Función para obtener "about" desde Perplexity ---
+async function getAboutFromPerplexity(trend, location = 'Guatemala') {
+  const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
+  if (!PERPLEXITY_API_KEY) {
+    return {
+      summary: `Tendencia relacionada con ${trend}`,
+      source: 'default',
+      model: 'default'
+    };
+  }
+  try {
+    const now = new Date();
+    const year = now.getFullYear();
+    const today = now.toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' });
+    const prompt = `De qué trata la siguiente tendencia "${trend}", en ${location} ${year}, al día de hoy ${today}`;
+    const response = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'sonar',
+        messages: [
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: 200
+      })
+    });
+    if (response.ok) {
+      const data = await response.json();
+      if (data.choices && data.choices[0] && data.choices[0].message) {
+        return {
+          summary: data.choices[0].message.content,
+          source: 'perplexity',
+          model: 'sonar'
+        };
+      }
+    } else {
+      const errorText = await response.text();
+      console.error('Error Perplexity:', errorText);
+    }
+    return {
+      summary: `Tendencia relacionada con ${trend}`,
+      source: 'default',
+      model: 'default'
+    };
+  } catch (error) {
+    console.error(`Error al buscar información en Perplexity para ${trend}:`, error);
+    return {
+      summary: `Tendencia popular: ${trend}`,
+      source: 'default',
+      model: 'default'
+    };
+  }
+}
+// --- FIN: getAboutFromPerplexity ---
