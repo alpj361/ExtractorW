@@ -901,10 +901,8 @@ async function getAboutFromPerplexity(trend, location = 'Guatemala') {
     };
   }
   try {
-    const now = new Date();
-    const year = now.getFullYear();
-    const today = now.toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' });
-    const prompt = `De qué trata la siguiente tendencia "${trend}", en ${location} ${year}, al día de hoy ${today}`;
+    // Nuevo prompt principal según lo solicitado
+    const prompt = `Proporciona un párrafo de contexto sobre "${trend}" explicando qué es y por qué es relevante en 2025. Si es específico de ${location} o tiene conexión política/social ${location}, incluye ese contexto. Si es una tendencia global (deportes, entretenimiento, tecnología), explica brevemente su importancia general. Responde en un solo párrafo informativo.`;
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
       headers: {
