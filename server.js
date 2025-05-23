@@ -893,9 +893,10 @@ async function splitNameMentionsWithAI(trendRaw) {
  * Obtiene información de "about" para un array de términos usando un solo llamado a Perplexity.
  * @param {Array} trendsArray - Array de objetos { name, volume, ... }
  * @param {string} location - Ubicación para el contexto (ej: 'Guatemala')
+ * @param {string} year - Año para el contexto (ej: '2025')
  * @returns {Array} Array de objetos about alineados con trendsArray
  */
-async function getAboutFromPerplexityBatch(trendsArray, location = 'Guatemala') {
+async function getAboutFromPerplexityBatch(trendsArray, location = 'Guatemala', year = '2025') {
   const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
   if (!PERPLEXITY_API_KEY) {
     return trendsArray.map(trend => ({
@@ -908,23 +909,33 @@ async function getAboutFromPerplexityBatch(trendsArray, location = 'Guatemala') 
     }));
   }
   try {
-    // Construir la lista de términos para el prompt
-    const termList = trendsArray.map(t => t.name).join('\n');
-    // Prompt proporcionado por el usuario
-    const prompt = `Eres un analista de datos experto en redes sociales en América Latina. Tu tarea es analizar tendencias en redes sociales de Guatemala durante el año 2025.\n\nTengo una lista de términos que incluyen nombres y cifras de menciones (por ejemplo, 'Spurs457K'). Por favor:\n\n1. Separa la palabra clave del número de menciones (por ejemplo, convierte 'Spurs457K' en 'Spurs').\n2. Para cada término limpio, proporciona un resumen breve (en un solo párrafo) sobre de qué trata en el contexto de Guatemala en 2025.\n3. Clasifica cada término en una categoría: política, deportes, música, justicia, protesta, entretenimiento, etc.\n4. Devuelve toda la información en el siguiente formato JSON:\n\n[\n  {\n    \"nombre\": \"Término limpio\",\n    \"tipo\": \"hashtag\" o \"persona\",\n    \"resumen\": \"Resumen en un solo párrafo...\",\n    \"categoria\": \"Categoría correspondiente\"\n  },\n  ...\n]\n\nLista de términos:\n\n${termList}`;
+    // Construir la lista de queries para el contexto de búsqueda
+    const queries = trendsArray.map(t => `${t.name} ${location} ${year}`);
+    // Prompt mejorado y adaptado del ejemplo Python
+    const prompt = `Tengo una lista de términos que incluyen nombres y cifras de menciones (como 'Spurs457K').\n\n1. Separa la palabra clave del número (por ejemplo, convierte 'Spurs457K' en 'Spurs').\n2. Describe brevemente en un párrafo de qué trata cada término en el contexto de ${location} durante el año ${year}.\n3. Clasifica cada término en una categoría como: política, deportes, música, protesta, justicia, entretenimiento, etc.\n4. Devuélveme la información estructurada en formato JSON:\n\n[\n  {\n    "nombre": "Término limpio",\n    "tipo": "hashtag" o "persona",\n    "resumen": "Resumen en un solo párrafo...",\n    "categoria": "Categoría correspondiente"\n  }\n]\n\nTérminos a analizar:\n${trendsArray.map(t => t.name).join('\n')}`;
+    const payload = {
+      model: 'sonar',
+      search_context: {
+        search_queries: queries
+      },
+      messages: [
+        {
+          role: 'system',
+          content: `Eres un analista de datos especializado en redes sociales en ${location}, con enfoque en política, cultura y deportes durante el año ${year}.`
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ]
+    };
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        model: 'sonar-medium-chat',
-        messages: [
-          { role: 'user', content: prompt }
-        ],
-        max_tokens: 1200
-      })
+      body: JSON.stringify(payload)
     });
     if (response.ok) {
       const data = await response.json();
@@ -955,7 +966,7 @@ async function getAboutFromPerplexityBatch(trendsArray, location = 'Guatemala') 
         aboutArr = aboutArr.map(obj => ({
           ...obj,
           source: 'perplexity',
-          model: 'sonar-medium-chat'
+          model: 'sonar'
         }));
         return aboutArr;
       }
