@@ -522,11 +522,9 @@ app.post('/api/processTrends', async (req, res) => {
       top10.push({...top10[top10.length % Math.max(1, top10.length)]});
     }
 
-    // --- INICIO: Generar array 'about' usando Perplexity ---
+    // --- INICIO: Generar array 'about' usando Perplexity (batch) ---
     const location = 'Guatemala'; // Puedes hacerlo dinámico si lo necesitas
-    const about = await Promise.all(
-      top10.map(trend => getAboutFromPerplexity(trend.name, location))
-    );
+    const aboutArr = await getAboutFromPerplexityBatch(top10, location);
     // --- FIN: Generar array 'about' ---
 
     // Construir topKeywords SIN el campo about
@@ -558,7 +556,7 @@ app.post('/api/processTrends', async (req, res) => {
       topKeywords,
       wordCloudData,
       categoryData,
-      about, // <-- sección propia
+      about: aboutArr, // <-- sección propia
       timestamp: new Date().toISOString()
     };
     
@@ -891,18 +889,29 @@ async function splitNameMentionsWithAI(trendRaw) {
 }
 
 // --- INICIO: Función para obtener "about" desde Perplexity ---
-async function getAboutFromPerplexity(trend, location = 'Guatemala') {
+/**
+ * Obtiene información de "about" para un array de términos usando un solo llamado a Perplexity.
+ * @param {Array} trendsArray - Array de objetos { name, volume, ... }
+ * @param {string} location - Ubicación para el contexto (ej: 'Guatemala')
+ * @returns {Array} Array de objetos about alineados con trendsArray
+ */
+async function getAboutFromPerplexityBatch(trendsArray, location = 'Guatemala') {
   const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
   if (!PERPLEXITY_API_KEY) {
-    return {
-      summary: `Tendencia relacionada con ${trend}`,
+    return trendsArray.map(trend => ({
+      nombre: trend.name,
+      resumen: `Tendencia relacionada con ${trend.name}`,
+      categoria: 'Otros',
+      tipo: 'hashtag',
       source: 'default',
       model: 'default'
-    };
+    }));
   }
   try {
-    // Nuevo prompt principal según lo solicitado
-    const prompt = `Proporciona un párrafo de contexto sobre "${trend}" explicando qué es y por qué es relevante en 2025. Si es específico de ${location} o tiene conexión política/social ${location}, incluye ese contexto. Si es una tendencia global (deportes, entretenimiento, tecnología), explica brevemente su importancia general. Responde en un solo párrafo informativo.`;
+    // Construir la lista de términos para el prompt
+    const termList = trendsArray.map(t => t.name).join('\n');
+    // Prompt proporcionado por el usuario
+    const prompt = `Eres un analista de datos experto en redes sociales en América Latina. Tu tarea es analizar tendencias en redes sociales de Guatemala durante el año 2025.\n\nTengo una lista de términos que incluyen nombres y cifras de menciones (por ejemplo, 'Spurs457K'). Por favor:\n\n1. Separa la palabra clave del número de menciones (por ejemplo, convierte 'Spurs457K' en 'Spurs').\n2. Para cada término limpio, proporciona un resumen breve (en un solo párrafo) sobre de qué trata en el contexto de Guatemala en 2025.\n3. Clasifica cada término en una categoría: política, deportes, música, justicia, protesta, entretenimiento, etc.\n4. Devuelve toda la información en el siguiente formato JSON:\n\n[\n  {\n    \"nombre\": \"Término limpio\",\n    \"tipo\": \"hashtag\" o \"persona\",\n    \"resumen\": \"Resumen en un solo párrafo...\",\n    \"categoria\": \"Categoría correspondiente\"\n  },\n  ...\n]\n\nLista de términos:\n\n${termList}`;
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
       headers: {
@@ -910,38 +919,69 @@ async function getAboutFromPerplexity(trend, location = 'Guatemala') {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'sonar',
+        model: 'sonar-medium-chat',
         messages: [
           { role: 'user', content: prompt }
         ],
-        max_tokens: 200
+        max_tokens: 1200
       })
     });
     if (response.ok) {
       const data = await response.json();
       if (data.choices && data.choices[0] && data.choices[0].message) {
-        return {
-          summary: data.choices[0].message.content,
+        // Intentar extraer el JSON de la respuesta
+        let raw = data.choices[0].message.content;
+        let aboutArr = [];
+        try {
+          // Buscar el primer array JSON en la respuesta
+          const match = raw.match(/\[.*\]/s);
+          if (match) {
+            aboutArr = JSON.parse(match[0]);
+          } else {
+            aboutArr = JSON.parse(raw);
+          }
+        } catch (e) {
+          // Si no se puede parsear, fallback genérico
+          aboutArr = trendsArray.map(t => ({
+            nombre: t.name,
+            resumen: `Tendencia relacionada con ${t.name}`,
+            categoria: 'Otros',
+            tipo: 'hashtag',
+            source: 'default',
+            model: 'default'
+          }));
+        }
+        // Enriquecer cada objeto con source/model
+        aboutArr = aboutArr.map(obj => ({
+          ...obj,
           source: 'perplexity',
-          model: 'sonar'
-        };
+          model: 'sonar-medium-chat'
+        }));
+        return aboutArr;
       }
     } else {
       const errorText = await response.text();
       console.error('Error Perplexity:', errorText);
     }
-    return {
-      summary: `Tendencia relacionada con ${trend}`,
+    // Fallback si falla la API
+    return trendsArray.map(trend => ({
+      nombre: trend.name,
+      resumen: `Tendencia relacionada con ${trend.name}`,
+      categoria: 'Otros',
+      tipo: 'hashtag',
       source: 'default',
       model: 'default'
-    };
+    }));
   } catch (error) {
-    console.error(`Error al buscar información en Perplexity para ${trend}:`, error);
-    return {
-      summary: `Tendencia popular: ${trend}`,
+    console.error(`Error al buscar información en Perplexity batch:`, error);
+    return trendsArray.map(trend => ({
+      nombre: trend.name,
+      resumen: `Tendencia popular: ${trend.name}`,
+      categoria: 'Otros',
+      tipo: 'hashtag',
       source: 'default',
       model: 'default'
-    };
+    }));
   }
 }
-// --- FIN: getAboutFromPerplexity ---
+// --- FIN: getAboutFromPerplexityBatch ---
