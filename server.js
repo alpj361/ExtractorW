@@ -499,13 +499,13 @@ app.post('/api/processTrends', async (req, res) => {
     // Construir topKeywords
     const topKeywords = top10.map(trend => ({
       keyword: trend.name,
-      count: trend.volume
+        count: trend.volume
     }));
 
     const wordCloudData = top10.map((trend, index) => ({
       text: trend.name,
       value: trend.volume,
-      color: COLORS[index % COLORS.length]
+        color: COLORS[index % COLORS.length]
     }));
     
     // Agrupar por categoría
@@ -769,26 +769,26 @@ app.get('/api/latestTrends', async (req, res) => {
     const { data, error } = await supabase
       .from('trends')
       .select('*')
-      .order('timestamp', { ascending: false })
-      .limit(1)
-      .single();
+      .order('idtimestamp', { ascending: false })
+      .limit(1);
     
-    if (error) {
+    if (error || !data || data.length === 0) {
       console.error('Error consultando tendencias recientes:', error);
       return res.status(404).json({
         error: 'No trends found',
         message: 'No se encontraron tendencias'
       });
     }
-    
+    const trend = data[0];
     const response = {
-      topKeywords: data.top_keywords,
-      wordCloudData: data.word_cloud_data,
-      categoryData: data.category_data,
-      about: data.about || [],
-      statistics: data.statistics || {},
-      timestamp: data.timestamp,
-      processing_status: data.processing_status || 'unknown'
+      idtimestamp: trend.idtimestamp,
+      topKeywords: trend.top_keywords,
+      wordCloudData: trend.word_cloud_data,
+      categoryData: trend.category_data,
+      about: trend.about || [],
+      statistics: trend.statistics || {},
+      timestamp: trend.timestamp,
+      processing_status: trend.processing_status || 'unknown'
     };
     
     console.log(`Tendencias recientes enviadas. Estado: ${response.processing_status}`);
@@ -910,13 +910,13 @@ async function categorizeTrendWithAI(trendName) {
         ]
       })
     });
-    if (response.ok) {
-      const data = await response.json();
-      if (data.choices && data.choices[0] && data.choices[0].message) {
+      if (response.ok) {
+        const data = await response.json();
+        if (data.choices && data.choices[0] && data.choices[0].message) {
         // Limpiar la respuesta para que sea solo la categoría
         return data.choices[0].message.content.trim().replace(/^[\d\-\.\s]+/, '');
+        }
       }
-    }
     return 'General';
   } catch (error) {
     console.error('Error en categorizeTrendWithAI:', error);
@@ -929,27 +929,27 @@ async function categorizeTrendWithAI(trendName) {
 async function splitNameMentionsWithAI(trendRaw) {
   if (!OPENROUTER_API_KEY) return { name: trendRaw, menciones: null };
   try {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-        'HTTP-Referer': 'https://pulse.domain.com'
-      },
-      body: JSON.stringify({
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+          'HTTP-Referer': 'https://pulse.domain.com'
+        },
+        body: JSON.stringify({
         model: 'openai/gpt-4-turbo:online',
-        messages: [
-          {
-            role: 'system',
+          messages: [
+            {
+              role: 'system',
             content: 'Recibirás una palabra o hashtag que puede tener un número de menciones al final (ejemplo: Roberto20k, Maria15, #Evento2024). Devuelve solo el nombre (sin números ni k) y el número de menciones como entero (si termina en k, multiplica por 1000). Si no hay número, menciones es null. Responde SOLO en formato JSON: { "name": <nombre>, "menciones": <numero|null> }.'
-          },
-          {
-            role: 'user',
+            },
+            {
+              role: 'user',
             content: `Separa nombre y menciones de: ${trendRaw}`
-          }
-        ]
-      })
-    });
+            }
+          ]
+        })
+      });
     if (response.ok) {
       const data = await response.json();
       if (data.choices && data.choices[0] && data.choices[0].message) {
@@ -1083,10 +1083,10 @@ Busca profundamente, no digas "sin información". Si es apodo, identifica la per
       },
       body: JSON.stringify(payload)
     });
-
-    if (response.ok) {
-      const data = await response.json();
-      if (data.choices && data.choices[0] && data.choices[0].message) {
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.choices && data.choices[0] && data.choices[0].message) {
         let rawResponse = data.choices[0].message.content;
         console.log(`   ✅ Respuesta recibida para ${trendName}`);
         
@@ -1305,4 +1305,4 @@ async function getAboutFromPerplexityBatch(trendsArray, location = 'Guatemala', 
   
   const processed = await processWithPerplexityIndividual(trendsArray, location);
   return processed.map(item => item.about);
-}
+} 
