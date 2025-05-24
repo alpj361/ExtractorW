@@ -316,7 +316,8 @@ app.post('/api/processTrends', async (req, res) => {
     // Depuración - Mostrar estructura completa de los datos recibidos
     console.log('Estructura de rawData recibida:');
     console.log(typeof rawData);
-    console.log(JSON.stringify(rawData, null, 2).substring(0, 500) + '...'); // Mostrar los primeros 500 caracteres
+    const rawDataString = JSON.stringify(rawData, null, 2);
+    console.log(rawDataString ? rawDataString.substring(0, 500) + '...' : 'undefined'); // Mostrar los primeros 500 caracteres
     
     if (!rawData && VPS_API_URL) {
       console.log('Datos no proporcionados, obteniendo de VPS API...');
