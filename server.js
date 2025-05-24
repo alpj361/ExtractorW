@@ -18,6 +18,7 @@ app.use(cors({
 app.use(express.json({limit: '10mb'}));
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
 const VPS_API_URL = process.env.VPS_API_URL;
 const USE_AI = process.env.USE_AI === 'true'; // Nueva variable de entorno
 const USE_WEB_SEARCH = true; // Indicar si queremos usar búsqueda web para tendencias
@@ -339,9 +340,9 @@ app.post('/api/processTrends', async (req, res) => {
     }
     console.timeEnd('obtencion-datos');
     
-    // 2. Procesar datos (sin IA)
+    // 2. Procesar datos básicos (sin IA)
     console.time('procesamiento-datos');
-    console.log('Iniciando procesamiento de datos sin IA');
+    console.log('Iniciando procesamiento de datos básicos (sin about)');
     
     // Extraer y ordenar las tendencias
     let trends = [];
@@ -429,8 +430,7 @@ app.post('/api/processTrends', async (req, res) => {
         name: 'Sin nombre',
         volume: 1,
         category: 'General',
-        menciones: null,
-        about: 'próximamente'
+        menciones: null
       };
       let baseName = null;
       if (typeof trend === 'string') {
@@ -482,52 +482,20 @@ app.post('/api/processTrends', async (req, res) => {
           uniformTrend.category = trend.category;
         }
       }
-      // Categorización manual básica
-      const nameLower = uniformTrend.name.toLowerCase();
-      if (/futbol|deporte|liga|baloncesto|tenis|nba|mlb|gol|partido|juego/.test(nameLower)) {
-        uniformTrend.category = 'Deportes';
-      } else if (/presidente|gobierno|congreso|eleccion|politica|alcalde|ministro|senador|diputado/.test(nameLower)) {
-        uniformTrend.category = 'Política';
-      } else if (/musica|cancion|banda|concierto|album|artista|pop|rock|reggaeton/.test(nameLower)) {
-        uniformTrend.category = 'Música';
-      } else if (/cine|pelicula|actor|actriz|oscar|premio|serie|tv|netflix/.test(nameLower)) {
-        uniformTrend.category = 'Entretenimiento';
-      } else if (/dinero|economia|finanza|mercado|banco|dolar|peso|euro/.test(nameLower)) {
-        uniformTrend.category = 'Economía';
-      } else if (/tecnologia|tech|app|software|hardware|internet|red|ai|ia|robot/.test(nameLower)) {
-        uniformTrend.category = 'Tecnología';
-      } else if (/salud|covid|hospital|medico|enfermedad|vacuna/.test(nameLower)) {
-        uniformTrend.category = 'Salud';
-      } else if (/educacion|escuela|universidad|maestro|profesor|clase/.test(nameLower)) {
-        uniformTrend.category = 'Educación';
-      } else if (/cultura|arte|libro|pintura|danza|teatro/.test(nameLower)) {
-        uniformTrend.category = 'Cultura';
-      } else if (/moda|ropa|tendencia|fashion|desfile/.test(nameLower)) {
-        uniformTrend.category = 'Moda';
-      } else if (/sociedad|familia|comunidad|evento|fiesta/.test(nameLower)) {
-        uniformTrend.category = 'Sociedad';
-      } else if (/medio ambiente|clima|calentamiento|ecologia|sostenible/.test(nameLower)) {
-        uniformTrend.category = 'Medio ambiente';
-      } else {
-        uniformTrend.category = 'Otros';
-      }
+      // Categorización manual básica mejorada con detectarCategoria
+      uniformTrend.category = detectarCategoria(uniformTrend.name);
+      
       return uniformTrend;
     });
+    
     // Ordenar por volumen descendente
     uniformTrends.sort((a, b) => b.volume - a.volume);
     // Tomar las 10 principales tendencias
     const top10 = uniformTrends.slice(0, 10);
-    // Si hay menos de 10, repetir para completar
-    while (top10.length < 10) {
-      top10.push({...top10[top10.length % Math.max(1, top10.length)]});
-    }
+    // Si hay menos de 10, usar las que tenemos sin repetir
+    // NO repetir tendencias - mejor trabajar con las que tenemos
 
-    // --- INICIO: Generar array 'about' usando Perplexity (batch) ---
-    const location = 'Guatemala'; // Puedes hacerlo dinámico si lo necesitas
-    const aboutArr = await getAboutFromPerplexityBatch(top10, location);
-    // --- FIN: Generar array 'about' ---
-
-    // Construir topKeywords SIN el campo about
+    // Construir topKeywords
     const topKeywords = top10.map(trend => ({
       keyword: trend.name,
       count: trend.volume
@@ -538,6 +506,7 @@ app.post('/api/processTrends', async (req, res) => {
       value: trend.volume,
       color: COLORS[index % COLORS.length]
     }));
+    
     // Agrupar por categoría
     const categoryMap = {};
     top10.forEach(trend => {
@@ -551,118 +520,69 @@ app.post('/api/processTrends', async (req, res) => {
       category,
       count
     })).sort((a, b) => b.count - a.count);
-    // Procesamiento manual completado
-    const processedData = {
+    
+    // Respuesta básica SIN about (respuesta rápida)
+    const basicResponse = {
       topKeywords,
       wordCloudData,
       categoryData,
-      about: aboutArr, // <-- sección propia
-      timestamp: new Date().toISOString()
+      about: [], // Vacío inicialmente
+      statistics: {}, // Vacío inicialmente
+      timestamp: new Date().toISOString(),
+      processing_status: 'basic_completed'
     };
     
-    // 5. Guardar en Supabase
-    console.time('guardado-supabase');
+    console.timeEnd('procesamiento-datos');
+    
+    // 3. Guardar datos básicos en Supabase primero
+    console.time('guardado-basico-supabase');
+    let recordId = null;
+    
     if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase) {
       try {
-        console.log('Guardando datos en Supabase...');
+        console.log('Guardando datos básicos en Supabase...');
         
-        // Guardar la tendencia principal en la tabla 'trends'
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('trends')
           .insert([{
-            timestamp: processedData.timestamp,
-            word_cloud_data: processedData.wordCloudData,
-            top_keywords: processedData.topKeywords,
-            category_data: processedData.categoryData,
+            timestamp: basicResponse.timestamp,
+            word_cloud_data: basicResponse.wordCloudData,
+            top_keywords: basicResponse.topKeywords,
+            category_data: basicResponse.categoryData,
             raw_data: rawData,
-            about: processedData.about // Guardar el about como array JSON
-          }]);
+            about: [], // Vacío por ahora
+            statistics: {}, // Vacío por ahora
+            processing_status: 'basic_completed'
+          }])
+          .select();
         
         if (error) {
-          console.error('Error al guardar en Supabase (tabla trends):', error);
+          console.error('Error al guardar datos básicos en Supabase:', error);
         } else {
-          console.log('Datos guardados exitosamente en tabla trends');
-          // También guardar cada keyword individual en la tabla 'trend_details'
-          // para facilitar consultas específicas
-          console.log('Guardando detalles de cada tendencia en tabla trend_details...');
-          // Procesamos secuencialmente para evitar errores de concurrencia
-          for (let i = 0; i < processedData.topKeywords.length; i++) {
-            const trend = processedData.topKeywords[i];
-            try {
-              console.log('Guardando en trend_details:', {
-                keyword: trend.keyword,
-                about: processedData.about[i],
-                count: trend.count
-              });
-              const { error: detailError } = await supabase
-                .from('trend_details')
-                .upsert({
-                  keyword: trend.keyword,
-                  about: processedData.about[i] || null,  // Guardar como objeto JSON directamente
-                  count: trend.count,
-                  updated_at: new Date().toISOString()
-                });
-                
-              if (detailError) {
-                console.error(`Error al guardar detalles para ${trend.keyword}:`, detailError);
-              }
-            } catch (detailErr) {
-              console.error(`Error en proceso de upsert para ${trend.keyword}:`, detailErr);
-            }
-          }
-          
-          console.log('Proceso de guardado completo');
+          console.log('Datos básicos guardados exitosamente en Supabase');
+          recordId = data && data[0] ? data[0].id : null;
+          console.log('Record ID para actualización posterior:', recordId);
         }
       } catch (err) {
-        console.error('Error al intentar guardar en Supabase:', err);
+        console.error('Error al intentar guardar datos básicos en Supabase:', err);
       }
-    } else {
-      console.log('Credenciales de Supabase no configuradas o cliente no inicializado, omitiendo guardado');
     }
-    console.timeEnd('guardado-supabase');
+    console.timeEnd('guardado-basico-supabase');
     
-    // 6. Responder al cliente
-    console.log('Enviando respuesta al cliente');
-    // Información de diagnóstico completa
-    console.log('DIAGNÓSTICO: wordCloudData ----------');
-    processedData.wordCloudData.forEach((item, index) => {
-      console.log(`[${index}] text: "${item.text}", value: ${item.value}, color: ${item.color}`);
-    });
-    
-    console.log('\nDIAGNÓSTICO: topKeywords ----------');
-    processedData.topKeywords.forEach((item, index) => {
-      console.log(`[${index}] keyword: "${item.keyword}", count: ${item.count}`);
-    });
-    
-    console.log('\nDIAGNÓSTICO: about ----------');
-    processedData.about.forEach((item, index) => {
-      const aboutPreview = typeof item.summary === 'string'
-        ? `about: "${item.summary.substring(0, 30)}..."`
-        : "about: no definido";
-      console.log(`[${index}] about: ${aboutPreview}`);
-    });
-    
-    console.log('\nDIAGNÓSTICO: categoryData ----------');
-    processedData.categoryData.forEach((item, index) => {
-      console.log(`[${index}] category: "${item.category}", count: ${item.count}`);
-    });
-    
-    // Validación final para verificar consistencia entre wordCloudData y topKeywords
-    console.log('\nVALIDACIÓN DE CONSISTENCIA:');
-    processedData.wordCloudData.forEach((item, index) => {
-      if (index < processedData.topKeywords.length) {
-        const keyword = processedData.topKeywords[index].keyword;
-        const text = item.text;
-        const isConsistent = keyword === text;
-        console.log(`[${index}] wordCloud.text: "${text}" ${isConsistent ? '=' : '!='} topKeywords.keyword: "${keyword}"`);
-        if (!isConsistent) {
-          console.warn(`⚠️ Inconsistencia detectada en índice ${index}`);
-        }
-      }
-    });
-    
+    // 4. RESPONDER INMEDIATAMENTE al cliente con datos básicos
+    console.log('Enviando respuesta básica rápida al cliente...');
     console.timeEnd('procesamiento-total');
-    res.json(processedData);
+    res.json(basicResponse);
+    
+    // ======================================================================
+    // 5. PROCESAMIENTO EN BACKGROUND - about y estadísticas
+    // ======================================================================
+    console.log('\n🔄 INICIANDO PROCESAMIENTO EN BACKGROUND...');
+    
+    // Procesar en background sin bloquear la respuesta
+    processAboutInBackground(top10, rawData, recordId, basicResponse.timestamp).catch(error => {
+      console.error('❌ Error en procesamiento en background:', error);
+    });
     
   } catch (error) {
     console.error('Error en /api/processTrends:', error);
@@ -673,6 +593,106 @@ app.post('/api/processTrends', async (req, res) => {
     });
   }
 });
+
+/**
+ * Procesa la información detallada (about) en background
+ * @param {Array} top10 - Top 10 tendencias
+ * @param {Object} rawData - Datos originales
+ * @param {string|null} recordId - ID del registro en Supabase para actualizar
+ * @param {string} timestamp - Timestamp del procesamiento inicial
+ */
+async function processAboutInBackground(top10, rawData, recordId, timestamp) {
+  console.log('🎯 Iniciando procesamiento background de about...');
+  
+  try {
+    const location = 'Guatemala';
+    
+    // Procesar about con Perplexity Individual
+    console.time('procesamiento-about-background');
+    const processedAbout = await processWithPerplexityIndividual(top10, location);
+    console.timeEnd('procesamiento-about-background');
+    
+    // Generar estadísticas
+    console.time('generacion-estadisticas');
+    const statistics = generateStatistics(processedAbout);
+    console.timeEnd('generacion-estadisticas');
+    
+    // Formato about para compatibilidad con frontend
+    const aboutArray = processedAbout.map(item => item.about);
+    
+    console.log('📊 Estadísticas generadas:', JSON.stringify(statistics, null, 2));
+    
+    // Actualizar registro en Supabase
+    if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase && recordId) {
+      try {
+        console.log('🔄 Actualizando registro en Supabase con about y estadísticas...');
+        
+        const { error: updateError } = await supabase
+          .from('trends')
+          .update({
+            about: aboutArray,
+            statistics: statistics,
+            processing_status: 'complete'
+          })
+          .eq('id', recordId);
+        
+        if (updateError) {
+          console.error('❌ Error actualizando registro con about:', updateError);
+        } else {
+          console.log('✅ Registro actualizado exitosamente con about y estadísticas');
+        }
+        
+        // También actualizar detalles individuales
+        console.log('🔄 Actualizando detalles individuales en trend_details...');
+        for (let i = 0; i < processedAbout.length; i++) {
+          const item = processedAbout[i];
+          try {
+            const { error: detailError } = await supabase
+              .from('trend_details')
+              .upsert({
+                keyword: item.keyword,
+                about: item.about,
+                count: top10[i]?.volume || 1,
+                updated_at: new Date().toISOString()
+              });
+              
+            if (detailError) {
+              console.error(`❌ Error actualizando detalle para ${item.keyword}:`, detailError);
+            }
+          } catch (detailErr) {
+            console.error(`❌ Error en upsert para ${item.keyword}:`, detailErr);
+          }
+        }
+        
+        console.log('✅ Detalles individuales actualizados');
+        
+      } catch (err) {
+        console.error('❌ Error al actualizar Supabase en background:', err);
+      }
+    }
+    
+    console.log('✅ PROCESAMIENTO EN BACKGROUND COMPLETADO');
+    
+  } catch (error) {
+    console.error('❌ Error en processAboutInBackground:', error);
+    
+    // En caso de error, al menos actualizar el estado en Supabase
+    if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase && recordId) {
+      try {
+        await supabase
+          .from('trends')
+          .update({
+            processing_status: 'error',
+            about: [],
+            statistics: { error: error.message }
+          })
+          .eq('id', recordId);
+      } catch (updateErr) {
+        console.error('❌ Error actualizando estado de error:', updateErr);
+      }
+    }
+  }
+}
 
 // Endpoints adicionales para diagnóstico
 
@@ -704,6 +724,109 @@ app.get('/api/searchTrendInfo/:trend', async (req, res) => {
       error: 'Error al buscar información',
       message: error.message,
       timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Endpoint para consultar el estado del procesamiento
+app.get('/api/processingStatus/:timestamp', async (req, res) => {
+  try {
+    const { timestamp } = req.params;
+    console.log(`Consultando estado de procesamiento para timestamp: ${timestamp}`);
+    
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase) {
+      return res.status(503).json({
+        error: 'Supabase not configured',
+        message: 'Base de datos no configurada'
+      });
+    }
+    
+    const { data, error } = await supabase
+      .from('trends')
+      .select('*')
+      .eq('timestamp', timestamp)
+      .single();
+    
+    if (error) {
+      console.error('Error consultando estado:', error);
+      return res.status(404).json({
+        error: 'Record not found',
+        message: 'No se encontró el registro'
+      });
+    }
+    
+    const response = {
+      status: data.processing_status || 'unknown',
+      timestamp: data.timestamp,
+      has_about: data.about && data.about.length > 0,
+      has_statistics: data.statistics && Object.keys(data.statistics).length > 0,
+      data: {
+        topKeywords: data.top_keywords,
+        wordCloudData: data.word_cloud_data,
+        categoryData: data.category_data,
+        about: data.about || [],
+        statistics: data.statistics || {},
+        timestamp: data.timestamp
+      }
+    };
+    
+    console.log(`Estado: ${response.status}, About: ${response.has_about}, Stats: ${response.has_statistics}`);
+    res.json(response);
+    
+  } catch (error) {
+    console.error('Error en /api/processingStatus:', error);
+    res.status(500).json({
+      error: 'Error checking status',
+      message: error.message
+    });
+  }
+});
+
+// Endpoint para obtener los datos más recientes completos
+app.get('/api/latestTrends', async (req, res) => {
+  try {
+    console.log('Consultando tendencias más recientes...');
+    
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase) {
+      return res.status(503).json({
+        error: 'Supabase not configured',
+        message: 'Base de datos no configurada'
+      });
+    }
+    
+    const { data, error } = await supabase
+      .from('trends')
+      .select('*')
+      .order('timestamp', { ascending: false })
+      .limit(1)
+      .single();
+    
+    if (error) {
+      console.error('Error consultando tendencias recientes:', error);
+      return res.status(404).json({
+        error: 'No trends found',
+        message: 'No se encontraron tendencias'
+      });
+    }
+    
+    const response = {
+      topKeywords: data.top_keywords,
+      wordCloudData: data.word_cloud_data,
+      categoryData: data.category_data,
+      about: data.about || [],
+      statistics: data.statistics || {},
+      timestamp: data.timestamp,
+      processing_status: data.processing_status || 'unknown'
+    };
+    
+    console.log(`Tendencias recientes enviadas. Estado: ${response.processing_status}`);
+    res.json(response);
+    
+  } catch (error) {
+    console.error('Error en /api/latestTrends:', error);
+    res.status(500).json({
+      error: 'Error getting latest trends',
+      message: error.message
     });
   }
 });
@@ -890,45 +1013,136 @@ async function splitNameMentionsWithAI(trendRaw) {
 
 // --- INICIO: Función para obtener "about" desde Perplexity ---
 /**
- * Obtiene información de "about" para un array de términos usando un solo llamado a Perplexity.
- * @param {Array} trendsArray - Array de objetos { name, volume, ... }
- * @param {string} location - Ubicación para el contexto (ej: 'Guatemala')
- * @param {string} year - Año para el contexto (ej: '2025')
- * @returns {Array} Array de objetos about alineados con trendsArray
+ * Obtiene información contextualizada individual para una tendencia usando Perplexity
+ * @param {string} trendName - Nombre de la tendencia
+ * @param {string} location - Ubicación para contexto (Guatemala)
+ * @param {number} year - Año actual
+ * @returns {Object} - Información estructurada sobre la tendencia
  */
-async function getAboutFromPerplexityBatch(trendsArray, location = 'Guatemala', year = '2025') {
-  const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
+async function getAboutFromPerplexityIndividual(trendName, location = 'Guatemala', year = 2025) {
   if (!PERPLEXITY_API_KEY) {
-    return trendsArray.map(trend => ({
-      nombre: trend.name,
-      resumen: `Tendencia relacionada con ${trend.name}`,
+    console.log(`⚠️  PERPLEXITY_API_KEY no configurada para ${trendName}`);
+    return {
+      nombre: trendName,
+      resumen: `Tendencia relacionada con ${trendName}`,
       categoria: 'Otros',
       tipo: 'hashtag',
+      relevancia: 'baja',
+      contexto_local: false,
       source: 'default',
       model: 'default'
-    }));
+    };
   }
+
   try {
-    // Construir la lista de queries para el contexto de búsqueda
-    const queries = trendsArray.map(t => `${t.name} ${location} ${year}`);
-    // Prompt mejorado y adaptado del ejemplo Python
-    const prompt = `Tengo una lista de términos que incluyen nombres y cifras de menciones (como 'Spurs457K').\n\n1. Separa la palabra clave del número (por ejemplo, convierte 'Spurs457K' en 'Spurs').\n2. Describe brevemente en un párrafo de qué trata cada término en el contexto de ${location} durante el año ${year}.\n3. Clasifica cada término en una categoría como: política, deportes, música, protesta, justicia, entretenimiento, etc.\n4. Devuélveme la información estructurada en formato JSON:\n\n[\n  {\n    "nombre": "Término limpio",\n    "tipo": "hashtag" o "persona",\n    "resumen": "Resumen en un solo párrafo...",\n    "categoria": "Categoría correspondiente"\n  }\n]\n\nTérminos a analizar:\n${trendsArray.map(t => t.name).join('\n')}`;
+    console.log(`🔍 Buscando información individual para: "${trendName}"`);
+    
+    // Obtener fecha actual dinámica
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.toLocaleString('es-ES', { month: 'long' });
+    const currentDate = now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
+    
+    // Construir consulta específica para búsqueda web
+    const searchQuery = `${trendName} ${location} ${currentMonth} ${currentYear} noticias actualidad`;
+    
+    // Consultas adicionales para mejorar la búsqueda
+    const alternativeQueries = [
+      `${trendName} fútbol ${currentMonth} ${currentYear}`, // Para deportes
+      `${trendName} retiro futbol ${currentMonth} ${currentYear}`, // Para retiros
+      `${trendName} jugador ${currentMonth} ${currentYear}`, // Para jugadores
+      `${trendName} noticia mayo 2025`, // Búsqueda directa por fecha
+      `"${trendName}" trending ${currentMonth} 2025` // Búsqueda exacta
+    ];
+    
+    // Prompt mejorado con fecha dinámica y mejor enfoque en la razón exacta
+    const prompt = `Analiza la tendencia "${trendName}" y explica POR QUÉ está siendo tendencia ESPECÍFICAMENTE en ${currentMonth} ${currentYear}.
+
+FECHA ACTUAL: ${currentDate}
+
+INSTRUCCIONES ESPECÍFICAS:
+1. "${trendName}" puede ser:
+   - Un APODO de una persona famosa (ej: jugador de fútbol, artista, político)
+   - Un nombre completo de persona
+   - Un evento, equipo, película, álbum, etc.
+   
+2. Si es un APODO, identifica la persona real detrás del apodo
+   - Ejemplo: "Lukita" podría ser el apodo de un futbolista
+   - Busca tanto el apodo como posibles nombres reales
+   
+3. Busca eventos ESPECÍFICOS y RECIENTES (${currentMonth} ${currentYear}):
+   - Retiros de deportistas
+   - Lanzamientos (álbums, películas, productos)  
+   - Transferencias de jugadores
+   - Noticias actuales (política, escándalos, declaraciones)
+   - Eventos deportivos (partidos, lesiones, controversias)
+   
+4. Si no encuentras información específica para ${currentMonth} ${currentYear}, busca:
+   - Eventos recientes en 2025
+   - Anuncios importantes
+   - Cambios de carrera o retiros
+   
+5. Determina si es:
+   - TENDENCIA LOCAL: Relacionada directamente con ${location}
+   - TENDENCIA GLOBAL: Internacional pero que interesa en ${location}
+   
+6. NO digas "no hay información" - busca más profundo
+7. SÉ ESPECÍFICO sobre el evento que causó la tendencia
+
+EJEMPLOS DE ANÁLISIS PRECISO:
+- Si es deportes: ¿Retiro? ¿Transferencia? ¿Lesión? ¿Partido importante?
+- Si es apodo de jugador: ¿Quién es realmente? ¿Qué pasó con él?
+- Si es política: ¿Qué declaración? ¿Qué acción? ¿Qué investigación?
+- Si es entretenimiento: ¿Qué se estrenó? ¿Qué se anunció?
+
+Responde en formato JSON:
+{
+  "nombre": "Nombre completo/real si es un apodo, sino el nombre limpio",
+  "apodo": "${trendName}" (si es diferente del nombre real),
+  "tipo": "persona|evento|hashtag|tema|equipo|película|serie|música|álbum|artista|futbolista",
+  "categoria": "Categoría específica",
+  "resumen": "Explicación de 2-3 oraciones sobre QUÉ ES y POR QUÉ es tendencia AHORA en ${currentMonth} ${currentYear}. SÉ ESPECÍFICO sobre el evento exacto.",
+  "relevancia": "alta|media|baja",
+  "contexto_local": true/false,
+  "razon_tendencia": "Evento específico y exacto que causó que sea tendencia ahora",
+  "fecha_evento": "Fecha aproximada del evento que causó la tendencia",
+  "palabras_clave": ["palabra1", "palabra2", "palabra3"]
+}`;
+
     const payload = {
       model: 'sonar',
-      search_context: {
-        search_queries: queries
-      },
       messages: [
         {
           role: 'system',
-          content: `Eres un analista de datos especializado en redes sociales en ${location}, con enfoque en política, cultura y deportes durante el año ${year}.`
+          content: `Eres un analista de tendencias especializado en identificar POR QUÉ algo es tendencia en redes sociales EN ESTE MOMENTO (${currentMonth} ${currentYear}). Tu expertise incluye:
+
+- Detectar eventos actuales ESPECÍFICOS que generan tendencias (lanzamientos, controversias, partidos, noticias, anuncios)
+- Identificar APODOS y nombres reales de personas famosas (especialmente deportistas)
+- Distinguir entre tendencias locales de ${location} vs tendencias globales que interesan en ${location}
+- Identificar el contexto temporal EXACTO (¿qué pasó HOY/ESTA SEMANA/ESTE MES que lo hizo tendencia?)
+- No rendirse fácilmente - buscar información profundamente
+- Ser PRECISO sobre la relevancia real para el público de ${location}
+- Enfocarte en EVENTOS ESPECÍFICOS no generalidades
+
+FECHA ACTUAL: ${currentDate}
+Enfócate en la ACTUALIDAD y en eventos ESPECÍFICOS Y EXACTOS que explican por qué algo es tendencia AHORA.
+
+IMPORTANTE: Si "${trendName}" parece ser un apodo, busca tanto el apodo como el nombre real de la persona.`
         },
         {
           role: 'user',
           content: prompt
         }
-      ]
+      ],
+      search_context: {
+        search_queries: [searchQuery, ...alternativeQueries]
+      },
+      temperature: 0.3,
+      max_tokens: 500
     };
+
+    console.log(`   📡 Realizando consulta a Perplexity...`);
+    
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
       headers: {
@@ -937,62 +1151,226 @@ async function getAboutFromPerplexityBatch(trendsArray, location = 'Guatemala', 
       },
       body: JSON.stringify(payload)
     });
+
     if (response.ok) {
       const data = await response.json();
       if (data.choices && data.choices[0] && data.choices[0].message) {
-        // Intentar extraer el JSON de la respuesta
-        let raw = data.choices[0].message.content;
-        let aboutArr = [];
+        let rawResponse = data.choices[0].message.content;
+        console.log(`   ✅ Respuesta recibida para ${trendName}`);
+        
         try {
-          // Buscar el primer array JSON en la respuesta
-          const match = raw.match(/\[.*\]/s);
-          if (match) {
-            aboutArr = JSON.parse(match[0]);
-          } else {
-            aboutArr = JSON.parse(raw);
+          // Intentar extraer JSON de la respuesta
+          const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            
+            // Enriquecer con metadata
+            const enriched = {
+              ...parsed,
+              source: 'perplexity',
+              model: 'sonar',
+              search_query: searchQuery,
+              timestamp: new Date().toISOString(),
+              raw_response: rawResponse
+            };
+            
+            console.log(`   📊 ${trendName}: Categoría=${enriched.categoria}, Relevancia=${enriched.relevancia}`);
+            return enriched;
           }
-        } catch (e) {
-          // Si no se puede parsear, fallback genérico
-          aboutArr = trendsArray.map(t => ({
-            nombre: t.name,
-            resumen: `Tendencia relacionada con ${t.name}`,
-            categoria: 'Otros',
-            tipo: 'hashtag',
-            source: 'default',
-            model: 'default'
-          }));
+        } catch (parseError) {
+          console.log(`   ⚠️  Error parseando JSON para ${trendName}, usando respuesta raw`);
         }
-        // Enriquecer cada objeto con source/model
-        aboutArr = aboutArr.map(obj => ({
-          ...obj,
+        
+        // Si no se puede parsear JSON, crear estructura manual
+        return {
+          nombre: trendName,
+          tipo: 'hashtag',
+          categoria: detectarCategoria(trendName, rawResponse),
+          resumen: rawResponse.substring(0, 300),
+          relevancia: 'media',
+          contexto_local: rawResponse.toLowerCase().includes('guatemala'),
+          palabras_clave: [trendName],
           source: 'perplexity',
-          model: 'sonar'
-        }));
-        return aboutArr;
+          model: 'sonar',
+          raw_response: rawResponse
+        };
       }
     } else {
       const errorText = await response.text();
-      console.error('Error Perplexity:', errorText);
+      console.error(`   ❌ Error Perplexity para ${trendName}:`, errorText.substring(0, 200));
     }
-    // Fallback si falla la API
-    return trendsArray.map(trend => ({
-      nombre: trend.name,
-      resumen: `Tendencia relacionada con ${trend.name}`,
-      categoria: 'Otros',
+
+    // Fallback en caso de error
+    return {
+      nombre: trendName,
+      resumen: `Tendencia relacionada con ${trendName}`,
+      categoria: detectarCategoria(trendName),
       tipo: 'hashtag',
-      source: 'default',
-      model: 'default'
-    }));
+      relevancia: 'baja',
+      contexto_local: false,
+      source: 'fallback',
+      model: 'fallback'
+    };
+
   } catch (error) {
-    console.error(`Error al buscar información en Perplexity batch:`, error);
-    return trendsArray.map(trend => ({
-      nombre: trend.name,
-      resumen: `Tendencia popular: ${trend.name}`,
+    console.error(`   ❌ Error procesando ${trendName}:`, error.message);
+    return {
+      nombre: trendName,
+      resumen: `Error procesando información sobre ${trendName}`,
       categoria: 'Otros',
-      tipo: 'hashtag',
-      source: 'default',
-      model: 'default'
-    }));
+      tipo: 'error',
+      relevancia: 'baja',
+      contexto_local: false,
+      source: 'error',
+      model: 'error'
+    };
   }
 }
-// --- FIN: getAboutFromPerplexityBatch ---
+
+/**
+ * Detecta categoría basándose en palabras clave
+ * @param {string} trendName - Nombre de la tendencia
+ * @param {string} context - Contexto adicional (opcional)
+ * @returns {string} - Categoría detectada
+ */
+function detectarCategoria(trendName, context = '') {
+  const text = (trendName + ' ' + context).toLowerCase();
+  
+  const categorias = {
+    'Política': ['presidente', 'congreso', 'gobierno', 'ministro', 'alcalde', 'elección', 'política', 'giammattei', 'aguirre', 'diputado'],
+    'Deportes': ['fútbol', 'liga', 'serie a', 'napoli', 'mctominay', 'deporte', 'equipo', 'partido', 'futbol', 'uefa', 'champions', 'jugador', 'futbolista', 'retiro', 'transferencia', 'lukita'],
+    'Música': ['cantante', 'banda', 'concierto', 'música', 'morat', 'álbum', 'canción', 'pop', 'rock'],
+    'Entretenimiento': ['actor', 'película', 'serie', 'tv', 'famoso', 'celebridad', 'lilo', 'disney', 'cine', 'estreno'],
+    'Justicia': ['corte', 'juez', 'tribunal', 'legal', 'derecho', 'satterthwaite', 'onu', 'derechos humanos'],
+    'Sociedad': ['comunidad', 'social', 'cultural', 'santa maría', 'jesús', 'municipio', 'tradición'],
+    'Internacional': ['mundial', 'internacional', 'global', 'extranjero', 'europa', 'italia'],
+    'Religión': ['iglesia', 'religioso', 'santo', 'santa', 'dios', 'jesús', 'maría']
+  };
+
+  for (const [categoria, palabras] of Object.entries(categorias)) {
+    if (palabras.some(palabra => text.includes(palabra))) {
+      return categoria;
+    }
+  }
+
+  return 'Otros';
+}
+
+/**
+ * Procesa múltiples tendencias usando llamadas individuales a Perplexity
+ * @param {Array} trends - Array de tendencias
+ * @param {string} location - Ubicación para contexto
+ * @returns {Array} - Tendencias procesadas con información about
+ */
+async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
+  console.log(`\n🔍 INICIANDO PROCESAMIENTO: PERPLEXITY INDIVIDUAL (${trends.length} tendencias)`);
+  console.log('='.repeat(80));
+  
+  const processedAbout = [];
+  const now = new Date();
+  const currentYear = now.getFullYear();
+
+  console.log(`📅 Fecha actual: ${now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}`);
+  console.log(`🌍 Ubicación: ${location}`);
+
+  for (let i = 0; i < trends.length; i++) {
+    const trend = trends[i];
+    const trendName = trend.name || trend.keyword || trend.text || `Tendencia ${i+1}`;
+    
+    console.log(`\n📊 Procesando ${i+1}/${trends.length}: "${trendName}"`);
+    console.log('─'.repeat(60));
+    
+    try {
+      // Obtener información completa
+      const aboutInfo = await getAboutFromPerplexityIndividual(trendName, location, currentYear);
+      
+      processedAbout.push({
+        keyword: trendName,
+        about: aboutInfo,
+        timestamp: new Date().toISOString()
+      });
+      
+      console.log(`   ✅ Categoría: ${aboutInfo.categoria}`);
+      console.log(`   🎯 Relevancia: ${aboutInfo.relevancia}`);
+      console.log(`   🌍 Contexto local: ${aboutInfo.contexto_local ? 'Sí' : 'No'}`);
+      console.log(`   💥 Razón: ${aboutInfo.razon_tendencia || 'No especificada'}`);
+      console.log(`   📝 Resumen: ${aboutInfo.resumen.substring(0, 100)}...`);
+      
+      // Pausa entre llamadas para ser respetuoso con la API
+      if (i < trends.length - 1) {
+        console.log(`   ⏳ Pausa de 2 segundos...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+      
+    } catch (error) {
+      console.error(`   ❌ Error procesando "${trendName}":`, error.message);
+      
+      // Agregar con valores por defecto
+      processedAbout.push({
+        keyword: trendName,
+        about: {
+          nombre: trendName,
+          resumen: `Error procesando información sobre ${trendName}`,
+          categoria: 'Otros',
+          tipo: 'error',
+          relevancia: 'baja',
+          contexto_local: false,
+          source: 'error',
+          model: 'error'
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+  
+  console.log('\n✅ PROCESAMIENTO PERPLEXITY INDIVIDUAL COMPLETADO');
+  console.log('='.repeat(80));
+  
+  return processedAbout;
+}
+
+/**
+ * Genera estadísticas simplificadas de las tendencias procesadas
+ * @param {Array} processedAbout - Array de información about procesada
+ * @returns {Object} - Objeto con estadísticas simplificadas
+ */
+function generateStatistics(processedAbout) {
+  const stats = {
+    relevancia: { alta: 0, media: 0, baja: 0 },
+    contexto: { local: 0, global: 0 },
+    timestamp: new Date().toISOString()
+  };
+
+  processedAbout.forEach(item => {
+    const about = item.about;
+    
+    // Distribución por relevancia
+    if (about.relevancia) {
+      stats.relevancia[about.relevancia] = (stats.relevancia[about.relevancia] || 0) + 1;
+    }
+    
+    // Contexto local vs global
+    if (about.contexto_local) {
+      stats.contexto.local++;
+    } else {
+      stats.contexto.global++;
+    }
+  });
+
+  return stats;
+}
+
+/**
+ * Obtiene información de "about" para un array de términos usando un solo llamado a Perplexity.
+ * @param {Array} trendsArray - Array de objetos { name, volume, ... }
+ * @param {string} location - Ubicación para el contexto (ej: 'Guatemala')
+ * @param {string} year - Año para el contexto (ej: '2025')
+ * @returns {Array} Array de objetos about alineados con trendsArray
+ */
+async function getAboutFromPerplexityBatch(trendsArray, location = 'Guatemala', year = '2025') {
+  // Función deprecada - usar processWithPerplexityIndividual en su lugar
+  console.log('⚠️  getAboutFromPerplexityBatch está deprecada, usando processWithPerplexityIndividual');
+  
+  const processed = await processWithPerplexityIndividual(trendsArray, location);
+  return processed.map(item => item.about);
+}

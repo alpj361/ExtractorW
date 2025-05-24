@@ -1,0 +1,31 @@
+# === CONFIGURACIÓN DE APIs DE IA ===
+
+# OpenRouter (GPT-4 Turbo)
+# Obtén tu clave en: https://openrouter.ai/keys
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+
+# Perplexity (Sonar con búsqueda web)
+# Obtén tu clave en: https://www.perplexity.ai/settings/api
+PERPLEXITY_API_KEY=your_perplexity_api_key_here
+
+# === CONFIGURACIÓN DEL SERVIDOR ===
+
+# Puerto del servidor (opcional, por defecto 8080)
+PORT=8080
+
+# URL de la API del VPS (opcional)
+VPS_API_URL=your_vps_api_url_here
+
+# === CONFIGURACIÓN DE BASE DE DATOS ===
+
+# Supabase (para almacenar datos)
+SUPABASE_URL=your_supabase_url_here
+SUPABASE_ANON_KEY=your_supabase_anon_key_here
+
+# === CONFIGURACIÓN ADICIONAL ===
+
+# Usar IA para procesamiento (true/false)
+USE_AI=true
+
+# Ubicación para contexto de tendencias
+LOCATION=Guatemala 
