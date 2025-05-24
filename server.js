@@ -638,27 +638,6 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
         } else {
           console.log('✅ Registro actualizado exitosamente con about y estadísticas');
         }
-        // También actualizar detalles individuales
-        console.log('🔄 Actualizando detalles individuales en trend_details...');
-        for (let i = 0; i < processedAbout.length; i++) {
-          const item = processedAbout[i];
-          try {
-            const { error: detailError } = await supabase
-              .from('trend_details')
-              .upsert({
-                keyword: item.keyword,
-                about: item.about,
-                count: top10[i]?.volume || 1,
-                updated_at: new Date().toISOString()
-              });
-            if (detailError) {
-              console.error(`❌ Error actualizando detalle para ${item.keyword}:`, detailError, JSON.stringify(detailError, null, 2));
-            }
-          } catch (detailErr) {
-            console.error(`❌ Error en upsert para ${item.keyword}:`, detailErr, JSON.stringify(detailErr, null, 2));
-          }
-        }
-        console.log('✅ Detalles individuales actualizados');
       } catch (err) {
         console.error('❌ Error al actualizar Supabase en background:', err, JSON.stringify(err, null, 2));
       }
