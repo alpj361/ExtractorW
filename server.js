@@ -618,25 +618,42 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
     
     // Formato about para compatibilidad con frontend
     const aboutArray = processedAbout.map(item => item.about);
-    
+
+    // --- NUEVO: Generar categoryData enriquecido usando la categoría de about ---
+    const enrichedCategoryMap = {};
+    aboutArray.forEach(about => {
+      const cat = about.categoria || 'Otros';
+      if (enrichedCategoryMap[cat]) {
+        enrichedCategoryMap[cat] += 1;
+      } else {
+        enrichedCategoryMap[cat] = 1;
+      }
+    });
+    const enrichedCategoryData = Object.entries(enrichedCategoryMap).map(([category, count]) => ({
+      category,
+      count
+    })).sort((a, b) => b.count - a.count);
+    // --- FIN NUEVO ---
+
     console.log('📊 Estadísticas generadas:', JSON.stringify(statistics, null, 2));
     
     // Actualizar registro en Supabase
     if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase && recordId) {
       try {
-        console.log('🔄 Actualizando registro en Supabase con about y estadísticas...');
+        console.log('🔄 Actualizando registro en Supabase con about, estadísticas y categoryData enriquecido...');
         const { error: updateError } = await supabase
           .from('trends')
           .update({
             about: aboutArray,
             statistics: statistics,
+            category_data: enrichedCategoryData,
             processing_status: 'complete'
           })
           .eq('id', recordId);
         if (updateError) {
           console.error('❌ Error actualizando registro con about:', updateError, JSON.stringify(updateError, null, 2));
         } else {
-          console.log('✅ Registro actualizado exitosamente con about y estadísticas');
+          console.log('✅ Registro actualizado exitosamente con about, estadísticas y categoryData enriquecido');
         }
       } catch (err) {
         console.error('❌ Error al actualizar Supabase en background:', err, JSON.stringify(err, null, 2));
