@@ -1056,58 +1056,26 @@ async function getAboutFromPerplexityIndividual(trendName, location = 'Guatemala
       `"${trendName}" trending ${currentMonth} 2025` // Búsqueda exacta
     ];
     
-    // Prompt mejorado con fecha dinámica y mejor enfoque en la razón exacta
-    const prompt = `Analiza la tendencia "${trendName}" y explica POR QUÉ está siendo tendencia ESPECÍFICAMENTE en ${currentMonth} ${currentYear}.
+    // Prompt optimizado: más corto y directo
+    const prompt = `Analiza la tendencia "${trendName}" en ${location}, ${currentMonth} ${currentYear}.
 
-FECHA ACTUAL: ${currentDate}
+¿QUÉ ES y POR QUÉ está siendo tendencia AHORA?
 
-INSTRUCCIONES ESPECÍFICAS:
-1. "${trendName}" puede ser:
-   - Un APODO de una persona famosa (ej: jugador de fútbol, artista, político)
-   - Un nombre completo de persona
-   - Un evento, equipo, película, álbum, etc.
-   
-2. Si es un APODO, identifica la persona real detrás del apodo
-   - Ejemplo: "Lukita" podría ser el apodo de un futbolista
-   - Busca tanto el apodo como posibles nombres reales
-   
-3. Busca eventos ESPECÍFICOS y RECIENTES (${currentMonth} ${currentYear}):
-   - Retiros de deportistas
-   - Lanzamientos (álbums, películas, productos)  
-   - Transferencias de jugadores
-   - Noticias actuales (política, escándalos, declaraciones)
-   - Eventos deportivos (partidos, lesiones, controversias)
-   
-4. Si no encuentras información específica para ${currentMonth} ${currentYear}, busca:
-   - Eventos recientes en 2025
-   - Anuncios importantes
-   - Cambios de carrera o retiros
-   
-5. Determina si es:
-   - TENDENCIA LOCAL: Relacionada directamente con ${location}
-   - TENDENCIA GLOBAL: Internacional pero que interesa en ${location}
-   
-6. NO digas "no hay información" - busca más profundo
-7. SÉ ESPECÍFICO sobre el evento que causó la tendencia
+Instrucciones:
+- Si es un APODO, identifica la persona real
+- Busca eventos ESPECÍFICOS de ${currentMonth} 2025: partidos, retiros, lanzamientos, noticias, escándalos
+- Determina si es LOCAL (${location}) o GLOBAL
+- NO digas "sin información" - busca más profundo
 
-EJEMPLOS DE ANÁLISIS PRECISO:
-- Si es deportes: ¿Retiro? ¿Transferencia? ¿Lesión? ¿Partido importante?
-- Si es apodo de jugador: ¿Quién es realmente? ¿Qué pasó con él?
-- Si es política: ¿Qué declaración? ¿Qué acción? ¿Qué investigación?
-- Si es entretenimiento: ¿Qué se estrenó? ¿Qué se anunció?
-
-Responde en formato JSON:
+Responde SOLO en JSON:
 {
-  "nombre": "Nombre completo/real si es un apodo, sino el nombre limpio",
-  "apodo": "${trendName}" (si es diferente del nombre real),
-  "tipo": "persona|evento|hashtag|tema|equipo|película|serie|música|álbum|artista|futbolista",
-  "categoria": "Categoría específica",
-  "resumen": "Explicación de 2-3 oraciones sobre QUÉ ES y POR QUÉ es tendencia AHORA en ${currentMonth} ${currentYear}. SÉ ESPECÍFICO sobre el evento exacto.",
+  "nombre": "Nombre real si es apodo, sino '${trendName}'",
+  "tipo": "persona|evento|equipo|película|música|político|futbolista|artista",
+  "categoria": "Deportes|Política|Entretenimiento|Música|Otros",
+  "resumen": "Explicación corta y específica del evento exacto que lo hizo tendencia",
   "relevancia": "alta|media|baja",
   "contexto_local": true/false,
-  "razon_tendencia": "Evento específico y exacto que causó que sea tendencia ahora",
-  "fecha_evento": "Fecha aproximada del evento que causó la tendencia",
-  "palabras_clave": ["palabra1", "palabra2", "palabra3"]
+  "razon_tendencia": "Evento específico que causó la tendencia"
 }`;
 
     const payload = {
@@ -1115,31 +1083,23 @@ Responde en formato JSON:
       messages: [
         {
           role: 'system',
-          content: `Eres un analista de tendencias especializado en identificar POR QUÉ algo es tendencia en redes sociales EN ESTE MOMENTO (${currentMonth} ${currentYear}). Tu expertise incluye:
+          content: `Eres un analista de tendencias especializado en detectar por qué algo es trending en ${currentMonth} ${currentYear}.
 
-- Detectar eventos actuales ESPECÍFICOS que generan tendencias (lanzamientos, controversias, partidos, noticias, anuncios)
-- Identificar APODOS y nombres reales de personas famosas (especialmente deportistas)
-- Distinguir entre tendencias locales de ${location} vs tendencias globales que interesan en ${location}
-- Identificar el contexto temporal EXACTO (¿qué pasó HOY/ESTA SEMANA/ESTE MES que lo hizo tendencia?)
-- No rendirse fácilmente - buscar información profundamente
-- Ser PRECISO sobre la relevancia real para el público de ${location}
-- Enfocarte en EVENTOS ESPECÍFICOS no generalidades
+Experto en:
+- Eventos actuales específicos (deportes, política, entretenimiento)
+- Identificar apodos de personas famosas
+- Distinguir tendencias locales de ${location} vs globales
+- Encontrar la razón EXACTA por la cual algo es tendencia HOY
 
-FECHA ACTUAL: ${currentDate}
-Enfócate en la ACTUALIDAD y en eventos ESPECÍFICOS Y EXACTOS que explican por qué algo es tendencia AHORA.
-
-IMPORTANTE: Si "${trendName}" parece ser un apodo, busca tanto el apodo como el nombre real de la persona.`
+Busca profundamente, no digas "sin información". Si es apodo, identifica la persona real.`
         },
         {
           role: 'user',
           content: prompt
         }
       ],
-      search_context: {
-        search_queries: [searchQuery, ...alternativeQueries]
-      },
-      temperature: 0.3,
-      max_tokens: 500
+      temperature: 0.2,
+      max_tokens: 300
     };
 
     console.log(`   📡 Realizando consulta a Perplexity...`);
