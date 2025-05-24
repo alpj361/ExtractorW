@@ -542,7 +542,6 @@ app.post('/api/processTrends', async (req, res) => {
     if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase) {
       try {
         console.log('Guardando datos básicos en Supabase...');
-        
         const { data, error } = await supabase
           .from('trends')
           .insert([{
@@ -556,16 +555,15 @@ app.post('/api/processTrends', async (req, res) => {
             processing_status: 'basic_completed'
           }])
           .select();
-        
         if (error) {
-          console.error('Error al guardar datos básicos en Supabase:', error);
+          console.error('Error al guardar datos básicos en Supabase:', error, JSON.stringify(error, null, 2));
         } else {
           console.log('Datos básicos guardados exitosamente en Supabase');
           recordId = data && data[0] ? data[0].id : null;
           console.log('Record ID para actualización posterior:', recordId);
         }
       } catch (err) {
-        console.error('Error al intentar guardar datos básicos en Supabase:', err);
+        console.error('Error al intentar guardar datos básicos en Supabase:', err, JSON.stringify(err, null, 2));
       }
     }
     console.timeEnd('guardado-basico-supabase');
@@ -627,7 +625,6 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
     if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase && recordId) {
       try {
         console.log('🔄 Actualizando registro en Supabase con about y estadísticas...');
-        
         const { error: updateError } = await supabase
           .from('trends')
           .update({
@@ -636,13 +633,11 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
             processing_status: 'complete'
           })
           .eq('id', recordId);
-        
         if (updateError) {
-          console.error('❌ Error actualizando registro con about:', updateError);
+          console.error('❌ Error actualizando registro con about:', updateError, JSON.stringify(updateError, null, 2));
         } else {
           console.log('✅ Registro actualizado exitosamente con about y estadísticas');
         }
-        
         // También actualizar detalles individuales
         console.log('🔄 Actualizando detalles individuales en trend_details...');
         for (let i = 0; i < processedAbout.length; i++) {
@@ -656,19 +651,16 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
                 count: top10[i]?.volume || 1,
                 updated_at: new Date().toISOString()
               });
-              
             if (detailError) {
-              console.error(`❌ Error actualizando detalle para ${item.keyword}:`, detailError);
+              console.error(`❌ Error actualizando detalle para ${item.keyword}:`, detailError, JSON.stringify(detailError, null, 2));
             }
           } catch (detailErr) {
-            console.error(`❌ Error en upsert para ${item.keyword}:`, detailErr);
+            console.error(`❌ Error en upsert para ${item.keyword}:`, detailErr, JSON.stringify(detailErr, null, 2));
           }
         }
-        
         console.log('✅ Detalles individuales actualizados');
-        
       } catch (err) {
-        console.error('❌ Error al actualizar Supabase en background:', err);
+        console.error('❌ Error al actualizar Supabase en background:', err, JSON.stringify(err, null, 2));
       }
     }
     
