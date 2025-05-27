@@ -526,7 +526,7 @@ app.post('/api/processTrends', async (req, res) => {
     const basicResponse = {
       topKeywords,
       wordCloudData,
-      categoryData,
+      categoryData: [], // No guardar la versión heurística/manual
       about: [], // Vacío inicialmente
       statistics: {}, // Vacío inicialmente
       timestamp: new Date().toISOString(),
@@ -548,7 +548,7 @@ app.post('/api/processTrends', async (req, res) => {
             timestamp: basicResponse.timestamp,
             word_cloud_data: basicResponse.wordCloudData,
             top_keywords: basicResponse.topKeywords,
-            category_data: basicResponse.categoryData,
+            category_data: [], // Solo se guardará la enriquecida después
             raw_data: rawData,
             about: [], // Vacío por ahora
             statistics: {}, // Vacío por ahora
@@ -787,6 +787,13 @@ app.get('/api/latestTrends', async (req, res) => {
       .from('trends')
       .select('*')
       .order('idtimestamp', { ascending: false })
+      .eq('timestamp',
+        supabase
+          .from('trends')
+          .select('timestamp')
+          .order('timestamp', { ascending: false })
+          .limit(1)
+      )
       .limit(1);
     
     if (error || !data || data.length === 0) {
