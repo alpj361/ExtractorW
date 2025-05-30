@@ -827,6 +827,69 @@ app.get('/api/latestTrends', async (req, res) => {
   }
 });
 
+// --- ENDPOINT DE SONDEO GENERAL ---
+app.post('/api/sondeo', async (req, res) => {
+  try {
+    const { contexto, pregunta } = req.body;
+    if (!pregunta || !contexto) {
+      return res.status(400).json({ error: 'Faltan campos requeridos: contexto y pregunta' });
+    }
+    if (!PERPLEXITY_API_KEY) {
+      return res.status(500).json({ error: 'PERPLEXITY_API_KEY no configurada en el backend' });
+    }
+
+    // Armar prompt estructurado
+    const prompt = `Contexto relevante para la consulta:\n\n${JSON.stringify(contexto, null, 2)}\n\nPregunta del usuario: ${pregunta}\n\nResponde de forma clara, concisa y en español, citando fuentes del contexto si es posible.`;
+
+    const payload = {
+      model: 'sonar',
+      messages: [
+        {
+          role: 'system',
+          content: 'Eres un analista experto en opinión pública y tendencias. Responde en español, usando solo la información del contexto proporcionado.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      temperature: 0.4,
+      max_tokens: 600
+    };
+
+    // Llamada a Perplexity
+    const response = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return res.status(500).json({ error: 'Error en Perplexity', details: errorText });
+    }
+    const data = await response.json();
+    let llm_response = '';
+    if (data.choices && data.choices[0] && data.choices[0].message) {
+      llm_response = data.choices[0].message.content;
+    } else {
+      llm_response = 'No se obtuvo respuesta del modelo.';
+    }
+
+    res.json({
+      llm_response,
+      contexto,
+      prompt_enviado: prompt
+    });
+  } catch (error) {
+    console.error('Error en /api/sondeo:', error);
+    res.status(500).json({ error: 'Error interno en /api/sondeo', details: error.message });
+  }
+});
+
 // Iniciar el servidor
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
