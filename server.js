@@ -890,6 +890,205 @@ app.post('/api/sondeo', async (req, res) => {
   }
 });
 
+// Nuevo endpoint para obtener trending tweets con análisis de sentimiento
+app.get('/api/trending-tweets', async (req, res) => {
+  try {
+    console.log('📱 Obteniendo trending tweets con análisis de sentimiento...');
+    
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase) {
+      return res.status(503).json({
+        error: 'Supabase not configured',
+        message: 'Base de datos no configurada'
+      });
+    }
+
+    // Obtener tweets de las últimas 24 horas, agrupados por categoría
+    const { data: tweets, error } = await supabase
+      .from('trending_tweets')
+      .select('*')
+      .gte('fecha_captura', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+      .order('fecha_captura', { ascending: false })
+      .limit(50);
+
+    if (error) {
+      console.error('Error obteniendo trending tweets:', error);
+      return res.status(500).json({
+        error: 'Error fetching tweets',
+        message: error.message
+      });
+    }
+
+    // Generar análisis de sentimiento para cada tweet
+    const tweetsWithSentiment = await Promise.all(
+      tweets.map(async (tweet) => {
+        let sentiment = 'neutral';
+        
+        // Análisis básico de sentimiento (puedes usar IA aquí si está disponible)
+        if (PERPLEXITY_API_KEY && USE_AI) {
+          try {
+            sentiment = await analyzeTweetSentiment(tweet.texto);
+          } catch (error) {
+            console.warn(`Error analizando sentimiento para tweet ${tweet.id}:`, error.message);
+          }
+        } else {
+          // Análisis de sentimiento básico sin IA
+          sentiment = basicSentimentAnalysis(tweet.texto);
+        }
+
+        return {
+          id: tweet.id,
+          tweet_id: tweet.tweet_id,
+          usuario: tweet.usuario,
+          texto: tweet.texto,
+          enlace: tweet.enlace,
+          likes: tweet.likes || 0,
+          retweets: tweet.retweets || 0,
+          replies: tweet.replies || 0,
+          verified: tweet.verified || false,
+          trend_original: tweet.trend_original,
+          trend_clean: tweet.trend_clean,
+          categoria: tweet.categoria,
+          fecha_tweet: tweet.fecha_tweet,
+          fecha_captura: tweet.fecha_captura,
+          sentiment: sentiment
+        };
+      })
+    );
+
+    // Agrupar por categoría
+    const tweetsByCategory = tweetsWithSentiment.reduce((acc, tweet) => {
+      const category = tweet.categoria || 'General';
+      if (!acc[category]) {
+        acc[category] = [];
+      }
+      acc[category].push(tweet);
+      return acc;
+    }, {});
+
+    // Calcular estadísticas de sentimiento por categoría
+    const sentimentStats = Object.entries(tweetsByCategory).map(([category, tweets]) => {
+      const sentimentCounts = tweets.reduce((acc, tweet) => {
+        acc[tweet.sentiment] = (acc[tweet.sentiment] || 0) + 1;
+        return acc;
+      }, {});
+
+      return {
+        category,
+        total: tweets.length,
+        sentiments: sentimentCounts,
+        tweets: tweets.slice(0, 10) // Limitar a 10 tweets por categoría para la respuesta
+      };
+    });
+
+    res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      total_tweets: tweetsWithSentiment.length,
+      categories: sentimentStats,
+      all_tweets: tweetsWithSentiment
+    });
+
+  } catch (error) {
+    console.error('Error en /api/trending-tweets:', error);
+    res.status(500).json({
+      error: 'Error processing trending tweets',
+      message: error.message
+    });
+  }
+});
+
+// Función auxiliar para análisis de sentimiento con IA
+async function analyzeTweetSentiment(text) {
+  try {
+    const prompt = `Analiza el sentimiento del siguiente tweet y responde solo con una palabra: "positivo", "negativo" o "neutral".
+
+Tweet: "${text}"
+
+Respuesta:`;
+
+    const payload = {
+      model: 'sonar-pro',
+      messages: [
+        {
+          role: 'system',
+          content: 'Eres un experto en análisis de sentimientos. Responde solo con una palabra: positivo, negativo o neutral.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      temperature: 0.1,
+      max_tokens: 10
+    };
+
+    const response = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      const sentiment = data.choices?.[0]?.message?.content?.trim().toLowerCase();
+      
+      if (sentiment && ['positivo', 'negativo', 'neutral'].includes(sentiment)) {
+        return sentiment;
+      }
+    }
+  } catch (error) {
+    console.warn('Error en análisis de sentimiento IA:', error.message);
+  }
+  
+  // Fallback a análisis básico
+  return basicSentimentAnalysis(text);
+}
+
+// Función auxiliar para análisis de sentimiento básico (sin IA)
+function basicSentimentAnalysis(text) {
+  const positiveWords = [
+    'bueno', 'excelente', 'genial', 'fantástico', 'increíble', 'perfecto', 'maravilloso',
+    'feliz', 'alegre', 'satisfecho', 'contento', 'emocionado', 'orgulloso', 'esperanza',
+    'éxito', 'victoria', 'logro', 'progreso', 'mejora', 'beneficio', 'positivo',
+    'amor', 'cariño', 'apoyo', 'solidaridad', 'unión', 'paz', 'justicia'
+  ];
+  
+  const negativeWords = [
+    'malo', 'terrible', 'horrible', 'pésimo', 'desastroso', 'fatal', 'espantoso',
+    'triste', 'enojado', 'furioso', 'molesto', 'disgustado', 'decepcionado', 'preocupado',
+    'problema', 'crisis', 'error', 'falla', 'fracaso', 'pérdida', 'daño', 'peligro',
+    'corrupción', 'violencia', 'injusticia', 'discriminación', 'odio', 'guerra', 'conflicto'
+  ];
+
+  const textLower = text.toLowerCase();
+  
+  let positiveScore = 0;
+  let negativeScore = 0;
+  
+  positiveWords.forEach(word => {
+    if (textLower.includes(word)) {
+      positiveScore++;
+    }
+  });
+  
+  negativeWords.forEach(word => {
+    if (textLower.includes(word)) {
+      negativeScore++;
+    }
+  });
+  
+  if (positiveScore > negativeScore) {
+    return 'positivo';
+  } else if (negativeScore > positiveScore) {
+    return 'negativo';
+  } else {
+    return 'neutral';
+  }
+}
+
 // Iniciar el servidor
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
