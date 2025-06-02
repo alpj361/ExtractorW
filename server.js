@@ -687,10 +687,12 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
 
 // Endpoint de health check
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
+  res.status(200).json({
+    status: 'OK',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    version: require('./package.json').version || '1.0.0',
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
