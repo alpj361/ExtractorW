@@ -745,6 +745,75 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Endpoint de diagnóstico para Supabase
+app.get('/api/diagnostics', async (req, res) => {
+  try {
+    const diagnostics = {
+      timestamp: new Date().toISOString(),
+      supabase_configured: !!(SUPABASE_URL && SUPABASE_ANON_KEY),
+      supabase_url: SUPABASE_URL ? SUPABASE_URL.substring(0, 30) + '...' : 'No configurado',
+      supabase_key: SUPABASE_ANON_KEY ? 'Configurado (' + SUPABASE_ANON_KEY.substring(0, 10) + '...)' : 'No configurado',
+      supabase_client: !!supabase,
+      environment_vars: {
+        PERPLEXITY_API_KEY: !!PERPLEXITY_API_KEY,
+        OPENROUTER_API_KEY: !!OPENROUTER_API_KEY,
+        USE_AI: USE_AI,
+        VPS_API_URL: !!VPS_API_URL
+      }
+    };
+    
+    // Intentar conectar a Supabase si está configurado
+    if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase) {
+      try {
+        console.log('🔍 Probando conexión a Supabase...');
+        
+        // Probar consulta simple
+        const { data, error, count } = await supabase
+          .from('trends')
+          .select('*', { count: 'exact' })
+          .limit(5);
+        
+        if (error) {
+          diagnostics.supabase_test = {
+            success: false,
+            error: error.message,
+            code: error.code
+          };
+        } else {
+          diagnostics.supabase_test = {
+            success: true,
+            records_found: count,
+            sample_data: data?.length > 0 ? {
+              latest_timestamp: data[0].timestamp,
+              has_about: !!(data[0].about && data[0].about.length > 0),
+              has_statistics: !!(data[0].statistics && Object.keys(data[0].statistics).length > 0),
+              processing_status: data[0].processing_status
+            } : 'No data'
+          };
+        }
+      } catch (err) {
+        diagnostics.supabase_test = {
+          success: false,
+          error: err.message
+        };
+      }
+    } else {
+      diagnostics.supabase_test = {
+        success: false,
+        error: 'Supabase no configurado correctamente'
+      };
+    }
+    
+    res.json(diagnostics);
+  } catch (error) {
+    res.status(500).json({
+      error: 'Error en diagnósticos',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Endpoint adicional para probar la búsqueda de información
 app.get('/api/searchTrendInfo/:trend', async (req, res) => {
   try {
