@@ -837,6 +837,37 @@ app.get('/api/searchTrendInfo/:trend', async (req, res) => {
   }
 });
 
+// Nuevo endpoint para probar análisis mejorado con contexto de tweets
+app.get('/api/analyzeTrendWithTweets/:trend', async (req, res) => {
+  try {
+    const trend = req.params.trend;
+    console.log(`🔍 Solicitud de análisis mejorado para tendencia: ${trend}`);
+    
+    // Usar la función mejorada de Perplexity
+    const analysis = await getAboutFromPerplexityIndividual(trend, 'Guatemala', 2025);
+    
+    res.json({
+      trend,
+      analysis,
+      has_tweet_context: analysis.tweets_used > 0,
+      enhanced_features: {
+        tweet_context: analysis.tweets_used > 0,
+        sentiment_analysis: !!analysis.sentimiento_tweets,
+        local_context: analysis.contexto_local,
+        source: analysis.source
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error en /api/analyzeTrendWithTweets:', error);
+    res.status(500).json({
+      error: 'Error al analizar tendencia con contexto de tweets',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Endpoint para consultar el estado del procesamiento
 app.get('/api/processingStatus/:timestamp', async (req, res) => {
   try {
@@ -1417,33 +1448,43 @@ async function getAboutFromPerplexityIndividual(trendName, location = 'Guatemala
   try {
     console.log(`🔍 Buscando información individual para: "${trendName}"`);
     
+    // 1. OBTENER TWEETS RELEVANTES COMO CONTEXTO
+    console.log(`   🐦 Obteniendo tweets para contexto...`);
+    const relevantTweets = await getRelevantTweetsForTrend(trendName, 3);
+    
     // Obtener fecha actual dinámica
     const now = new Date();
     const currentYear = now.getFullYear();
     const currentMonth = now.toLocaleString('es-ES', { month: 'long' });
     const currentDate = now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
     
+    // 2. CONSTRUIR CONTEXTO DE TWEETS
+    let tweetContext = '';
+    if (relevantTweets.length > 0) {
+      console.log(`   ✅ Usando ${relevantTweets.length} tweets como contexto`);
+      tweetContext = '\n\nCONTEXTO DE TWEETS RECIENTES:\n';
+      relevantTweets.forEach((tweet, index) => {
+        tweetContext += `${index + 1}. "${tweet.texto}" (${tweet.likes} likes, ${tweet.retweets} RTs)\n`;
+      });
+      tweetContext += '\n';
+    } else {
+      console.log(`   📭 No se encontraron tweets, usando búsqueda web tradicional`);
+    }
+    
     // Construir consulta específica para búsqueda web
     const searchQuery = `${trendName} ${location} ${currentMonth} ${currentYear} noticias actualidad`;
     
-    // Consultas adicionales para mejorar la búsqueda
-    const alternativeQueries = [
-      `${trendName} fútbol ${currentMonth} ${currentYear}`, // Para deportes
-      `${trendName} retiro futbol ${currentMonth} ${currentYear}`, // Para retiros
-      `${trendName} jugador ${currentMonth} ${currentYear}`, // Para jugadores
-      `${trendName} noticia mayo 2025`, // Búsqueda directa por fecha
-      `"${trendName}" trending ${currentMonth} 2025` // Búsqueda exacta
-    ];
-    
-    // Prompt optimizado: más corto y directo
+    // 3. PROMPT MEJORADO CON CONTEXTO DE TWEETS
     const prompt = `Analiza la tendencia "${trendName}" en ${location}, ${currentMonth} ${currentYear}.
 
 ¿QUÉ ES y POR QUÉ está siendo tendencia AHORA?
-
+${tweetContext}
 Instrucciones:
+- USA el contexto de tweets arriba para entender mejor la tendencia
 - Si es un APODO, identifica la persona real
 - Busca eventos ESPECÍFICOS de ${currentMonth} 2025: partidos, retiros, lanzamientos, noticias, escándalos
 - Determina si es LOCAL (${location}) o GLOBAL
+- Los tweets te dan pistas sobre lo que la gente realmente está discutiendo
 - NO digas "sin información" - busca más profundo
 
 Responde SOLO en JSON:
@@ -1454,7 +1495,8 @@ Responde SOLO en JSON:
   "resumen": "Explicación corta y específica del evento exacto que lo hizo tendencia",
   "relevancia": "alta|media|baja",
   "contexto_local": true/false,
-  "razon_tendencia": "Evento específico que causó la tendencia"
+  "razon_tendencia": "Evento específico que causó la tendencia",
+  "sentimiento_tweets": "positivo|negativo|neutral|mixto"
 }`;
 
     const payload = {
@@ -1465,11 +1507,13 @@ Responde SOLO en JSON:
           content: `Eres un analista de tendencias especializado en detectar por qué algo es trending en ${currentMonth} ${currentYear}.
 
 Experto en:
+- Análisis de tweets y redes sociales
 - Eventos actuales específicos (deportes, política, entretenimiento)
 - Identificar apodos de personas famosas
 - Distinguir tendencias locales de ${location} vs globales
 - Encontrar la razón EXACTA por la cual algo es tendencia HOY
 
+Tienes acceso a tweets recientes sobre esta tendencia. Úsalos para entender mejor el contexto y sentimiento.
 Busca profundamente, no digas "sin información". Si es apodo, identifica la persona real.`
         },
         {
@@ -1478,10 +1522,10 @@ Busca profundamente, no digas "sin información". Si es apodo, identifica la per
         }
       ],
       temperature: 0.2,
-      max_tokens: 300
+      max_tokens: 400 // Aumentado para incluir sentimiento_tweets
     };
 
-    console.log(`   📡 Realizando consulta a Perplexity...`);
+    console.log(`   📡 Realizando consulta a Perplexity con contexto de ${relevantTweets.length} tweets...`);
     
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
@@ -1510,11 +1554,17 @@ Busca profundamente, no digas "sin información". Si es apodo, identifica la per
               source: 'perplexity',
               model: 'sonar',
               search_query: searchQuery,
+              tweets_used: relevantTweets.length,
+              tweets_context: relevantTweets.map(t => ({
+                texto: t.texto.substring(0, 100) + '...',
+                likes: t.likes,
+                sentiment: t.categoria
+              })),
               timestamp: new Date().toISOString(),
               raw_response: rawResponse
             };
             
-            console.log(`   📊 ${trendName}: Categoría=${enriched.categoria}, Relevancia=${enriched.relevancia}`);
+            console.log(`   📊 ${trendName}: Categoría=${enriched.categoria}, Relevancia=${enriched.relevancia}, Tweets=${relevantTweets.length}`);
             return enriched;
           }
         } catch (parseError) {
@@ -1529,6 +1579,8 @@ Busca profundamente, no digas "sin información". Si es apodo, identifica la per
           resumen: rawResponse.substring(0, 300),
           relevancia: 'media',
           contexto_local: rawResponse.toLowerCase().includes('guatemala'),
+          tweets_used: relevantTweets.length,
+          sentimiento_tweets: relevantTweets.length > 0 ? 'mixto' : 'neutral',
           palabras_clave: [trendName],
           source: 'perplexity',
           model: 'sonar',
@@ -1548,6 +1600,7 @@ Busca profundamente, no digas "sin información". Si es apodo, identifica la per
       tipo: 'hashtag',
       relevancia: 'baja',
       contexto_local: false,
+      tweets_used: relevantTweets.length,
       source: 'fallback',
       model: 'fallback'
     };
@@ -1561,6 +1614,7 @@ Busca profundamente, no digas "sin información". Si es apodo, identifica la per
       tipo: 'error',
       relevancia: 'baja',
       contexto_local: false,
+      tweets_used: 0,
       source: 'error',
       model: 'error'
     };
@@ -1713,4 +1767,76 @@ async function getAboutFromPerplexityBatch(trendsArray, location = 'Guatemala', 
   
   const processed = await processWithPerplexityIndividual(trendsArray, location);
   return processed.map(item => item.about);
+}
+
+/**
+ * Obtiene tweets relevantes para una tendencia específica
+ * @param {string} trendName - Nombre de la tendencia
+ * @param {number} limit - Número máximo de tweets (default: 5)
+ * @returns {Array} - Array de tweets relevantes con contexto
+ */
+async function getRelevantTweetsForTrend(trendName, limit = 5) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase) {
+    console.log(`⚠️  Supabase no configurado para obtener tweets de: ${trendName}`);
+    return [];
+  }
+
+  try {
+    console.log(`🐦 Buscando tweets para tendencia: "${trendName}"`);
+    
+    // Búsqueda flexible en trending_tweets
+    const { data: tweets, error } = await supabase
+      .from('trending_tweets')
+      .select('texto, trend_original, trend_clean, categoria, likes, retweets, verified, fecha_tweet')
+      .or(
+        `trend_original.ilike.%${trendName}%,` +
+        `trend_clean.ilike.%${trendName}%,` +
+        `texto.ilike.%${trendName}%`
+      )
+      .gte('fecha_captura', new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()) // Últimas 48 horas
+      .order('likes', { ascending: false }) // Ordenar por popularidad (likes)
+      .limit(limit * 3); // Obtener más para poder filtrar
+
+    if (error) {
+      console.error(`   ❌ Error obteniendo tweets para ${trendName}:`, error);
+      return [];
+    }
+
+    if (!tweets || tweets.length === 0) {
+      console.log(`   📭 No se encontraron tweets para: ${trendName}`);
+      return [];
+    }
+
+    // Filtrar y procesar tweets más relevantes
+    const processedTweets = tweets
+      .filter(tweet => {
+        // Filtrar tweets muy cortos o spam
+        return tweet.texto && 
+               tweet.texto.length > 20 && 
+               tweet.texto.length < 280 &&
+               !tweet.texto.toLowerCase().includes('rt @'); // Evitar retweets simples
+      })
+      .slice(0, limit) // Tomar solo el límite requerido
+      .map(tweet => ({
+        texto: tweet.texto.replace(/\n/g, ' ').trim(), // Limpiar saltos de línea
+        likes: tweet.likes || 0,
+        retweets: tweet.retweets || 0,
+        verified: tweet.verified || false,
+        categoria: tweet.categoria || 'General',
+        fecha_tweet: tweet.fecha_tweet
+      }));
+
+    console.log(`   ✅ Encontrados ${processedTweets.length} tweets relevantes para: ${trendName}`);
+    
+    // Log de ejemplo del primer tweet
+    if (processedTweets.length > 0) {
+      console.log(`   📝 Ejemplo: "${processedTweets[0].texto.substring(0, 80)}..."`);
+    }
+
+    return processedTweets;
+
+  } catch (error) {
+    console.error(`   ❌ Error buscando tweets para ${trendName}:`, error.message);
+    return [];
+  }
 } 
