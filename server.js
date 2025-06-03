@@ -602,14 +602,26 @@ app.post('/api/processTrends', async (req, res) => {
  */
 async function processAboutInBackground(top10, rawData, recordId, timestamp) {
   console.log('🎯 Iniciando procesamiento background de about...');
+  console.log(`📝 Parámetros recibidos:`, {
+    top10Count: top10?.length || 0,
+    recordId: recordId,
+    timestamp: timestamp,
+    hasSupabase: !!(SUPABASE_URL && SUPABASE_ANON_KEY && supabase)
+  });
   
   try {
     const location = 'Guatemala';
     
     // Procesar about con Perplexity Individual
     console.time('procesamiento-about-background');
+    console.log('🔍 Iniciando processWithPerplexityIndividual...');
     const processedAbout = await processWithPerplexityIndividual(top10, location);
     console.timeEnd('procesamiento-about-background');
+    
+    console.log(`✅ processWithPerplexityIndividual completado. Items procesados: ${processedAbout?.length || 0}`);
+    if (processedAbout?.length > 0) {
+      console.log('📋 Primer item como ejemplo:', JSON.stringify(processedAbout[0], null, 2));
+    }
     
     // Generar estadísticas
     console.time('generacion-estadisticas');
@@ -618,6 +630,7 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
     
     // Formato about para compatibilidad con frontend
     const aboutArray = processedAbout.map(item => item.about);
+    console.log(`📊 aboutArray generado con ${aboutArray.length} items`);
 
     // --- NUEVO: Generar categoryData enriquecido usando la categoría de about ---
     const enrichedCategoryMap = {};
@@ -633,6 +646,7 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
       category,
       count
     })).sort((a, b) => b.count - a.count);
+    console.log(`📈 categoryData enriquecido:`, enrichedCategoryData);
     // --- FIN NUEVO ---
 
     console.log('📊 Estadísticas generadas:', JSON.stringify(statistics, null, 2));
@@ -641,6 +655,13 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
     if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase && recordId) {
       try {
         console.log('🔄 Actualizando registro en Supabase con about, estadísticas y categoryData enriquecido...');
+        console.log(`📝 Datos a actualizar:`, {
+          aboutCount: aboutArray.length,
+          statisticsKeys: Object.keys(statistics),
+          categoryDataCount: enrichedCategoryData.length,
+          recordId: recordId
+        });
+        
         const { error: updateError } = await supabase
           .from('trends')
           .update({
@@ -650,14 +671,40 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
             processing_status: 'complete'
           })
           .eq('id', recordId);
+          
         if (updateError) {
           console.error('❌ Error actualizando registro con about:', updateError, JSON.stringify(updateError, null, 2));
         } else {
           console.log('✅ Registro actualizado exitosamente con about, estadísticas y categoryData enriquecido');
+          
+          // Verificación adicional: consultar el registro para confirmar que se guardó
+          const { data: verifyData, error: verifyError } = await supabase
+            .from('trends')
+            .select('about, statistics, category_data, processing_status')
+            .eq('id', recordId)
+            .single();
+            
+          if (verifyError) {
+            console.error('❌ Error verificando actualización:', verifyError);
+          } else {
+            console.log('✅ Verificación exitosa:', {
+              aboutSaved: verifyData.about?.length || 0,
+              statisticsSaved: Object.keys(verifyData.statistics || {}).length,
+              categoriesSaved: verifyData.category_data?.length || 0,
+              status: verifyData.processing_status
+            });
+          }
         }
       } catch (err) {
         console.error('❌ Error al actualizar Supabase en background:', err, JSON.stringify(err, null, 2));
       }
+    } else {
+      console.warn('⚠️  No se puede actualizar Supabase - faltan credenciales o recordId:', {
+        hasSupabaseUrl: !!SUPABASE_URL,
+        hasSupabaseKey: !!SUPABASE_ANON_KEY,
+        hasSupabaseClient: !!supabase,
+        hasRecordId: !!recordId
+      });
     }
     
     console.log('✅ PROCESAMIENTO EN BACKGROUND COMPLETADO');
@@ -668,6 +715,7 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
     // En caso de error, al menos actualizar el estado en Supabase
     if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase && recordId) {
       try {
+        console.log('🔄 Actualizando estado de error en Supabase...');
         await supabase
           .from('trends')
           .update({
@@ -676,6 +724,7 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
             statistics: { error: error.message }
           })
           .eq('id', recordId);
+        console.log('✅ Estado de error actualizado en Supabase');
       } catch (updateErr) {
         console.error('❌ Error actualizando estado de error:', updateErr);
       }
@@ -785,39 +834,41 @@ app.get('/api/latestTrends', async (req, res) => {
       });
     }
     
+    // Consulta corregida: obtener el registro más reciente por timestamp
     const { data, error } = await supabase
       .from('trends')
       .select('*')
-      .order('idtimestamp', { ascending: false })
-      .eq('timestamp',
-        supabase
-          .from('trends')
-          .select('timestamp')
-          .order('timestamp', { ascending: false })
-          .limit(1)
-      )
+      .order('timestamp', { ascending: false })
       .limit(1);
     
-    if (error || !data || data.length === 0) {
+    if (error) {
       console.error('Error consultando tendencias recientes:', error);
+      return res.status(500).json({
+        error: 'Database error',
+        message: 'Error consultando la base de datos'
+      });
+    }
+    
+    if (!data || data.length === 0) {
+      console.log('📭 No se encontraron tendencias en la base de datos');
       return res.status(404).json({
         error: 'No trends found',
         message: 'No se encontraron tendencias'
       });
     }
+    
     const trend = data[0];
     const response = {
-      idtimestamp: trend.idtimestamp,
-      topKeywords: trend.top_keywords,
-      wordCloudData: trend.word_cloud_data,
-      categoryData: trend.category_data,
+      topKeywords: trend.top_keywords || [],
+      wordCloudData: trend.word_cloud_data || [],
+      categoryData: trend.category_data || [],
       about: trend.about || [],
       statistics: trend.statistics || {},
       timestamp: trend.timestamp,
       processing_status: trend.processing_status || 'unknown'
     };
     
-    console.log(`Tendencias recientes enviadas. Estado: ${response.processing_status}`);
+    console.log(`✅ Tendencias recientes enviadas. Estado: ${response.processing_status}, About: ${response.about.length} items`);
     res.json(response);
     
   } catch (error) {
