@@ -1939,7 +1939,14 @@ app.post('/api/send-email', async (req, res) => {
     const transporter = nodemailer.createTransport(transportConfig);
 
     console.log('🔌 Verificando conexión SMTP...');
-    await transporter.verify();
+    
+    // 🆕 TIMEOUT PARA VERIFICACIÓN  
+    const verifyPromise = transporter.verify();
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('SMTP verification timeout after 10 seconds')), 10000)
+    );
+    
+    await Promise.race([verifyPromise, timeoutPromise]);
     console.log('✅ Conexión SMTP verificada');
 
     // Enviar email
@@ -2036,7 +2043,14 @@ app.post('/api/test-email', async (req, res) => {
     const transporter = nodemailer.createTransport(transportConfig);
 
     console.log('🔌 Verificando conexión SMTP...');
-    await transporter.verify();
+    
+    // 🆕 TIMEOUT PARA VERIFICACIÓN  
+    const verifyPromise = transporter.verify();
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('SMTP verification timeout after 10 seconds')), 10000)
+    );
+    
+    await Promise.race([verifyPromise, timeoutPromise]);
     console.log('✅ Conexión SMTP verificada');
 
     // Enviar email de prueba
