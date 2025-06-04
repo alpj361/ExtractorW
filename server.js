@@ -2081,3 +2081,50 @@ app.post('/api/test-email', async (req, res) => {
 });
 
 // 📧 ============ FIN ENDPOINTS DE EMAIL ============
+
+// === ENDPOINT: Mejorar redacción de email con OpenAI ===
+app.post('/api/improve-email', async (req, res) => {
+  const { emailContent, emailSignature, signatureImageUrl } = req.body;
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+  if (!OPENAI_API_KEY) {
+    return res.status(500).json({ error: 'OPENAI_API_KEY no configurada en el backend' });
+  }
+
+  if (!emailContent) {
+    return res.status(400).json({ error: 'Falta el contenido del email' });
+  }
+
+  // Construir prompt para OpenAI
+  const prompt = `Mejora la redacción del siguiente correo, manteniendo un tono profesional y claro. Si se provee una firma digital (texto o imagen), agrégala al final del correo.\n\nCorreo original:\n${emailContent}\n\nFirma digital (texto):\n${emailSignature || 'No hay firma de texto'}\n\nFirma digital (imagen):\n${signatureImageUrl || 'No hay imagen'}\n\nDevuelve solo el HTML final del correo, con la firma y la imagen si existe.`;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: 'Eres un asistente experto en redacción de emails profesionales en español.' },
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: 800
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      console.error('Error OpenAI:', errorData);
+      return res.status(500).json({ error: 'Error llamando a OpenAI', details: errorData });
+    }
+    const data = await response.json();
+    const improved = data.choices?.[0]?.message?.content || '';
+    res.json({ improved });
+  } catch (e) {
+    console.error('Error mejorando el correo:', e);
+    res.status(500).json({ error: 'Error mejorando el correo', details: e.message });
+  }
+});
