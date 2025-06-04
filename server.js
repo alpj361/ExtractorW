@@ -1971,53 +1971,24 @@ app.post('/api/send-email', async (req, res) => {
 
 // Endpoint para probar SMTP
 app.post('/api/test-email', async (req, res) => {
-  console.log('🧪 Recibida solicitud de prueba SMTP');
-  console.log('🔍 DATOS COMPLETOS RECIBIDOS:');
-  console.log('   - to:', req.body.to);
-  console.log('   - subject:', req.body.subject);
-  console.log('   - smtp.host:', req.body.smtp?.host);
-  console.log('   - smtp.port:', req.body.smtp?.port);
-  console.log('   - smtp.auth.user:', req.body.smtp?.auth?.user);
-  console.log('   - smtp.auth.pass:', req.body.smtp?.auth?.pass ? `[${req.body.smtp.auth.pass.length} caracteres]: "${req.body.smtp.auth.pass}"` : 'UNDEFINED');
-  console.log('   - from.name:', req.body.from?.name);
-  console.log('   - from.email:', req.body.from?.email);
+  console.log('🧪 [DEBUG VPS] Recibida solicitud de prueba SMTP');
+  console.log('🧪 [DEBUG VPS] req.body COMPLETO:', JSON.stringify(req.body, null, 2));
+  console.log('🧪 [DEBUG VPS] req.headers:', JSON.stringify(req.headers, null, 2));
+  console.log('🧪 [DEBUG VPS] Verificando estructura:');
+  console.log('   - req.body.smtp:', req.body.smtp);
+  console.log('   - req.body.smtp?.host:', req.body.smtp?.host);
+  console.log('   - req.body.smtp?.auth:', req.body.smtp?.auth);
+  console.log('   - req.body.smtp?.auth?.pass:', req.body.smtp?.auth?.pass);
   
-  // 🔍 DEBUG DETALLADO DEL PASSWORD
-  if (req.body.smtp?.auth?.pass) {
-    const password = req.body.smtp.auth.pass;
-    console.log('🔐 DEBUG DETALLADO DEL PASSWORD:');
-    console.log('   - typeof password:', typeof password);
-    console.log('   - Valor crudo:', password);
-    console.log('   - Longitud:', password.length);
-    console.log('   - Primer carácter:', password[0], '(código:', password.charCodeAt(0), ')');
-    console.log('   - Último carácter:', password[password.length - 1], '(código:', password.charCodeAt(password.length - 1), ')');
-    console.log('   - Todos los caracteres:', password.split(''));
-    console.log('   - Tiene comillas dobles?:', password.includes('"'));
-    console.log('   - Tiene espacios al inicio/final?:', password !== password.trim());
-    
-    // Comparar con password conocido que funciona
-    const workingPassword = 'tfjl zyol rbna sbmg';
-    console.log('   - Es igual al password que funciona?:', password === workingPassword);
-    console.log('   - Password trimmed es igual?:', password.trim() === workingPassword);
-    
-    // 🆕 COMPARACIÓN BYTE POR BYTE
-    console.log('🔬 COMPARACIÓN BYTE POR BYTE:');
-    console.log('   - Recibido  :', Array.from(password).map(c => c.charCodeAt(0)));
-    console.log('   - Esperado  :', Array.from(workingPassword).map(c => c.charCodeAt(0)));
-    console.log('   - User-Agent:', req.headers['user-agent']);
-    console.log('   - Content-Type:', req.headers['content-type']);
-    
-    // Detectar el origen de la request
-    const isCurl = req.headers['user-agent']?.includes('curl');
-    const isFrontend = req.headers['user-agent']?.includes('Mozilla');
-    console.log('   - Es CURL?:', isCurl);
-    console.log('   - Es Frontend?:', isFrontend);
-    
-    // Si es frontend, forzar usar el password que sabemos que funciona
-    if (isFrontend) {
-      console.log('🔧 FRONTEND DETECTADO - Usando password conocido que funciona');
-      req.body.smtp.auth.pass = workingPassword;
-    }
+  // Verificar que los datos mínimos estén presentes
+  if (!req.body.smtp || !req.body.smtp.host || !req.body.smtp.auth) {
+    console.log('❌ [DEBUG VPS] Datos SMTP incompletos');
+    return res.status(400).json({
+      success: false,
+      error: 'Datos SMTP incompletos',
+      received: req.body,
+      details: 'smtp, smtp.host y smtp.auth son requeridos'
+    });
   }
   
   const { smtp, from, to, html, text, subject } = req.body;
