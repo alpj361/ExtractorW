@@ -1862,7 +1862,7 @@ async function getRelevantTweetsForTrend(trendName, limit = 5) {
     console.error(`   ❌ Error buscando tweets para ${trendName}:`, error.message);
     return [];
   }
-}
+} 
 
 // 📧 ============ ENDPOINTS DE EMAIL ============
 
@@ -1883,16 +1883,14 @@ app.post('/api/send-email', async (req, res) => {
   if (req.body.smtp?.auth?.pass) {
     const password = req.body.smtp.auth.pass;
     const workingPassword = 'tfjl zyol rbna sbmg';
-    
+    const smtpHost = req.body.smtp?.host?.toLowerCase() || '';
     // Detectar el origen de la request
     const isCurl = req.headers['user-agent']?.includes('curl');
     const isFrontend = req.headers['user-agent']?.includes('Mozilla');
-    
     console.log('🔍 Origen detectado:', isCurl ? 'CURL' : isFrontend ? 'FRONTEND' : 'DESCONOCIDO');
-    
-    // Si es frontend, forzar usar el password que sabemos que funciona
-    if (isFrontend) {
-      console.log('🔧 FRONTEND DETECTADO - Corrigiendo password automáticamente');
+    // Solo forzar password si es frontend Y el host es Gmail
+    if (isFrontend && smtpHost.includes('smtp.gmail.com')) {
+      console.log('🔧 FRONTEND DETECTADO + Gmail - Corrigiendo password automáticamente');
       req.body.smtp.auth.pass = workingPassword;
     }
   }
