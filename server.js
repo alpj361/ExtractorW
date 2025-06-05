@@ -332,7 +332,8 @@ const FREE_OPERATIONS = [
   '/api/latestTrends',
   '/api/credits/status',
   '/api/credits/history',
-  '/api/credits/add'
+  '/api/credits/add',
+  '/api/cron/processTrends' // 🆕 Endpoint gratuito para cron jobs automatizados
 ];
 
 /**
@@ -2041,6 +2042,109 @@ app.get('/api/latestTrends', async (req, res) => {
     });
   }
 });
+
+// 🤖 ============ ENDPOINT GRATUITO PARA CRON JOBS AUTOMATIZADOS ============
+
+// Endpoint específico para cron jobs automatizados del sistema (SIN autenticación, SIN créditos)
+app.post('/api/cron/processTrends', async (req, res) => {
+  console.log(`🤖 [CRON JOB] Solicitud automatizada de procesamiento de tendencias - ${new Date().toISOString()}`);
+  
+  try {
+    // 1. Obtener datos crudos (igual que el endpoint original)
+    let rawData = req.body.rawData;
+    
+    if (!rawData && VPS_API_URL) {
+      console.log('🤖 [CRON] Obteniendo datos de VPS API...');
+      const response = await fetch(VPS_API_URL);
+      if (!response.ok) {
+        throw new Error(`Error al obtener datos de la API: ${response.status} ${response.statusText}`);
+      }
+      rawData = await response.json();
+      console.log('🤖 [CRON] Datos obtenidos de VPS API exitosamente');
+    }
+    
+    if (!rawData) {
+      console.log('🤖 [CRON] Generando datos mock para procesamiento automatizado');
+      rawData = { 
+        trends: Array(15).fill().map((_, i) => ({
+          name: `Tendencia Auto ${i+1}`,
+          volume: 100 - i*5,
+          category: ['Política', 'Economía', 'Deportes', 'Tecnología', 'Entretenimiento'][i % 5]
+        }))
+      };
+    }
+    
+    // 2. Reutilizar la misma lógica de procesamiento que el endpoint original
+    console.log('🤖 [CRON] Iniciando procesamiento automático...');
+    
+    // Llamar a la función de procesamiento local
+    const processedData = await processLocalTrends(rawData);
+    
+    // 3. Guardar en Supabase si está disponible
+    let recordId = null;
+    
+    if (SUPABASE_URL && SUPABASE_ANON_KEY && supabase) {
+      try {
+        console.log('🤖 [CRON] Guardando datos en Supabase...');
+        const { data, error } = await supabase
+          .from('trends')
+          .insert([{
+            timestamp: processedData.timestamp,
+            word_cloud_data: processedData.wordCloudData,
+            top_keywords: processedData.topKeywords,
+            category_data: processedData.categoryData,
+            raw_data: rawData,
+            about: [],
+            statistics: {},
+            processing_status: 'basic_completed',
+            source: 'cron_job_automated' // Marcar como procesamiento automatizado
+          }])
+          .select();
+          
+        if (error) {
+          console.error('🤖 [CRON] Error guardando en Supabase:', error);
+        } else {
+          console.log('🤖 [CRON] Datos guardados exitosamente');
+          recordId = data && data[0] ? data[0].id : null;
+        }
+      } catch (err) {
+        console.error('🤖 [CRON] Error al guardar en Supabase:', err);
+      }
+    }
+    
+    console.log('🤖 [CRON] ✅ Procesamiento automatizado completado exitosamente');
+    
+    res.json({
+      success: true,
+      message: 'Tendencias procesadas automáticamente',
+      source: 'cron_job_automated',
+      timestamp: processedData.timestamp,
+      data: processedData,
+      record_id: recordId,
+      note: 'Procesamiento automatizado del sistema - Sin costo de créditos'
+    });
+    
+    // 4. Procesar información detallada en background (igual que el endpoint original)
+    if (processedData.topKeywords && processedData.topKeywords.length > 0) {
+      const top10 = processedData.topKeywords.slice(0, 10).map(item => ({ name: item.keyword }));
+      processAboutInBackground(top10, rawData, recordId, processedData.timestamp).catch(error => {
+        console.error('🤖 [CRON] Error en procesamiento background:', error);
+      });
+    }
+    
+  } catch (error) {
+    console.error('🤖 [CRON] ❌ Error en procesamiento automatizado:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Error en procesamiento automatizado', 
+      message: error.message,
+      source: 'cron_job_automated',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// 🤖 ============ FIN ENDPOINT CRON JOBS ============
 
 // --- ENDPOINT DE SONDEO GENERAL ---
 app.post('/api/sondeo', async (req, res) => {
