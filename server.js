@@ -307,6 +307,1052 @@ if (SUPABASE_URL && SUPABASE_ANON_KEY) {
   console.log('Supabase credentials not found, database features will be disabled');
 }
 
+// 💳 ============ SISTEMA DE GESTIÓN DE CRÉDITOS ============
+
+// Costos por operación (en créditos)
+const CREDIT_COSTS = {
+  '/api/processTrends': 3,
+  '/api/sondeo': 1,
+  '/api/create-document': { min: 2, max: 5 }, // Será calculado dinámicamente
+  '/api/send-email': 0, // Gratis
+  '/api/trending-tweets': 0, // Gratis
+  '/api/test-email': 0 // Gratis (testing)
+};
+
+// Operaciones que NO requieren verificación de créditos
+const FREE_OPERATIONS = [
+  '/api/send-email',
+  '/api/test-email',
+  '/api/trending-tweets',
+  '/health',
+  '/api/diagnostics',
+  '/api/searchTrendInfo',
+  '/api/analyzeTrendWithTweets',
+  '/api/processingStatus',
+  '/api/latestTrends',
+  '/api/credits/status',
+  '/api/credits/history',
+  '/api/credits/add'
+];
+
+/**
+ * Middleware para verificar autenticación y créditos
+ */
+const verifyUserAccess = async (req, res, next) => {
+  try {
+    // Verificar si la operación requiere créditos
+    const operation = req.path;
+    const isFreeOperation = FREE_OPERATIONS.some(freeOp => operation.startsWith(freeOp));
+    
+    if (isFreeOperation) {
+      console.log(`🆓 Operación gratuita: ${operation}`);
+      return next();
+    }
+
+    // Obtener token de autorización
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ 
+        error: 'Token de autorización requerido',
+        message: 'Incluye el token en el header Authorization: Bearer <token>'
+      });
+    }
+
+    const token = authHeader.replace('Bearer ', '');
+    
+    // Verificar token con Supabase
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    
+    if (error || !user) {
+      console.error('❌ Error verificando token:', error);
+      return res.status(401).json({ 
+        error: 'Token inválido o expirado',
+        message: 'El token de autorización no es válido'
+      });
+    }
+
+    // Obtener perfil del usuario
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('id, email, role, user_type, credits')
+      .eq('id', user.id)
+      .single();
+
+    if (profileError || !profile) {
+      console.error('❌ Error obteniendo perfil:', profileError);
+      return res.status(404).json({ 
+        error: 'Perfil de usuario no encontrado',
+        message: 'No se pudo obtener la información del usuario'
+      });
+    }
+
+    // Verificar si el usuario es admin (acceso ilimitado)
+    if (profile.role === 'admin') {
+      console.log(`👑 Usuario admin con acceso ilimitado: ${profile.email}`);
+      req.user = { ...user, profile };
+      req.isAdmin = true;
+      return next();
+    }
+
+    // Verificar créditos disponibles
+    const operationCost = CREDIT_COSTS[operation];
+    if (!operationCost && operationCost !== 0) {
+      console.warn(`⚠️  Operación no definida en costos: ${operation}`);
+      return res.status(400).json({
+        error: 'Operación no válida',
+        message: 'Esta operación no está disponible'
+      });
+    }
+
+    let costToApply = operationCost;
+    
+    // Para operaciones con costo variable, usar el mínimo por ahora
+    if (typeof operationCost === 'object') {
+      costToApply = operationCost.min;
+    }
+
+    if (profile.credits < costToApply) {
+      console.log(`💸 Créditos insuficientes para ${profile.email}: ${profile.credits} < ${costToApply}`);
+      
+      // Enviar alerta si tiene 10 créditos o menos
+      const shouldAlert = profile.credits <= 10;
+      
+      return res.status(402).json({
+        error: 'Créditos insuficientes',
+        message: `No tienes suficientes créditos para esta operación. Necesitas ${costToApply} créditos, tienes ${profile.credits}.`,
+        credits_required: costToApply,
+        credits_available: profile.credits,
+        low_credits_alert: shouldAlert
+      });
+    }
+
+    // Guardar información del usuario en la request
+    req.user = { ...user, profile };
+    req.operationCost = costToApply;
+    req.isAdmin = false;
+
+    console.log(`✅ Usuario autorizado: ${profile.email} (${profile.credits} créditos, costo: ${costToApply})`);
+    next();
+
+  } catch (error) {
+    console.error('❌ Error en verificación de acceso:', error);
+    res.status(500).json({
+      error: 'Error interno de verificación',
+      message: 'Error verificando permisos de usuario'
+    });
+  }
+};
+
+/**
+ * Middleware para debitar créditos DESPUÉS de operación exitosa
+ */
+const debitCredits = async (req, res, next) => {
+  // Solo ejecutar si la response fue exitosa
+  const originalSend = res.send;
+  const originalJson = res.json;
+  
+  res.send = function(data) {
+    handleCreditDebit.call(this, data, req, 'send');
+    return originalSend.call(this, data);
+  };
+  
+  res.json = function(data) {
+    handleCreditDebit.call(this, data, req, 'json');
+    return originalJson.call(this, data);
+  };
+  
+  next();
+};
+
+/**
+ * Función auxiliar para manejar el débito de créditos
+ */
+async function handleCreditDebit(data, req, responseType) {
+  try {
+    // Solo debitar si es exitoso y no es admin
+    if (res.statusCode >= 200 && res.statusCode < 300 && !req.isAdmin && req.operationCost > 0) {
+      const user = req.user;
+      const operationCost = req.operationCost;
+      
+      // Para create-document, calcular costo real basado en la respuesta
+      let finalCost = operationCost;
+      if (req.path === '/api/create-document' && typeof data === 'object') {
+        finalCost = calculateDocumentCost(data);
+      }
+      
+      console.log(`💳 Debitando ${finalCost} créditos de ${user.profile.email}`);
+      
+      // Debitar créditos en la base de datos
+      const { data: updateResult, error } = await supabase
+        .from('profiles')
+        .update({ credits: user.profile.credits - finalCost })
+        .eq('id', user.id)
+        .select('credits')
+        .single();
+
+      if (error) {
+        console.error('❌ Error debitando créditos:', error);
+      } else {
+        console.log(`✅ Créditos debitados. Nuevo saldo: ${updateResult.credits}`);
+        
+        // Log de uso
+        await logUsage(user, req.path, finalCost, req);
+        
+        // Verificar si necesita alerta de créditos bajos
+        if (updateResult.credits <= 10 && updateResult.credits > 0) {
+          console.log(`⚠️  Alerta: Usuario ${user.profile.email} tiene ${updateResult.credits} créditos restantes`);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error en handleCreditDebit:', error);
+  }
+}
+
+/**
+ * Calcula el costo de un documento basado en su contenido
+ */
+function calculateDocumentCost(responseData) {
+  const costs = CREDIT_COSTS['/api/create-document'];
+  
+  if (!responseData || typeof responseData !== 'object') {
+    return costs.min;
+  }
+  
+  // Calcular basado en longitud del contenido
+  const content = responseData.content || responseData.document || responseData.text || '';
+  const contentLength = content.length;
+  
+  if (contentLength < 500) return costs.min; // 2 créditos para documentos cortos
+  if (contentLength < 1500) return 3; // 3 créditos para documentos medianos
+  if (contentLength < 3000) return 4; // 4 créditos para documentos largos
+  return costs.max; // 5 créditos para documentos muy largos
+}
+
+/**
+ * Registra el uso de operaciones en logs detallados
+ */
+async function logUsage(user, operation, credits, req) {
+  try {
+    const logEntry = {
+      user_id: user.id,
+      user_email: user.profile.email,
+      operation: operation,
+      credits_consumed: credits,
+      ip_address: req.ip || req.connection.remoteAddress,
+      user_agent: req.headers['user-agent'],
+      timestamp: new Date().toISOString(),
+      request_params: JSON.stringify({
+        method: req.method,
+        params: req.params,
+        query: req.query,
+        body_keys: req.body ? Object.keys(req.body) : []
+      }),
+      response_time: Date.now() - req.startTime
+    };
+
+    // Guardar en tabla de logs (crear si no existe)
+    if (supabase) {
+      const { error } = await supabase
+        .from('usage_logs')
+        .insert([logEntry]);
+
+      if (error) {
+        console.error('❌ Error guardando log de uso:', error);
+        // No fallar la operación por error de logging
+      } else {
+        console.log(`📊 Log guardado: ${operation} por ${user.profile.email}`);
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error en logUsage:', error);
+  }
+}
+
+/**
+ * Middleware para agregar timestamp de inicio (para medir response time)
+ */
+const addTimestamp = (req, res, next) => {
+  req.startTime = Date.now();
+  next();
+};
+
+// 💳 ============ ENDPOINTS DE GESTIÓN DE CRÉDITOS ============
+
+// Endpoint para consultar estado de créditos
+app.get('/api/credits/status', verifyUserAccess, async (req, res) => {
+  try {
+    const user = req.user;
+    
+    // Obtener créditos actuales
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('credits, user_type, role')
+      .eq('id', user.id)
+      .single();
+
+    if (error) {
+      return res.status(500).json({
+        error: 'Error obteniendo estado de créditos',
+        message: error.message
+      });
+    }
+
+    const isAdmin = profile.role === 'admin';
+    const needsAlert = profile.credits <= 10;
+
+    res.json({
+      credits: isAdmin ? 'ilimitado' : profile.credits,
+      user_type: profile.user_type,
+      role: profile.role,
+      is_admin: isAdmin,
+      low_credits_alert: !isAdmin && needsAlert,
+      operation_costs: CREDIT_COSTS,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Error en /api/credits/status:', error);
+    res.status(500).json({
+      error: 'Error interno',
+      message: error.message
+    });
+  }
+});
+
+// Endpoint para consultar historial de uso
+app.get('/api/credits/history', verifyUserAccess, async (req, res) => {
+  try {
+    const user = req.user;
+    const limit = parseInt(req.query.limit) || 10;
+
+    if (supabase) {
+      const { data: logs, error } = await supabase
+        .from('usage_logs')
+        .select('operation, credits_consumed, timestamp, ip_address, response_time')
+        .eq('user_id', user.id)
+        .order('timestamp', { ascending: false })
+        .limit(limit);
+
+      if (error) {
+        return res.status(500).json({
+          error: 'Error obteniendo historial',
+          message: error.message
+        });
+      }
+
+      res.json({
+        recent_operations: logs || [],
+        total_shown: logs ? logs.length : 0,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.json({
+        recent_operations: [],
+        total_shown: 0,
+        message: 'Base de datos no configurada',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+  } catch (error) {
+    console.error('Error en /api/credits/history:', error);
+    res.status(500).json({
+      error: 'Error interno',
+      message: error.message
+    });
+  }
+});
+
+// Endpoint para agregar créditos (solo admins)
+app.post('/api/credits/add', verifyUserAccess, async (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { user_email, credits_to_add } = req.body;
+
+    // Verificar que el usuario actual es admin
+    if (adminUser.profile.role !== 'admin') {
+      return res.status(403).json({
+        error: 'Acceso denegado',
+        message: 'Solo los administradores pueden agregar créditos'
+      });
+    }
+
+    if (!user_email || !credits_to_add || credits_to_add <= 0) {
+      return res.status(400).json({
+        error: 'Datos inválidos',
+        message: 'Se requiere user_email y credits_to_add (mayor a 0)'
+      });
+    }
+
+    // Buscar usuario por email
+    const { data: targetUser, error: findError } = await supabase
+      .from('profiles')
+      .select('id, email, credits')
+      .eq('email', user_email)
+      .single();
+
+    if (findError || !targetUser) {
+      return res.status(404).json({
+        error: 'Usuario no encontrado',
+        message: `No se encontró usuario con email: ${user_email}`
+      });
+    }
+
+    // Agregar créditos
+    const newCreditBalance = targetUser.credits + credits_to_add;
+    
+    const { data: updateResult, error: updateError } = await supabase
+      .from('profiles')
+      .update({ credits: newCreditBalance })
+      .eq('id', targetUser.id)
+      .select('credits')
+      .single();
+
+    if (updateError) {
+      return res.status(500).json({
+        error: 'Error agregando créditos',
+        message: updateError.message
+      });
+    }
+
+    console.log(`💳 Admin ${adminUser.profile.email} agregó ${credits_to_add} créditos a ${user_email}`);
+
+    res.json({
+      success: true,
+      message: `Se agregaron ${credits_to_add} créditos a ${user_email}`,
+      previous_balance: targetUser.credits,
+      new_balance: updateResult.credits,
+      credits_added: credits_to_add,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Error en /api/credits/add:', error);
+    res.status(500).json({
+      error: 'Error interno',
+      message: error.message
+    });
+  }
+});
+
+// 💳 ============ FIN SISTEMA DE CRÉDITOS ============
+
+// 📊 ============ ENDPOINT PARA PANEL DE ADMINISTRACIÓN ============
+
+// Endpoint para obtener datos completos del dashboard de admin
+app.get('/api/admin/dashboard', verifyUserAccess, async (req, res) => {
+  try {
+    const user = req.user;
+    
+    // Verificar que el usuario sea admin
+    if (user.profile.role !== 'admin') {
+      return res.status(403).json({
+        error: 'Acceso denegado',
+        message: 'Solo los administradores pueden acceder a este endpoint'
+      });
+    }
+
+    console.log(`👑 Admin ${user.profile.email} consultando dashboard`);
+
+    if (!supabase) {
+      return res.status(503).json({
+        error: 'Base de datos no configurada',
+        message: 'Supabase no está disponible'
+      });
+    }
+
+    // 1. ESTADÍSTICAS GENERALES DEL SISTEMA
+    console.log('📊 Obteniendo estadísticas generales...');
+    
+    // Total de usuarios
+    const { data: totalUsersData, error: usersError } = await supabase
+      .from('profiles')
+      .select('id', { count: 'exact' });
+
+    if (usersError) {
+      console.error('Error obteniendo total de usuarios:', usersError);
+    }
+
+    // Total de créditos en el sistema
+    const { data: creditsData, error: creditsError } = await supabase
+      .from('profiles')
+      .select('credits')
+      .neq('role', 'admin'); // Excluir admins
+
+    let totalCredits = 0;
+    let avgCredits = 0;
+    if (!creditsError && creditsData) {
+      totalCredits = creditsData.reduce((sum, user) => sum + (user.credits || 0), 0);
+      avgCredits = creditsData.length > 0 ? Math.round(totalCredits / creditsData.length) : 0;
+    }
+
+    // Estadísticas de logs (últimos 30 días)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const { data: logsData, error: logsError } = await supabase
+      .from('usage_logs')
+      .select('credits_consumed, operation, timestamp')
+      .gte('timestamp', thirtyDaysAgo.toISOString());
+
+    let totalOperations = 0;
+    let totalCreditsConsumed = 0;
+    let operationStats = {};
+    
+    if (!logsError && logsData) {
+      totalOperations = logsData.length;
+      totalCreditsConsumed = logsData.reduce((sum, log) => sum + (log.credits_consumed || 0), 0);
+      
+      // Estadísticas por operación
+      logsData.forEach(log => {
+        const op = log.operation;
+        if (!operationStats[op]) {
+          operationStats[op] = { count: 0, credits: 0 };
+        }
+        operationStats[op].count++;
+        operationStats[op].credits += log.credits_consumed || 0;
+      });
+    }
+
+    // 2. LISTA DE USUARIOS CON CRÉDITOS
+    console.log('👥 Obteniendo lista de usuarios...');
+    const { data: usersData, error: usersListError } = await supabase
+      .from('profiles')
+      .select('id, email, user_type, role, credits, created_at')
+      .order('credits', { ascending: false });
+
+    let usersList = [];
+    let lowCreditUsers = [];
+    
+    if (!usersListError && usersData) {
+      usersList = usersData.map(user => ({
+        id: user.id,
+        email: user.email,
+        user_type: user.user_type,
+        role: user.role,
+        credits: user.role === 'admin' ? 'ilimitado' : user.credits,
+        credits_numeric: user.role === 'admin' ? null : user.credits,
+        created_at: user.created_at,
+        is_low_credits: user.role !== 'admin' && user.credits <= 10
+      }));
+
+      lowCreditUsers = usersData
+        .filter(user => user.role !== 'admin' && user.credits <= 10)
+        .map(user => ({
+          email: user.email,
+          credits: user.credits,
+          user_type: user.user_type
+        }));
+    }
+
+    // 3. LOGS RECIENTES (últimos 20)
+    console.log('📋 Obteniendo logs recientes...');
+    const { data: recentLogs, error: recentLogsError } = await supabase
+      .from('usage_logs')
+      .select('user_email, operation, credits_consumed, timestamp, ip_address, response_time')
+      .order('timestamp', { ascending: false })
+      .limit(20);
+
+    // 4. MÉTRICAS DE USO POR DÍA (últimos 7 días)
+    console.log('📈 Calculando métricas diarias...');
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const { data: dailyLogs, error: dailyLogsError } = await supabase
+      .from('usage_logs')
+      .select('timestamp, credits_consumed, operation')
+      .gte('timestamp', sevenDaysAgo.toISOString());
+
+    let dailyMetrics = {};
+    
+    if (!dailyLogsError && dailyLogs) {
+      // Inicializar últimos 7 días
+      for (let i = 6; i >= 0; i--) {
+        const date = new Date();
+        date.setDate(date.getDate() - i);
+        const dateKey = date.toISOString().split('T')[0];
+        dailyMetrics[dateKey] = { operations: 0, credits: 0 };
+      }
+
+      // Llenar con datos reales
+      dailyLogs.forEach(log => {
+        const dateKey = log.timestamp.split('T')[0];
+        if (dailyMetrics[dateKey]) {
+          dailyMetrics[dateKey].operations++;
+          dailyMetrics[dateKey].credits += log.credits_consumed || 0;
+        }
+      });
+    }
+
+    // 5. TOP USUARIOS POR CONSUMO (últimos 30 días)
+    console.log('🏆 Calculando top usuarios...');
+    let topUsers = [];
+    
+    if (!logsError && logsData) {
+      const userConsumption = {};
+      logsData.forEach(log => {
+        const email = log.user_email;
+        if (!userConsumption[email]) {
+          userConsumption[email] = { operations: 0, credits: 0 };
+        }
+        userConsumption[email].operations++;
+        userConsumption[email].credits += log.credits_consumed || 0;
+      });
+
+      topUsers = Object.entries(userConsumption)
+        .map(([email, stats]) => ({ email, ...stats }))
+        .sort((a, b) => b.credits - a.credits)
+        .slice(0, 10);
+    }
+
+    // 6. DISTRIBUCIÓN POR TIPO DE USUARIO
+    console.log('📊 Calculando distribución de usuarios...');
+    let userTypeDistribution = {};
+    
+    if (!usersListError && usersData) {
+      usersData.forEach(user => {
+        const type = user.user_type || 'Unknown';
+        if (!userTypeDistribution[type]) {
+          userTypeDistribution[type] = 0;
+        }
+        userTypeDistribution[type]++;
+      });
+    }
+
+    // RESPUESTA COMPLETA
+    const dashboardData = {
+      // Estadísticas generales
+      general_stats: {
+        total_users: totalUsersData?.length || 0,
+        total_credits_in_system: totalCredits,
+        average_credits_per_user: avgCredits,
+        total_operations_30d: totalOperations,
+        total_credits_consumed_30d: totalCreditsConsumed,
+        low_credit_users_count: lowCreditUsers.length
+      },
+
+      // Estadísticas por operación
+      operation_stats: Object.entries(operationStats).map(([operation, stats]) => ({
+        operation,
+        count: stats.count,
+        credits_consumed: stats.credits,
+        avg_credits_per_operation: stats.count > 0 ? Math.round(stats.credits / stats.count * 100) / 100 : 0
+      })).sort((a, b) => b.count - a.count),
+
+      // Lista completa de usuarios
+      users: usersList,
+
+      // Usuarios con créditos bajos
+      low_credit_users: lowCreditUsers,
+
+      // Logs recientes
+      recent_logs: recentLogs || [],
+
+      // Métricas diarias (últimos 7 días)
+      daily_metrics: Object.entries(dailyMetrics).map(([date, metrics]) => ({
+        date,
+        operations: metrics.operations,
+        credits_consumed: metrics.credits
+      })),
+
+      // Top usuarios por consumo
+      top_users_by_consumption: topUsers,
+
+      // Distribución por tipo de usuario
+      user_type_distribution: Object.entries(userTypeDistribution).map(([type, count]) => ({
+        user_type: type,
+        count
+      })),
+
+      // Metadata
+      metadata: {
+        timestamp: new Date().toISOString(),
+        admin_user: user.profile.email,
+        data_period: '30 días',
+        total_endpoints_with_credits: Object.keys(CREDIT_COSTS).length
+      }
+    };
+
+    console.log(`✅ Dashboard data generado para ${user.profile.email}`);
+    res.json(dashboardData);
+
+  } catch (error) {
+    console.error('❌ Error generando dashboard de admin:', error);
+    res.status(500).json({
+      error: 'Error interno generando dashboard',
+      message: error.message
+    });
+  }
+});
+
+// Endpoint para obtener usuarios con filtros específicos
+app.get('/api/admin/users', verifyUserAccess, async (req, res) => {
+  try {
+    const user = req.user;
+    
+    // Verificar que el usuario sea admin
+    if (user.profile.role !== 'admin') {
+      return res.status(403).json({
+        error: 'Acceso denegado',
+        message: 'Solo los administradores pueden acceder a este endpoint'
+      });
+    }
+
+    const { 
+      user_type, 
+      role, 
+      low_credits, 
+      limit = 50, 
+      offset = 0,
+      order_by = 'created_at',
+      order_direction = 'desc'
+    } = req.query;
+
+    console.log(`👑 Admin ${user.profile.email} consultando usuarios con filtros`);
+
+    if (!supabase) {
+      return res.status(503).json({
+        error: 'Base de datos no configurada',
+        message: 'Supabase no está disponible'
+      });
+    }
+
+    let query = supabase
+      .from('profiles')
+      .select('id, email, user_type, role, credits, created_at, updated_at');
+
+    // Aplicar filtros
+    if (user_type) {
+      query = query.eq('user_type', user_type);
+    }
+    
+    if (role) {
+      query = query.eq('role', role);
+    }
+    
+    if (low_credits === 'true') {
+      query = query.lte('credits', 10).neq('role', 'admin');
+    }
+
+    // Aplicar ordenamiento
+    const validOrderBy = ['created_at', 'credits', 'email', 'user_type'];
+    const validDirection = ['asc', 'desc'];
+    
+    if (validOrderBy.includes(order_by) && validDirection.includes(order_direction)) {
+      query = query.order(order_by, { ascending: order_direction === 'asc' });
+    }
+
+    // Aplicar límite y offset
+    query = query.range(offset, offset + limit - 1);
+
+    const { data: usersData, error } = await query;
+
+    if (error) {
+      console.error('Error obteniendo usuarios filtrados:', error);
+      return res.status(500).json({
+        error: 'Error obteniendo usuarios',
+        message: error.message
+      });
+    }
+
+    // Obtener el conteo total para paginación
+    let countQuery = supabase
+      .from('profiles')
+      .select('*', { count: 'exact', head: true });
+
+    if (user_type) countQuery = countQuery.eq('user_type', user_type);
+    if (role) countQuery = countQuery.eq('role', role);
+    if (low_credits === 'true') countQuery = countQuery.lte('credits', 10).neq('role', 'admin');
+
+    const { count, error: countError } = await countQuery;
+
+    const processedUsers = usersData?.map(userData => ({
+      id: userData.id,
+      email: userData.email,
+      user_type: userData.user_type,
+      role: userData.role,
+      credits: userData.role === 'admin' ? 'ilimitado' : userData.credits,
+      credits_numeric: userData.role === 'admin' ? null : userData.credits,
+      is_low_credits: userData.role !== 'admin' && userData.credits <= 10,
+      created_at: userData.created_at,
+      updated_at: userData.updated_at
+    })) || [];
+
+    res.json({
+      users: processedUsers,
+      pagination: {
+        total: count || 0,
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        has_more: (count || 0) > (parseInt(offset) + parseInt(limit))
+      },
+      filters_applied: {
+        user_type: user_type || null,
+        role: role || null,
+        low_credits: low_credits === 'true',
+        order_by,
+        order_direction
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo usuarios filtrados:', error);
+    res.status(500).json({
+      error: 'Error interno',
+      message: error.message
+    });
+  }
+});
+
+// Endpoint para obtener logs con filtros avanzados
+app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
+  try {
+    const user = req.user;
+    
+    // Verificar que el usuario sea admin
+    if (user.profile.role !== 'admin') {
+      return res.status(403).json({
+        error: 'Acceso denegado',
+        message: 'Solo los administradores pueden acceder a este endpoint'
+      });
+    }
+
+    const { 
+      user_email,
+      operation,
+      days = 7,
+      limit = 100,
+      offset = 0
+    } = req.query;
+
+    console.log(`👑 Admin ${user.profile.email} consultando logs con filtros`);
+
+    if (!supabase) {
+      return res.status(503).json({
+        error: 'Base de datos no configurada',
+        message: 'Supabase no está disponible'
+      });
+    }
+
+    const daysAgo = new Date();
+    daysAgo.setDate(daysAgo.getDate() - parseInt(days));
+
+    let query = supabase
+      .from('usage_logs')
+      .select('*')
+      .gte('timestamp', daysAgo.toISOString());
+
+    // Aplicar filtros
+    if (user_email) {
+      query = query.ilike('user_email', `%${user_email}%`);
+    }
+    
+    if (operation) {
+      query = query.eq('operation', operation);
+    }
+
+    // Ordenar por timestamp descendente y aplicar límites
+    query = query
+      .order('timestamp', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    const { data: logsData, error } = await query;
+
+    if (error) {
+      console.error('Error obteniendo logs filtrados:', error);
+      return res.status(500).json({
+        error: 'Error obteniendo logs',
+        message: error.message
+      });
+    }
+
+    // Obtener conteo total para paginación
+    let countQuery = supabase
+      .from('usage_logs')
+      .select('*', { count: 'exact', head: true })
+      .gte('timestamp', daysAgo.toISOString());
+
+    if (user_email) countQuery = countQuery.ilike('user_email', `%${user_email}%`);
+    if (operation) countQuery = countQuery.eq('operation', operation);
+
+    const { count, error: countError } = await countQuery;
+
+    res.json({
+      logs: logsData || [],
+      pagination: {
+        total: count || 0,
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        has_more: (count || 0) > (parseInt(offset) + parseInt(limit))
+      },
+      filters_applied: {
+        user_email: user_email || null,
+        operation: operation || null,
+        days: parseInt(days)
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo logs filtrados:', error);
+    res.status(500).json({
+      error: 'Error interno',
+      message: error.message
+    });
+  }
+});
+
+// 📊 ============ FIN ENDPOINTS PANEL DE ADMINISTRACIÓN ============
+
+// Aplicar middlewares globales para operaciones que requieren créditos
+app.use(addTimestamp);
+app.use('/api/processTrends', verifyUserAccess, debitCredits);
+app.use('/api/sondeo', verifyUserAccess, debitCredits);
+app.use('/api/create-document', verifyUserAccess, debitCredits);
+
+// 📄 ============ ENDPOINT PARA CREAR DOCUMENTOS ============
+
+// Endpoint para crear documentos con IA (costo variable: 2-5 créditos)
+app.post('/api/create-document', async (req, res) => {
+  try {
+    const { type, content, context, length } = req.body;
+    
+    if (!type || !content) {
+      return res.status(400).json({
+        error: 'Datos requeridos faltantes',
+        message: 'Se requiere type y content'
+      });
+    }
+
+    console.log(`📄 Creando documento de tipo: ${type}`);
+
+    if (!PERPLEXITY_API_KEY) {
+      return res.status(500).json({
+        error: 'Servicio no disponible',
+        message: 'API de generación de documentos no configurada'
+      });
+    }
+
+    // Definir prompt según el tipo de documento
+    let systemPrompt = '';
+    let userPrompt = '';
+    
+    switch (type) {
+      case 'resumen':
+        systemPrompt = 'Eres un experto en crear resúmenes ejecutivos claros y concisos. Responde en español.';
+        userPrompt = `Crea un resumen ejecutivo del siguiente contenido:\n\n${content}`;
+        break;
+      
+      case 'analisis':
+        systemPrompt = 'Eres un analista experto que crea análisis detallados y estructurados. Responde en español.';
+        userPrompt = `Analiza en detalle el siguiente contenido, incluye conclusiones y recomendaciones:\n\n${content}`;
+        break;
+      
+      case 'storytelling':
+        systemPrompt = 'Eres un experto en storytelling que transforma información en narrativas atractivas. Responde en español.';
+        userPrompt = `Transforma el siguiente contenido en una narrativa atractiva y envolvente:\n\n${content}`;
+        break;
+      
+      case 'informe':
+        systemPrompt = 'Eres un experto en crear informes profesionales estructurados. Responde en español con formato profesional.';
+        userPrompt = `Crea un informe profesional basado en:\n\n${content}`;
+        break;
+      
+      default:
+        systemPrompt = 'Eres un asistente de escritura experto. Responde en español.';
+        userPrompt = `Procesa y mejora el siguiente contenido:\n\n${content}`;
+    }
+
+    // Agregar contexto si está disponible
+    if (context) {
+      userPrompt += `\n\nContexto adicional: ${context}`;
+    }
+
+    // Agregar especificación de longitud
+    if (length) {
+      if (length === 'corto') {
+        userPrompt += '\n\nGenera un documento corto (máximo 300 palabras).';
+      } else if (length === 'medio') {
+        userPrompt += '\n\nGenera un documento de longitud media (300-800 palabras).';
+      } else if (length === 'largo') {
+        userPrompt += '\n\nGenera un documento extenso (800+ palabras).';
+      }
+    }
+
+    const payload = {
+      model: 'sonar',
+      messages: [
+        {
+          role: 'system',
+          content: systemPrompt
+        },
+        {
+          role: 'user',
+          content: userPrompt
+        }
+      ],
+      temperature: 0.3,
+      max_tokens: length === 'largo' ? 1500 : length === 'medio' ? 800 : 400
+    };
+
+    // Llamar a Perplexity
+    const response = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Error en API: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      throw new Error('Respuesta inválida de la API');
+    }
+
+    const generatedContent = data.choices[0].message.content;
+    
+    // Calcular estadísticas del documento
+    const wordCount = generatedContent.split(/\s+/).length;
+    const charCount = generatedContent.length;
+    
+    console.log(`📄 Documento creado: ${type}, ${wordCount} palabras, ${charCount} caracteres`);
+
+    res.json({
+      success: true,
+      document: {
+        type: type,
+        content: generatedContent,
+        word_count: wordCount,
+        char_count: charCount,
+        length_category: charCount < 500 ? 'corto' : charCount < 1500 ? 'medio' : 'largo'
+      },
+      metadata: {
+        model: 'sonar',
+        timestamp: new Date().toISOString(),
+        user_email: req.user.profile.email
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error creando documento:', error);
+    res.status(500).json({
+      error: 'Error creando documento',
+      message: error.message
+    });
+  }
+});
+
+// 📄 ============ FIN ENDPOINT DOCUMENTOS ============
+
 app.post('/api/processTrends', async (req, res) => {
   console.time('procesamiento-total');
   console.log(`[${new Date().toISOString()}] Solicitud recibida en /api/processTrends`);
