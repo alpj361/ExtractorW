@@ -470,8 +470,7 @@ const debitCredits = async (req, res, next) => {
  */
 async function handleCreditDebit(data, req, responseType) {
   try {
-    // Solo debitar si es exitoso y no es admin
-    if (this.statusCode >= 200 && this.statusCode < 300 && !req.isAdmin && req.operationCost > 0) {
+    if (this.statusCode >= 200 && this.statusCode < 300) {
       const user = req.user;
       const operationCost = req.operationCost;
       
@@ -481,28 +480,33 @@ async function handleCreditDebit(data, req, responseType) {
         finalCost = calculateDocumentCost(data);
       }
       
-      console.log(`💳 Debitando ${finalCost} créditos de ${user.profile.email}`);
+      // SIEMPRE registrar log de uso (tanto para admin como usuarios normales)
+      await logUsage(user, req.path, finalCost, req);
       
-      // Debitar créditos en la base de datos
-      const { data: updateResult, error } = await supabase
-        .from('profiles')
-        .update({ credits: user.profile.credits - finalCost })
-        .eq('id', user.id)
-        .select('credits')
-        .single();
+      // Solo debitar créditos si NO es admin y la operación tiene costo
+      if (!req.isAdmin && finalCost > 0) {
+        console.log(`💳 Debitando ${finalCost} créditos de ${user.profile.email}`);
+        
+        // Debitar créditos en la base de datos
+        const { data: updateResult, error } = await supabase
+          .from('profiles')
+          .update({ credits: user.profile.credits - finalCost })
+          .eq('id', user.id)
+          .select('credits')
+          .single();
 
-      if (error) {
-        console.error('❌ Error debitando créditos:', error);
-      } else {
-        console.log(`✅ Créditos debitados. Nuevo saldo: ${updateResult.credits}`);
-        
-        // Log de uso
-        await logUsage(user, req.path, finalCost, req);
-        
-        // Verificar si necesita alerta de créditos bajos
-        if (updateResult.credits <= 10 && updateResult.credits > 0) {
-          console.log(`⚠️  Alerta: Usuario ${user.profile.email} tiene ${updateResult.credits} créditos restantes`);
+        if (error) {
+          console.error('❌ Error debitando créditos:', error);
+        } else {
+          console.log(`✅ Créditos debitados. Nuevo saldo: ${updateResult.credits}`);
+          
+          // Verificar si necesita alerta de créditos bajos
+          if (updateResult.credits <= 10 && updateResult.credits > 0) {
+            console.log(`⚠️  Alerta: Usuario ${user.profile.email} tiene ${updateResult.credits} créditos restantes`);
+          }
         }
+      } else if (req.isAdmin) {
+        console.log(`👑 Admin ${user.profile.email} ejecutó ${req.path} - Log registrado, sin débito de créditos`);
       }
     }
   } catch (error) {
