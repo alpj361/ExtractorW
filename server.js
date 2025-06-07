@@ -471,7 +471,7 @@ const debitCredits = async (req, res, next) => {
 async function handleCreditDebit(data, req, responseType) {
   try {
     // Solo debitar si es exitoso y no es admin
-    if (res.statusCode >= 200 && res.statusCode < 300 && !req.isAdmin && req.operationCost > 0) {
+    if (this.statusCode >= 200 && this.statusCode < 300 && !req.isAdmin && req.operationCost > 0) {
       const user = req.user;
       const operationCost = req.operationCost;
       
