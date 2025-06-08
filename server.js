@@ -500,20 +500,49 @@ async function handleCreditDebit(data, req, responseType) {
 
         if (error) {
           console.error('❌ Error debitando créditos:', error);
+          
+          // Log del error específico
+          await logError(`${req.path}_credit_debit`, {
+            message: 'Error debitando créditos',
+            error: error,
+            credits_to_debit: finalCost,
+            user_id: user.id
+          }, user, req);
         } else {
           console.log(`✅ Créditos debitados. Nuevo saldo: ${updateResult.credits}`);
           
           // Verificar si necesita alerta de créditos bajos
           if (updateResult.credits <= 10 && updateResult.credits > 0) {
             console.log(`⚠️  Alerta: Usuario ${user.profile.email} tiene ${updateResult.credits} créditos restantes`);
+            
+            // Log de alerta de créditos bajos
+            await logSystemOperation('low_credits_alert', {
+              user_email: user.profile.email,
+              remaining_credits: updateResult.credits,
+              operation: req.path
+            });
           }
         }
       } else if (req.isAdmin) {
         console.log(`👑 Admin ${user.profile.email} ejecutó ${req.path} - Log registrado, sin débito de créditos`);
       }
+    } else {
+      // Si el status code indica error, registrar error específico
+      const errorData = typeof data === 'object' ? data : { message: data };
+      await logError(req.path, {
+        status_code: this.statusCode,
+        response_data: errorData
+      }, req.user, req);
     }
   } catch (error) {
     console.error('❌ Error en handleCreditDebit:', error);
+    
+    // Log del error en el middleware
+    await logError('middleware_credit_debit', {
+      message: 'Error en middleware de débito de créditos',
+      error: error.message,
+      stack: error.stack
+    }, req.user, req);
   }
 }
 
@@ -556,8 +585,10 @@ async function logUsage(user, operation, credits, req) {
     const logEntry = {
       user_id: user.id,
       user_email: user.profile.email,
+      user_role: user.profile.role || 'user',
       operation: operation,
-      credits_consumed: creditsConsumed, // Ahora garantizamos que sea un número válido
+      log_type: 'user', // Tipo de log: user vs system
+      credits_consumed: creditsConsumed,
       ip_address: req.ip || req.connection.remoteAddress,
       user_agent: req.headers['user-agent'],
       timestamp: new Date().toISOString(),
@@ -567,7 +598,9 @@ async function logUsage(user, operation, credits, req) {
         query: req.query,
         body_keys: req.body ? Object.keys(req.body) : []
       }),
-      response_time: Date.now() - req.startTime
+      response_time: Date.now() - req.startTime,
+      success: true, // Asumimos éxito si llegó aquí
+      error_details: null
     };
 
     // Guardar en tabla de logs (crear si no existe)
@@ -587,6 +620,152 @@ async function logUsage(user, operation, credits, req) {
   } catch (error) {
     console.error('❌ Error en logUsage:', error);
     console.error('📋 Datos recibidos:', { operation, credits, userEmail: user?.profile?.email });
+  }
+}
+
+/**
+ * Registra logs del sistema (operaciones automatizadas, cron jobs, etc.)
+ * IMPORTANTE: Guarda en tabla system_execution_logs usando la estructura existente
+ */
+async function logSystemOperation(scriptName, details = {}, success = true, errorDetails = null) {
+  try {
+    console.log(`🤖 Logging operación del sistema: ${scriptName}`);
+    
+    const now = new Date();
+    const logEntry = {
+      script_name: scriptName,
+      started_at: details.started_at || now.toISOString(),
+      completed_at: success ? now.toISOString() : null,
+      status: success ? 'completed' : 'failed',
+      duration_seconds: details.execution_time ? parseInt(details.execution_time.replace(/[^\d]/g, '')) || null : null,
+      trends_found: details.trends_found || 0,
+      tweets_found: details.tweets_found || 0,
+      tweets_processed: details.tweets_processed || 0,
+      tweets_saved: details.tweets_saved || 0,
+      tweets_failed: details.tweets_failed || 0,
+      duplicates_skipped: details.duplicates_skipped || 0,
+      ai_requests_made: details.ai_requests_made || 0,
+      ai_requests_successful: details.ai_requests_successful || 0,
+      ai_requests_failed: details.ai_requests_failed || 0,
+      total_tokens_used: details.total_tokens_used || 0,
+      estimated_cost_usd: details.estimated_cost_usd || 0.0,
+      categoria_stats: details.categoria_stats || {},
+      sentimiento_stats: details.sentimiento_stats || {},
+      intencion_stats: details.intencion_stats || {},
+      propagacion_stats: details.propagacion_stats || {},
+      api_response_time_ms: details.api_response_time_ms || null,
+      memory_usage_mb: details.memory_usage_mb || null,
+      error_details: errorDetails ? [errorDetails] : [],
+      warnings: details.warnings || [],
+      location: details.location || 'guatemala',
+      environment: details.environment || 'production',
+      version: details.version || '1.0',
+      metadata: {
+        source: 'ExtractorW',
+        action: details.action || 'system_operation',
+        ...details
+      }
+    };
+
+    // Guardar en tabla system_execution_logs usando la estructura existente
+    if (supabase) {
+      const { error } = await supabase
+        .from('system_execution_logs')
+        .insert([logEntry]);
+
+      if (error) {
+        console.error('❌ Error guardando log del sistema:', error);
+        console.error('📋 System log entry que causó error:', JSON.stringify(logEntry, null, 2));
+      } else {
+        console.log(`🤖 Log del sistema guardado en system_execution_logs: ${scriptName} (${success ? 'éxito' : 'error'})`);
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error en logSystemOperation:', error);
+  }
+}
+
+/**
+ * Registra errores específicos en logs
+ * IMPORTANTE: Guarda en usage_logs si es usuario, en system_execution_logs si es sistema
+ */
+async function logError(operation, errorDetails, user = null, req = null) {
+  try {
+    const isSystemError = !user; // Si no hay usuario, es error del sistema
+    
+    if (isSystemError) {
+      // ERROR DEL SISTEMA -> system_execution_logs usando estructura existente
+      const executionTime = req && req.startTime ? (Date.now() - req.startTime) / 1000 : null;
+      const now = new Date();
+      
+      const systemLogEntry = {
+        script_name: operation,
+        started_at: req?.startTime ? new Date(req.startTime).toISOString() : now.toISOString(),
+        completed_at: now.toISOString(),
+        status: 'failed',
+        duration_seconds: executionTime ? Math.round(executionTime) : null,
+        error_details: [errorDetails],
+        warnings: [],
+        location: 'guatemala',
+        environment: 'production',
+        version: '1.0',
+        metadata: {
+          source: 'ExtractorW',
+          error_type: 'system_error',
+          ip_address: req?.ip || req?.connection?.remoteAddress || 'unknown',
+          user_agent: req?.headers?.['user-agent'] || 'ExtractorW-System',
+          original_error: errorDetails
+        }
+      };
+
+      if (supabase) {
+        const { error } = await supabase
+          .from('system_execution_logs')
+          .insert([systemLogEntry]);
+
+        if (!error) {
+          console.log(`💥 Error del sistema guardado en system_execution_logs: ${operation}`);
+        } else {
+          console.error('❌ Error guardando error del sistema:', error);
+        }
+      }
+    } else {
+      // ERROR DE USUARIO -> usage_logs
+      const userLogEntry = {
+        user_id: user.id,
+        user_email: user.profile.email,
+        user_role: user.profile.role || 'user',
+        operation: operation,
+        log_type: 'user',
+        credits_consumed: 0, // Errores no consumen créditos
+        ip_address: req?.ip || req?.connection?.remoteAddress || 'unknown',
+        user_agent: req?.headers?.['user-agent'] || 'unknown',
+        timestamp: new Date().toISOString(),
+        request_params: req ? JSON.stringify({
+          method: req.method,
+          params: req.params,
+          query: req.query,
+          body_keys: req.body ? Object.keys(req.body) : []
+        }) : '{}',
+        response_time: req && req.startTime ? Date.now() - req.startTime : null,
+        success: false,
+        error_details: JSON.stringify(errorDetails)
+      };
+
+      if (supabase) {
+        const { error } = await supabase
+          .from('usage_logs')
+          .insert([userLogEntry]);
+
+        if (!error) {
+          console.log(`💥 Error de usuario guardado en usage_logs: ${operation}`);
+        } else {
+          console.error('❌ Error guardando error de usuario:', error);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error en logError:', error);
   }
 }
 
@@ -1143,12 +1322,16 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
     const { 
       user_email,
       operation,
+      log_type, // 'user', 'system', o ambos
+      success, // true, false, o ambos
       days = 7,
       limit = 100,
       offset = 0
     } = req.query;
 
-    console.log(`👑 Admin ${user.profile.email} consultando logs con filtros`);
+    console.log(`👑 Admin ${user.profile.email} consultando logs con filtros`, {
+      log_type, success, user_email, operation, days
+    });
 
     if (!supabase) {
       return res.status(503).json({
@@ -1160,58 +1343,203 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
     const daysAgo = new Date();
     daysAgo.setDate(daysAgo.getDate() - parseInt(days));
 
-    let query = supabase
-      .from('usage_logs')
-      .select('*')
-      .gte('timestamp', daysAgo.toISOString());
-
-    // Aplicar filtros
-    if (user_email) {
-      query = query.ilike('user_email', `%${user_email}%`);
-    }
+    let allLogs = [];
     
-    if (operation) {
-      query = query.eq('operation', operation);
+    // 1. OBTENER LOGS DE USUARIO (usage_logs) si corresponde
+    if (!log_type || log_type === 'all' || log_type === 'user') {
+      console.log('📊 Consultando usage_logs...');
+      
+      let userQuery = supabase
+        .from('usage_logs')
+        .select('*')
+        .gte('timestamp', daysAgo.toISOString());
+
+      // Aplicar filtros específicos de usuario
+      if (user_email && user_email !== 'all') {
+        userQuery = userQuery.ilike('user_email', `%${user_email}%`);
+      }
+      
+      if (operation && operation !== 'all') {
+        userQuery = userQuery.eq('operation', operation);
+      }
+
+      if (success && success !== 'all') {
+        userQuery = userQuery.eq('success', success === 'true');
+      }
+
+      const { data: userLogs, error: userError } = await userQuery
+        .order('timestamp', { ascending: false })
+        .limit(limit * 2); // Obtener más para poder mezclar y paginar después
+
+      if (userError) {
+        console.error('Error obteniendo logs de usuario:', userError);
+      } else if (userLogs) {
+        // Normalizar logs de usuario
+        const normalizedUserLogs = userLogs.map(log => ({
+          ...log,
+          log_type: 'user',
+          source_table: 'usage_logs',
+          normalized_details: log.request_params,
+          execution_time: log.response_time
+        }));
+        allLogs.push(...normalizedUserLogs);
+      }
     }
 
-    // Ordenar por timestamp descendente y aplicar límites
-    query = query
-      .order('timestamp', { ascending: false })
-      .range(offset, offset + limit - 1);
+    // 2. OBTENER LOGS DEL SISTEMA (system_execution_logs) si corresponde
+    if (!log_type || log_type === 'all' || log_type === 'system') {
+      console.log('🤖 Consultando system_execution_logs...');
+      
+      let systemQuery = supabase
+        .from('system_execution_logs')
+        .select('*')
+        .gte('created_at', daysAgo.toISOString());
 
-    const { data: logsData, error } = await query;
+      // Aplicar filtros específicos del sistema
+      if (operation && operation !== 'all') {
+        systemQuery = systemQuery.eq('script_name', operation);
+      }
 
-    if (error) {
-      console.error('Error obteniendo logs filtrados:', error);
-      return res.status(500).json({
-        error: 'Error obteniendo logs',
-        message: error.message
-      });
+      if (success && success !== 'all') {
+        const statusFilter = success === 'true' ? 'completed' : 'failed';
+        systemQuery = systemQuery.eq('status', statusFilter);
+      }
+
+      const { data: systemLogs, error: systemError } = await systemQuery
+        .order('created_at', { ascending: false })
+        .limit(limit * 2); // Obtener más para poder mezclar y paginar después
+
+      if (systemError) {
+        console.error('Error obteniendo logs del sistema:', systemError);
+      } else if (systemLogs) {
+        // Normalizar logs del sistema para que sean compatibles
+        const normalizedSystemLogs = systemLogs.map(log => ({
+          id: log.id,
+          user_id: null,
+          user_email: 'SYSTEM',
+          user_role: 'system',
+          operation: log.script_name,
+          log_type: 'system',
+          credits_consumed: 0,
+          ip_address: log.metadata?.ip_address || 'localhost',
+          user_agent: log.metadata?.user_agent || 'ExtractorW-System',
+          timestamp: log.created_at,
+          request_params: JSON.stringify(log.metadata || {}), // Mapear metadata a request_params
+          response_time: log.duration_seconds ? `${log.duration_seconds}s` : null,
+          success: log.status === 'completed',
+          error_details: JSON.stringify(log.error_details || []),
+          source_table: 'system_execution_logs',
+          normalized_details: JSON.stringify({
+            script_name: log.script_name,
+            status: log.status,
+            trends_found: log.trends_found,
+            tweets_processed: log.tweets_processed,
+            ai_requests_made: log.ai_requests_made,
+            estimated_cost_usd: log.estimated_cost_usd,
+            location: log.location,
+            environment: log.environment
+          }),
+          execution_time: log.duration_seconds ? `${log.duration_seconds}s` : null,
+          // Campos adicionales específicos del sistema
+          system_metrics: {
+            trends_found: log.trends_found,
+            tweets_found: log.tweets_found,
+            tweets_processed: log.tweets_processed,
+            tweets_saved: log.tweets_saved,
+            tweets_failed: log.tweets_failed,
+            ai_requests_made: log.ai_requests_made,
+            ai_requests_successful: log.ai_requests_successful,
+            estimated_cost_usd: log.estimated_cost_usd
+          }
+        }));
+        allLogs.push(...normalizedSystemLogs);
+      }
     }
 
-    // Obtener conteo total para paginación
-    let countQuery = supabase
-      .from('usage_logs')
-      .select('*', { count: 'exact', head: true })
-      .gte('timestamp', daysAgo.toISOString());
+    // 3. ORDENAR Y PAGINAR LOGS COMBINADOS
+    allLogs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    
+    const totalLogs = allLogs.length;
+    const paginatedLogs = allLogs.slice(offset, offset + limit);
 
-    if (user_email) countQuery = countQuery.ilike('user_email', `%${user_email}%`);
-    if (operation) countQuery = countQuery.eq('operation', operation);
+    // 4. PROCESAR LOGS PARA MEJORAR LA VISUALIZACIÓN
+    const processedLogs = paginatedLogs.map(log => {
+      let requestData = {};
+      try {
+        requestData = JSON.parse(log.normalized_details || log.request_params || '{}');
+      } catch (e) {
+        requestData = { raw: log.normalized_details || log.request_params };
+      }
 
-    const { count, error: countError } = await countQuery;
+      let errorData = null;
+      if (log.error_details) {
+        try {
+          errorData = JSON.parse(log.error_details);
+        } catch (e) {
+          errorData = { message: log.error_details };
+        }
+      }
+
+      return {
+        ...log,
+        request_data: requestData,
+        error_data: errorData,
+        is_system: log.log_type === 'system',
+        is_success: log.success,
+        formatted_time: new Date(log.timestamp).toLocaleString('es-ES', {
+          timeZone: 'America/Guatemala',
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit'
+        })
+      };
+    });
+
+    // 5. GENERAR ESTADÍSTICAS RÁPIDAS
+    const stats = {
+      total_logs: totalLogs,
+      user_logs: allLogs.filter(log => log.log_type === 'user').length,
+      system_logs: allLogs.filter(log => log.log_type === 'system').length,
+      success_logs: allLogs.filter(log => log.success === true).length,
+      error_logs: allLogs.filter(log => log.success === false).length,
+      total_credits_consumed: allLogs
+        .filter(log => log.log_type === 'user')
+        .reduce((sum, log) => sum + (log.credits_consumed || 0), 0)
+    };
 
     res.json({
-      logs: logsData || [],
+      logs: processedLogs,
       pagination: {
-        total: count || 0,
+        total: totalLogs,
         limit: parseInt(limit),
         offset: parseInt(offset),
-        has_more: (count || 0) > (parseInt(offset) + parseInt(limit))
+        has_more: totalLogs > (parseInt(offset) + parseInt(limit))
       },
       filters_applied: {
         user_email: user_email || null,
         operation: operation || null,
+        log_type: log_type || null,
+        success: success || null,
         days: parseInt(days)
+      },
+      statistics: stats,
+      sources: {
+        usage_logs: allLogs.filter(log => log.source_table === 'usage_logs').length,
+        system_execution_logs: allLogs.filter(log => log.source_table === 'system_execution_logs').length
+      },
+      available_filters: {
+        log_types: ['user', 'system'],
+        success_states: ['true', 'false'],
+        common_operations: [
+          '/api/processTrends',
+          '/api/cron/processTrends',
+          '/api/sondeo',
+          '/api/create-document',
+          '/api/trending-tweets'
+        ]
       },
       timestamp: new Date().toISOString()
     });
@@ -1225,7 +1553,241 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
   }
 });
 
+// Nuevo endpoint para estadísticas específicas de logs
+app.get('/api/admin/logs/stats', verifyUserAccess, async (req, res) => {
+  try {
+    const user = req.user;
+    
+    // Verificar que el usuario sea admin
+    if (user.profile.role !== 'admin') {
+      return res.status(403).json({
+        error: 'Acceso denegado',
+        message: 'Solo los administradores pueden acceder a este endpoint'
+      });
+    }
 
+    const { days = 7 } = req.query;
+    console.log(`📊 Admin ${user.profile.email} consultando estadísticas de logs (${days} días) desde ambas tablas`);
+
+    if (!supabase) {
+      return res.status(503).json({
+        error: 'Base de datos no configurada',
+        message: 'Supabase no está disponible'
+      });
+    }
+
+    const daysAgo = new Date();
+    daysAgo.setDate(daysAgo.getDate() - parseInt(days));
+
+    // 1. OBTENER LOGS DE USUARIO (usage_logs)
+    const { data: userLogsData, error: userError } = await supabase
+      .from('usage_logs')
+      .select('log_type, operation, success, credits_consumed, timestamp, user_role')
+      .gte('timestamp', daysAgo.toISOString());
+
+    // 2. OBTENER LOGS DEL SISTEMA (system_execution_logs)
+    const { data: systemLogsData, error: systemError } = await supabase
+      .from('system_execution_logs')
+      .select('script_name, status, created_at, tweets_processed, ai_requests_made, estimated_cost_usd')
+      .gte('created_at', daysAgo.toISOString());
+
+    if (userError) {
+      console.error('Error obteniendo logs de usuario:', userError);
+    }
+    
+    if (systemError) {
+      console.error('Error obteniendo logs del sistema:', systemError);
+    }
+
+    // 3. NORMALIZAR Y COMBINAR DATOS
+    let allLogsData = [];
+
+    // Procesar logs de usuario
+    if (userLogsData) {
+      const normalizedUserLogs = userLogsData.map(log => ({
+        log_type: 'user',
+        operation: log.operation,
+        success: log.success,
+        credits_consumed: log.credits_consumed || 0,
+        timestamp: log.timestamp,
+        user_role: log.user_role,
+        source: 'usage_logs'
+      }));
+      allLogsData.push(...normalizedUserLogs);
+    }
+
+    // Procesar logs del sistema
+    if (systemLogsData) {
+      const normalizedSystemLogs = systemLogsData.map(log => ({
+        log_type: 'system',
+        operation: log.script_name,
+        success: log.status === 'completed',
+        credits_consumed: 0, // Sistema no consume créditos de usuario
+        timestamp: log.created_at,
+        user_role: 'system',
+        source: 'system_execution_logs',
+        system_metrics: {
+          tweets_processed: log.tweets_processed || 0,
+          ai_requests_made: log.ai_requests_made || 0,
+          estimated_cost_usd: log.estimated_cost_usd || 0
+        }
+      }));
+      allLogsData.push(...normalizedSystemLogs);
+    }
+
+    // 4. PROCESAR ESTADÍSTICAS
+    const stats = {
+      overview: {
+        total_logs: allLogsData.length,
+        user_logs: 0,
+        system_logs: 0,
+        success_logs: 0,
+        error_logs: 0,
+        total_credits_consumed: 0,
+        period_days: parseInt(days)
+      },
+      by_type: {
+        user: {
+          total: 0,
+          success: 0,
+          errors: 0,
+          credits_consumed: 0,
+          operations: {}
+        },
+        system: {
+          total: 0,
+          success: 0,
+          errors: 0,
+          credits_consumed: 0,
+          operations: {}
+        }
+      },
+      top_operations: [],
+      daily_breakdown: {},
+      error_summary: [],
+      sources: {
+        usage_logs: userLogsData?.length || 0,
+        system_execution_logs: systemLogsData?.length || 0
+      }
+    };
+
+    if (allLogsData.length > 0) {
+      // Procesar cada log
+      allLogsData.forEach(log => {
+        const logType = log.log_type;
+        const isSuccess = log.success !== false; // Default true si no está definido
+        const credits = log.credits_consumed || 0;
+        const operation = log.operation || 'unknown';
+        
+        // Estadísticas generales
+        stats.overview[`${logType}_logs`]++;
+        if (isSuccess) {
+          stats.overview.success_logs++;
+        } else {
+          stats.overview.error_logs++;
+        }
+        stats.overview.total_credits_consumed += credits;
+
+        // Estadísticas por tipo
+        const typeStats = stats.by_type[logType];
+        if (typeStats) {
+          typeStats.total++;
+          if (isSuccess) {
+            typeStats.success++;
+          } else {
+            typeStats.errors++;
+          }
+          typeStats.credits_consumed += credits;
+          
+          // Contar operaciones
+          if (!typeStats.operations[operation]) {
+            typeStats.operations[operation] = { count: 0, credits: 0, errors: 0 };
+          }
+          typeStats.operations[operation].count++;
+          typeStats.operations[operation].credits += credits;
+          if (!isSuccess) {
+            typeStats.operations[operation].errors++;
+          }
+        }
+
+        // Desglose diario
+        const dateKey = log.timestamp.split('T')[0];
+        if (!stats.daily_breakdown[dateKey]) {
+          stats.daily_breakdown[dateKey] = {
+            user_logs: 0,
+            system_logs: 0,
+            success_logs: 0,
+            error_logs: 0,
+            credits_consumed: 0
+          };
+        }
+        stats.daily_breakdown[dateKey][`${logType}_logs`]++;
+        stats.daily_breakdown[dateKey][isSuccess ? 'success_logs' : 'error_logs']++;
+        stats.daily_breakdown[dateKey].credits_consumed += credits;
+
+        // Recopilar errores
+        if (!isSuccess) {
+          stats.error_summary.push({
+            operation,
+            log_type: logType,
+            timestamp: log.timestamp,
+            user_role: log.user_role,
+            source: log.source
+          });
+        }
+      });
+
+      // Top operaciones
+      const allOperations = {};
+      Object.keys(stats.by_type).forEach(type => {
+        Object.entries(stats.by_type[type].operations).forEach(([op, data]) => {
+          if (!allOperations[op]) {
+            allOperations[op] = { count: 0, credits: 0, errors: 0, types: [] };
+          }
+          allOperations[op].count += data.count;
+          allOperations[op].credits += data.credits;
+          allOperations[op].errors += data.errors;
+          if (!allOperations[op].types.includes(type)) {
+            allOperations[op].types.push(type);
+          }
+        });
+      });
+
+      stats.top_operations = Object.entries(allOperations)
+        .map(([operation, data]) => ({
+          operation,
+          ...data,
+          success_rate: data.count > 0 ? (((data.count - data.errors) / data.count) * 100).toFixed(1) + '%' : '0%'
+        }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 10);
+
+      // Convertir daily_breakdown a array ordenado
+      stats.daily_breakdown = Object.entries(stats.daily_breakdown)
+        .map(([date, data]) => ({ date, ...data }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+    }
+
+    res.json({
+      success: true,
+      statistics: stats,
+      metadata: {
+        period: `${days} días`,
+        generated_at: new Date().toISOString(),
+        generated_by: user.profile.email,
+        timezone: 'America/Guatemala',
+        tables_consulted: ['usage_logs', 'system_execution_logs']
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error generando estadísticas de logs:', error);
+    res.status(500).json({
+      error: 'Error interno',
+      message: error.message
+    });
+  }
+});
 
 // 📊 ============ FIN ENDPOINTS PANEL DE ADMINISTRACIÓN ============
 
@@ -1704,47 +2266,40 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
     const aboutArray = processedAbout.map(item => item.about);
     console.log(`📊 aboutArray generado con ${aboutArray.length} items`);
 
-    // --- SANITIZAR aboutArray para Supabase ---
-    const sanitizedAboutArray = aboutArray.map(about => {
-      // Crear una copia limpia del objeto about, eliminando propiedades problemáticas
-      const sanitized = {
-        nombre: about.nombre || '',
-        tipo: about.tipo || 'hashtag',
-        categoria: about.categoria || 'Otros',
-        resumen: about.resumen || '',
-        relevancia: about.relevancia || 'baja',
+    // --- SANITIZAR aboutArray para Supabase (VERSION SIMPLIFICADA) ---
+    console.log('🧹 Creando versión ultra-simplificada de aboutArray para Supabase...');
+    
+    const ultraSimplifiedAboutArray = aboutArray.map((about, index) => {
+      // Crear objeto ultra-simple, solo campos básicos y strings seguros
+      const simplified = {
+        nombre: String(about.nombre || '').substring(0, 100).replace(/[\u0000-\u001F\u007F-\u009F]/g, ''), // Remover caracteres de control
+        categoria: String(about.categoria || 'Otros').substring(0, 50).replace(/[^a-zA-ZáéíóúÁÉÍÓÚñÑ\/\s]/g, ''), // Solo letras y espacios
+        resumen: String(about.resumen || '').substring(0, 300).replace(/[\u0000-\u001F\u007F-\u009F]/g, ''), // Máximo 300 chars, sin caracteres de control
+        relevancia: ['alta', 'media', 'baja'].includes(about.relevancia) ? about.relevancia : 'baja',
         contexto_local: Boolean(about.contexto_local),
-        razon_tendencia: about.razon_tendencia || '',
-        sentimiento_tweets: about.sentimiento_tweets || 'neutral',
-        source: about.source || 'default',
-        model: about.model || 'default',
-        tweets_used: Number(about.tweets_used) || 0,
-        search_query: about.search_query || '',
-        timestamp: about.timestamp || new Date().toISOString()
+        source: String(about.source || 'default').substring(0, 20),
+        tweets_usados: Number(about.tweets_used) || 0,
+        index_orden: index
       };
       
-      // Incluir palabras_clave solo si existe y es un array válido
-      if (about.palabras_clave && Array.isArray(about.palabras_clave)) {
-        sanitized.palabras_clave = about.palabras_clave.filter(p => p && typeof p === 'string');
+      // Solo agregar campos opcionales si son válidos
+      if (about.tipo && typeof about.tipo === 'string' && about.tipo.length > 0) {
+        simplified.tipo = String(about.tipo).substring(0, 30).replace(/[^a-zA-ZáéíóúÁÉÍÓÚñÑ]/g, '');
       }
       
-      // Incluir tweets_context simplificado si existe
-      if (about.tweets_context && Array.isArray(about.tweets_context)) {
-        sanitized.tweets_context = about.tweets_context.map(t => ({
-          texto: String(t.texto || '').substring(0, 100),
-          likes: Number(t.likes) || 0,
-          sentiment: String(t.sentiment || 'neutral')
-        })).filter(t => t.texto.length > 0);
+      if (about.razon_tendencia && typeof about.razon_tendencia === 'string' && about.razon_tendencia.length > 0) {
+        simplified.razon_tendencia = String(about.razon_tendencia).substring(0, 200).replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
       }
       
-      return sanitized;
+      return simplified;
     });
     
-    console.log(`📊 aboutArray sanitizado con ${sanitizedAboutArray.length} items`);
+    console.log(`🧹 AboutArray ultra-simplificado creado con ${ultraSimplifiedAboutArray.length} items`);
+    console.log('📋 Ejemplo simplificado:', JSON.stringify(ultraSimplifiedAboutArray[0] || {}, null, 2));
 
     // --- NUEVO: Generar categoryData enriquecido usando la categoría de about ---
     const enrichedCategoryMap = {};
-    sanitizedAboutArray.forEach(about => {
+    ultraSimplifiedAboutArray.forEach(about => {
       const cat = about.categoria || 'Otros';
       if (enrichedCategoryMap[cat]) {
         enrichedCategoryMap[cat] += 1;
@@ -1766,7 +2321,7 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
       try {
         console.log('🔄 Actualizando registro en Supabase con about, estadísticas y categoryData enriquecido...');
         console.log(`📝 Datos a actualizar:`, {
-          aboutCount: sanitizedAboutArray.length,
+          aboutCount: ultraSimplifiedAboutArray.length,
           statisticsKeys: Object.keys(statistics),
           categoryDataCount: enrichedCategoryData.length,
           recordId: recordId
@@ -1777,14 +2332,14 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
         
         // Verificar sanitizedAboutArray
         try {
-          const aboutJson = JSON.stringify(sanitizedAboutArray);
+          const aboutJson = JSON.stringify(ultraSimplifiedAboutArray);
           console.log('✅ sanitizedAboutArray serializable:', aboutJson.length, 'caracteres');
-          if (sanitizedAboutArray.length > 0) {
-            console.log('📋 Primer item about:', JSON.stringify(sanitizedAboutArray[0], null, 2));
+          if (ultraSimplifiedAboutArray.length > 0) {
+            console.log('📋 Primer item about:', JSON.stringify(ultraSimplifiedAboutArray[0], null, 2));
           }
         } catch (aboutError) {
           console.error('❌ ERROR en sanitizedAboutArray:', aboutError.message);
-          console.log('📋 Datos problemáticos en about:', sanitizedAboutArray);
+          console.log('📋 Datos problemáticos en about:', ultraSimplifiedAboutArray);
           throw new Error(`sanitizedAboutArray no serializable: ${aboutError.message}`);
         }
         
@@ -1814,7 +2369,7 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
         
         // Preparar objeto completo de actualización
         const updateObject = {
-          about: sanitizedAboutArray,
+          about: ultraSimplifiedAboutArray,
           statistics: statistics,
           category_data: enrichedCategoryData,
           processing_status: 'complete'
@@ -1854,7 +2409,7 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
             console.log('📝 Actualizando solo campo about...');
             const { error: aboutError } = await supabase
               .from('trends')
-              .update({ about: sanitizedAboutArray })
+              .update({ about: ultraSimplifiedAboutArray })
               .eq('id', recordId);
             
             if (aboutError) {
@@ -2238,9 +2793,17 @@ app.get('/api/latestTrends', async (req, res) => {
 
 // Endpoint específico para cron jobs automatizados del sistema (SIN autenticación, SIN créditos)
 app.post('/api/cron/processTrends', async (req, res) => {
+  const startTime = Date.now();
   console.log(`🤖 [CRON JOB] Solicitud automatizada de procesamiento de tendencias - ${new Date().toISOString()}`);
   
   try {
+    // REGISTRAR INICIO DE OPERACIÓN DEL SISTEMA
+    await logSystemOperation('cron_process_trends', {
+      action: 'start',
+      started_at: new Date().toISOString(),
+      has_raw_data: !!req.body.rawData
+    });
+
     // 1. Obtener datos crudos (igual que el endpoint original)
     let rawData = req.body.rawData;
     
@@ -2248,10 +2811,28 @@ app.post('/api/cron/processTrends', async (req, res) => {
       console.log('🤖 [CRON] Obteniendo datos de VPS API...');
       const response = await fetch(VPS_API_URL);
       if (!response.ok) {
+        const errorDetails = {
+          status: response.status,
+          statusText: response.statusText,
+          vps_url: VPS_API_URL
+        };
+        
+        // Log del error
+        await logSystemOperation('cron_process_trends', {
+          action: 'vps_api_error',
+          error_details: errorDetails
+        }, false, errorDetails);
+        
         throw new Error(`Error al obtener datos de la API: ${response.status} ${response.statusText}`);
       }
       rawData = await response.json();
       console.log('🤖 [CRON] Datos obtenidos de VPS API exitosamente');
+      
+      // Log de éxito obteniendo datos
+      await logSystemOperation('cron_process_trends', {
+        action: 'vps_data_obtained',
+        data_size: JSON.stringify(rawData).length
+      });
     }
     
     if (!rawData) {
@@ -2263,6 +2844,12 @@ app.post('/api/cron/processTrends', async (req, res) => {
           category: ['Política', 'Economía', 'Deportes', 'Tecnología', 'Entretenimiento'][i % 5]
         }))
       };
+      
+      // Log de generación de datos mock
+      await logSystemOperation('cron_process_trends', {
+        action: 'mock_data_generated',
+        trends_found: rawData.trends.length
+      });
     }
     
     // 2. Reutilizar la misma lógica de procesamiento que el endpoint original
@@ -2270,6 +2857,13 @@ app.post('/api/cron/processTrends', async (req, res) => {
     
     // Llamar a la función de procesamiento local
     const processedData = await processLocalTrends(rawData);
+    
+    // Log de procesamiento completado
+    await logSystemOperation('cron_process_trends', {
+      action: 'data_processed',
+      trends_found: processedData.topKeywords?.length || 0,
+      trends_processed: processedData.topKeywords?.length || 0
+    });
     
     // 3. Guardar en Supabase si está disponible
     let recordId = null;
@@ -2294,16 +2888,44 @@ app.post('/api/cron/processTrends', async (req, res) => {
           
         if (error) {
           console.error('🤖 [CRON] Error guardando en Supabase:', error);
+          
+          // Log del error de Supabase
+          await logSystemOperation('cron_process_trends', {
+            action: 'supabase_save_error',
+            error_details: error
+          }, false, error);
         } else {
           console.log('🤖 [CRON] Datos guardados exitosamente');
           recordId = data && data[0] ? data[0].id : null;
+          
+          // Log de éxito guardando en Supabase
+          await logSystemOperation('cron_process_trends', {
+            action: 'supabase_saved',
+            record_id: recordId
+          });
         }
       } catch (err) {
         console.error('🤖 [CRON] Error al guardar en Supabase:', err);
+        
+        // Log del error de conexión
+        await logSystemOperation('cron_process_trends', {
+          action: 'supabase_connection_error',
+          error_details: err
+        }, false, err);
       }
     }
     
+    const executionTime = Date.now() - startTime;
     console.log('🤖 [CRON] ✅ Procesamiento automatizado completado exitosamente');
+    
+    // LOG FINAL DE ÉXITO
+    await logSystemOperation('cron_process_trends', {
+      action: 'completed_successfully',
+      execution_time: `${executionTime}ms`,
+      record_id: recordId,
+      trends_found: processedData.topKeywords?.length || 0,
+      trends_processed: processedData.topKeywords?.length || 0
+    }, true);
     
     res.json({
       success: true,
@@ -2312,6 +2934,7 @@ app.post('/api/cron/processTrends', async (req, res) => {
       timestamp: processedData.timestamp,
       data: processedData,
       record_id: recordId,
+      execution_time: `${executionTime}ms`,
       note: 'Procesamiento automatizado del sistema - Sin costo de créditos'
     });
     
@@ -2320,16 +2943,35 @@ app.post('/api/cron/processTrends', async (req, res) => {
       const top10 = processedData.topKeywords.slice(0, 10).map(item => ({ name: item.keyword }));
       processAboutInBackground(top10, rawData, recordId, processedData.timestamp).catch(error => {
         console.error('🤖 [CRON] Error en procesamiento background:', error);
+        
+        // Log del error en background
+        logSystemOperation('cron_process_trends', {
+          action: 'background_processing_error',
+          error_details: error.message
+        }, false, error).catch(e => console.error('Error logging background error:', e));
       });
     }
     
   } catch (error) {
+    const executionTime = Date.now() - startTime;
     console.error('🤖 [CRON] ❌ Error en procesamiento automatizado:', error);
+    
+    // LOG FINAL DE ERROR
+    await logSystemOperation('cron_process_trends', {
+      action: 'failed_with_error',
+      execution_time: `${executionTime}ms`,
+      error_message: error.message
+    }, false, {
+      message: error.message,
+      stack: error.stack
+    });
+    
     res.status(500).json({ 
       success: false,
       error: 'Error en procesamiento automatizado', 
       message: error.message,
       source: 'cron_job_automated',
+      execution_time: `${executionTime}ms`,
       timestamp: new Date().toISOString()
     });
   }
@@ -3619,3 +4261,118 @@ async function logAdminAction(user, action, details) {
     console.error('Error en logAdminAction:', error);
   }
 }
+
+// Endpoint de verificación del sistema de logging
+app.get('/api/admin/logging-status', verifyUserAccess, async (req, res) => {
+  try {
+    const user = req.user;
+    
+    // Verificar que el usuario sea admin
+    if (user.profile.role !== 'admin') {
+      return res.status(403).json({
+        error: 'Acceso denegado',
+        message: 'Solo los administradores pueden acceder a este endpoint'
+      });
+    }
+
+    console.log(`👑 Admin ${user.profile.email} verificando estado del sistema de logging`);
+
+    if (!supabase) {
+      return res.status(503).json({
+        error: 'Base de datos no configurada',
+        message: 'Supabase no está disponible'
+      });
+    }
+
+    // Verificar tablas de logging
+    let status = {
+      timestamp: new Date().toISOString(),
+      tables: {
+        usage_logs: { exists: false, recent_count: 0, error: null },
+        system_execution_logs: { exists: false, recent_count: 0, error: null }
+      },
+      logging_functions: {
+        logUsage: 'usage_logs',
+        logSystemOperation: 'system_execution_logs', 
+        logError: 'Determina tabla según usuario/sistema'
+      },
+      admin_endpoints: [
+        '/api/admin/logs - Combina ambas tablas',
+        '/api/admin/logs/stats - Estadísticas de ambas tablas'
+      ]
+    };
+
+    // Verificar usage_logs
+    try {
+      const { data: userLogs, error: userError } = await supabase
+        .from('usage_logs')
+        .select('id')
+        .gte('timestamp', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+        .limit(1);
+
+      if (userError) {
+        status.tables.usage_logs.error = userError.message;
+      } else {
+        status.tables.usage_logs.exists = true;
+        
+        // Contar registros recientes
+        const { count } = await supabase
+          .from('usage_logs')
+          .select('*', { count: 'exact', head: true })
+          .gte('timestamp', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+        
+        status.tables.usage_logs.recent_count = count || 0;
+      }
+    } catch (error) {
+      status.tables.usage_logs.error = error.message;
+    }
+
+    // Verificar system_execution_logs
+    try {
+      const { data: systemLogs, error: systemError } = await supabase
+        .from('system_execution_logs')
+        .select('id')
+        .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+        .limit(1);
+
+      if (systemError) {
+        status.tables.system_execution_logs.error = systemError.message;
+      } else {
+        status.tables.system_execution_logs.exists = true;
+        
+        // Contar registros recientes
+        const { count } = await supabase
+          .from('system_execution_logs')
+          .select('*', { count: 'exact', head: true })
+          .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+        
+        status.tables.system_execution_logs.recent_count = count || 0;
+      }
+    } catch (error) {
+      status.tables.system_execution_logs.error = error.message;
+    }
+
+    // Determinar estado general
+    const bothTablesExist = status.tables.usage_logs.exists && status.tables.system_execution_logs.exists;
+    
+    res.json({
+      success: bothTablesExist,
+      message: bothTablesExist ? 
+        'Sistema de logging separado configurado correctamente' : 
+        'Algunas tablas de logging no están disponibles',
+      status: status,
+      recommendations: bothTablesExist ? [] : [
+        'Verificar que las tablas usage_logs y system_execution_logs existen en Supabase',
+        'Ejecutar scripts de migración si es necesario',
+        'Verificar permisos de acceso a las tablas'
+      ]
+    });
+
+  } catch (error) {
+    console.error('❌ Error verificando sistema de logging:', error);
+    res.status(500).json({
+      error: 'Error interno',
+      message: error.message
+    });
+  }
+});
