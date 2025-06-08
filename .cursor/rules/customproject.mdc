@@ -1,0 +1,9 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+ExtractorW, maneja el servidor backend
+ExtractorT maneja el scrapper y el servidor asociado
+PulseJ, es el frontend
+NewsCron es el file de automatizaciones.

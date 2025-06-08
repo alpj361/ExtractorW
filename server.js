@@ -1209,6 +1209,8 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
   }
 });
 
+
+
 // 📊 ============ FIN ENDPOINTS PANEL DE ADMINISTRACIÓN ============
 
 // Aplicar middlewares globales para operaciones que requieren créditos
@@ -1686,9 +1688,47 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
     const aboutArray = processedAbout.map(item => item.about);
     console.log(`📊 aboutArray generado con ${aboutArray.length} items`);
 
+    // --- SANITIZAR aboutArray para Supabase ---
+    const sanitizedAboutArray = aboutArray.map(about => {
+      // Crear una copia limpia del objeto about, eliminando propiedades problemáticas
+      const sanitized = {
+        nombre: about.nombre || '',
+        tipo: about.tipo || 'hashtag',
+        categoria: about.categoria || 'Otros',
+        resumen: about.resumen || '',
+        relevancia: about.relevancia || 'baja',
+        contexto_local: Boolean(about.contexto_local),
+        razon_tendencia: about.razon_tendencia || '',
+        sentimiento_tweets: about.sentimiento_tweets || 'neutral',
+        source: about.source || 'default',
+        model: about.model || 'default',
+        tweets_used: Number(about.tweets_used) || 0,
+        search_query: about.search_query || '',
+        timestamp: about.timestamp || new Date().toISOString()
+      };
+      
+      // Incluir palabras_clave solo si existe y es un array válido
+      if (about.palabras_clave && Array.isArray(about.palabras_clave)) {
+        sanitized.palabras_clave = about.palabras_clave.filter(p => p && typeof p === 'string');
+      }
+      
+      // Incluir tweets_context simplificado si existe
+      if (about.tweets_context && Array.isArray(about.tweets_context)) {
+        sanitized.tweets_context = about.tweets_context.map(t => ({
+          texto: String(t.texto || '').substring(0, 100),
+          likes: Number(t.likes) || 0,
+          sentiment: String(t.sentiment || 'neutral')
+        })).filter(t => t.texto.length > 0);
+      }
+      
+      return sanitized;
+    });
+    
+    console.log(`📊 aboutArray sanitizado con ${sanitizedAboutArray.length} items`);
+
     // --- NUEVO: Generar categoryData enriquecido usando la categoría de about ---
     const enrichedCategoryMap = {};
-    aboutArray.forEach(about => {
+    sanitizedAboutArray.forEach(about => {
       const cat = about.categoria || 'Otros';
       if (enrichedCategoryMap[cat]) {
         enrichedCategoryMap[cat] += 1;
@@ -1710,16 +1750,27 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
       try {
         console.log('🔄 Actualizando registro en Supabase con about, estadísticas y categoryData enriquecido...');
         console.log(`📝 Datos a actualizar:`, {
-          aboutCount: aboutArray.length,
+          aboutCount: sanitizedAboutArray.length,
           statisticsKeys: Object.keys(statistics),
           categoryDataCount: enrichedCategoryData.length,
           recordId: recordId
         });
         
+        // Verificar que los datos se pueden serializar antes de enviar
+        try {
+          JSON.stringify(sanitizedAboutArray);
+          JSON.stringify(statistics);
+          JSON.stringify(enrichedCategoryData);
+          console.log('✅ Datos validados para serialización JSON');
+        } catch (serializationError) {
+          console.error('❌ Error de serialización:', serializationError);
+          throw new Error(`Datos no serializables: ${serializationError.message}`);
+        }
+        
         const { error: updateError } = await supabase
           .from('trends')
           .update({
-            about: aboutArray,
+            about: sanitizedAboutArray,
             statistics: statistics,
             category_data: enrichedCategoryData,
             processing_status: 'complete'
@@ -2225,10 +2276,17 @@ app.get('/api/trending-tweets', async (req, res) => {
       });
     }
 
-    // Obtener tweets de las últimas 24 horas, agrupados por categoría
+    // Obtener tweets de las últimas 24 horas con análisis de sentimiento
     const { data: tweets, error } = await supabase
       .from('trending_tweets')
-      .select('*')
+      .select(`
+        *,
+        sentimiento,
+        score_sentimiento,
+        confianza_sentimiento,
+        emociones_detectadas,
+        intencion_comunicativa
+      `)
       .gte('fecha_captura', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
       .order('fecha_captura', { ascending: false })
       .limit(50);
@@ -2241,42 +2299,39 @@ app.get('/api/trending-tweets', async (req, res) => {
       });
     }
 
-    // Generar análisis de sentimiento para cada tweet
-    const tweetsWithSentiment = await Promise.all(
-      tweets.map(async (tweet) => {
-        let sentiment = 'neutral';
-        
-        // Análisis básico de sentimiento (puedes usar IA aquí si está disponible)
-        if (PERPLEXITY_API_KEY && USE_AI) {
-          try {
-            sentiment = await analyzeTweetSentiment(tweet.texto);
-          } catch (error) {
-            console.warn(`Error analizando sentimiento para tweet ${tweet.id}:`, error.message);
-          }
-        } else {
-          // Análisis de sentimiento básico sin IA
-          sentiment = basicSentimentAnalysis(tweet.texto);
-        }
+    // Usar los datos de sentimiento ya almacenados en la base de datos
+    const tweetsWithSentiment = tweets.map(tweet => {
+      // Usar el sentimiento almacenado, o fallback básico si no existe
+      let sentiment = tweet.sentimiento || 'neutral';
+      
+      // Si no hay sentimiento almacenado, usar análisis básico como fallback
+      if (!tweet.sentimiento) {
+        sentiment = basicSentimentAnalysis(tweet.texto);
+      }
 
-        return {
-          id: tweet.id,
-          tweet_id: tweet.tweet_id,
-          usuario: tweet.usuario,
-          texto: tweet.texto,
-          enlace: tweet.enlace,
-          likes: tweet.likes || 0,
-          retweets: tweet.retweets || 0,
-          replies: tweet.replies || 0,
-          verified: tweet.verified || false,
-          trend_original: tweet.trend_original,
-          trend_clean: tweet.trend_clean,
-          categoria: tweet.categoria,
-          fecha_tweet: tweet.fecha_tweet,
-          fecha_captura: tweet.fecha_captura,
-          sentiment: sentiment
-        };
-      })
-    );
+      return {
+        id: tweet.id,
+        tweet_id: tweet.tweet_id,
+        usuario: tweet.usuario,
+        texto: tweet.texto,
+        enlace: tweet.enlace,
+        likes: tweet.likes || 0,
+        retweets: tweet.retweets || 0,
+        replies: tweet.replies || 0,
+        verified: tweet.verified || false,
+        trend_original: tweet.trend_original,
+        trend_clean: tweet.trend_clean,
+        categoria: tweet.categoria,
+        fecha_tweet: tweet.fecha_tweet,
+        fecha_captura: tweet.fecha_captura,
+        sentiment: sentiment,
+        // Incluir datos adicionales de análisis si están disponibles
+        score_sentimiento: tweet.score_sentimiento,
+        confianza_sentimiento: tweet.confianza_sentimiento,
+        emociones_detectadas: tweet.emociones_detectadas,
+        intencion_comunicativa: tweet.intencion_comunicativa
+      };
+    });
 
     // Agrupar por categoría
     const tweetsByCategory = tweetsWithSentiment.reduce((acc, tweet) => {
@@ -2320,55 +2375,7 @@ app.get('/api/trending-tweets', async (req, res) => {
   }
 });
 
-// Función auxiliar para análisis de sentimiento con IA
-async function analyzeTweetSentiment(text) {
-  try {
-    const prompt = `Analiza el sentimiento del siguiente tweet y responde solo con una palabra: "positivo", "negativo" o "neutral".
 
-Tweet: "${text}"
-
-Respuesta:`;
-
-    const payload = {
-      model: 'sonar-pro',
-      messages: [
-        {
-          role: 'system',
-          content: 'Eres un experto en análisis de sentimientos. Responde solo con una palabra: positivo, negativo o neutral.'
-        },
-        {
-          role: 'user',
-          content: prompt
-        }
-      ],
-      temperature: 0.1,
-      max_tokens: 10
-    };
-
-    const response = await fetch('https://api.perplexity.ai/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      const sentiment = data.choices?.[0]?.message?.content?.trim().toLowerCase();
-      
-      if (sentiment && ['positivo', 'negativo', 'neutral'].includes(sentiment)) {
-        return sentiment;
-      }
-    }
-  } catch (error) {
-    console.warn('Error en análisis de sentimiento IA:', error.message);
-  }
-  
-  // Fallback a análisis básico
-  return basicSentimentAnalysis(text);
-}
 
 // Función auxiliar para análisis de sentimiento básico (sin IA)
 function basicSentimentAnalysis(text) {
@@ -3233,3 +3240,246 @@ app.post('/api/test-email', async (req, res) => {
 });
 
 // 📧 ============ FIN ENDPOINTS DE EMAIL ============
+
+// Endpoint para re-analizar tweets (solo admins)
+app.post('/api/admin/reanalyze-tweets', verifyUserAccess, async (req, res) => {
+  try {
+    const user = req.user;
+    
+    // Verificar que el usuario sea admin
+    if (user.profile.role !== 'admin') {
+      return res.status(403).json({
+        error: 'Acceso denegado',
+        message: 'Solo los administradores pueden re-analizar tweets'
+      });
+    }
+
+    console.log(`👑 Admin ${user.profile.email} solicitando re-análisis de tweets`);
+
+    const { limit = 20, force_all = false, only_failed = false } = req.body;
+
+    // Configurar URL del VPS para re-análisis
+    const VPS_REANALYZE_URL = process.env.VPS_REANALYZE_URL || 'https://api.standatpd.com/reanalyze-tweets';
+
+    console.log(`🔄 Iniciando re-análisis de ${limit} tweets...`);
+
+    try {
+      // Ejecutar el script de re-análisis de NewsCron directamente
+      const { spawn } = require('child_process');
+      const path = require('path');
+      
+      // Buscar el directorio de NewsCron
+      const newsCronPath = process.env.NEWSCRON_PATH || '../NewsCron';
+      const scriptPath = path.join(newsCronPath, 'reanalyze_tweets.js');
+      
+      console.log('📁 Ejecutando script en:', scriptPath);
+      console.log('📋 Parámetros:', { limit, force_all, only_failed });
+
+      // Preparar argumentos para el script
+      const args = ['reanalyze_tweets.js', '--limit', limit.toString()];
+      if (force_all) args.push('--force-all');
+      if (only_failed) args.push('--only-failed');
+      args.push('--source', 'admin_panel');
+
+      // Ejecutar el script de Node.js
+      const startTime = Date.now();
+      const childProcess = spawn('node', args, {
+        cwd: newsCronPath,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      childProcess.stdout.on('data', (data) => {
+        stdout += data.toString();
+        console.log('📤 Script output:', data.toString().trim());
+      });
+
+      childProcess.stderr.on('data', (data) => {
+        stderr += data.toString();
+        console.error('⚠️ Script error:', data.toString().trim());
+      });
+
+      // Crear una promesa para manejar el proceso
+      const vpsResult = await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          childProcess.kill();
+          reject(new Error('Timeout: El proceso excedió 5 minutos'));
+        }, 300000); // 5 minutos
+
+        childProcess.on('close', (code) => {
+          clearTimeout(timeout);
+          const executionTime = ((Date.now() - startTime) / 1000).toFixed(2);
+          
+          console.log(`📊 Script terminado con código: ${code}, tiempo: ${executionTime}s`);
+          
+          if (code === 0) {
+            // Parsear la salida para extraer estadísticas
+            const result = {
+              success: true,
+              tweets_processed: limit,
+              tweets_updated: 0,
+              tweets_failed: 0,
+              execution_time: `${executionTime}s`,
+              success_rate: '100%',
+              script_output: stdout,
+              method: 'newscron_direct'
+            };
+
+            // Intentar extraer métricas reales de la salida
+            const lines = stdout.split('\n');
+            for (const line of lines) {
+              if (line.includes('tweets procesados:')) {
+                const match = line.match(/(\d+)/);
+                if (match) result.tweets_processed = parseInt(match[1]);
+              }
+              if (line.includes('tweets actualizados:')) {
+                const match = line.match(/(\d+)/);
+                if (match) result.tweets_updated = parseInt(match[1]);
+              }
+              if (line.includes('tweets fallidos:')) {
+                const match = line.match(/(\d+)/);
+                if (match) result.tweets_failed = parseInt(match[1]);
+              }
+            }
+
+            // Calcular tasa de éxito real
+            if (result.tweets_processed > 0) {
+              const successCount = result.tweets_processed - result.tweets_failed;
+              result.success_rate = `${((successCount / result.tweets_processed) * 100).toFixed(1)}%`;
+            }
+
+            resolve(result);
+          } else {
+            reject(new Error(`El script falló con código ${code}. Error: ${stderr}`));
+          }
+        });
+
+        childProcess.on('error', (error) => {
+          clearTimeout(timeout);
+          reject(new Error(`Error ejecutando script: ${error.message}`));
+        });
+      });
+      
+      console.log('✅ Re-análisis completado:', vpsResult);
+
+      // Registrar la acción en logs
+      await logAdminAction(user, 'reanalyze_tweets', {
+        tweets_limit: limit,
+        force_all,
+        only_failed,
+        vps_response: vpsResult
+      });
+
+      res.json({
+        success: true,
+        message: 'Re-análisis de tweets completado exitosamente usando NewsCron',
+        results: {
+          tweets_processed: vpsResult.tweets_processed || limit,
+          tweets_updated: vpsResult.tweets_updated || 0,
+          tweets_failed: vpsResult.tweets_failed || 0,
+          execution_time: vpsResult.execution_time || 'No disponible',
+          success_rate: vpsResult.success_rate || 'No disponible',
+          method: 'newscron_direct_script'
+        },
+        admin_user: user.profile.email,
+        timestamp: new Date().toISOString(),
+        script_details: {
+          method: vpsResult.method,
+          output_sample: vpsResult.script_output ? vpsResult.script_output.substring(0, 500) + '...' : 'No output'
+        }
+      });
+
+    } catch (vpsError) {
+      console.error('❌ Error comunicándose con VPS:', vpsError);
+      
+      // Si falla el VPS, intentar ejecutar localmente (fallback)
+      console.log('🔄 Fallback: intentando re-análisis local...');
+      
+      try {
+        // Verificar si tenemos acceso a la base de datos localmente
+        if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase) {
+          throw new Error('Base de datos no configurada para fallback local');
+        }
+
+        // Obtener tweets para re-analizar localmente
+        const { data: tweets, error } = await supabase
+          .from('trending_tweets')
+          .select('*')
+          .order('fecha_captura', { ascending: false })
+          .limit(limit);
+
+        if (error) {
+          throw new Error(`Error obteniendo tweets: ${error.message}`);
+        }
+
+        const fallbackResult = {
+          tweets_found: tweets?.length || 0,
+          method: 'local_fallback',
+          note: 'Re-análisis ejecutado como fallback local debido a error en VPS'
+        };
+
+        res.json({
+          success: true,
+          message: 'Re-análisis ejecutado como fallback local',
+          results: fallbackResult,
+          admin_user: user.profile.email,
+          timestamp: new Date().toISOString(),
+          warning: 'VPS no disponible, se ejecutó fallback local limitado'
+        });
+
+      } catch (fallbackError) {
+        console.error('❌ Error en fallback local:', fallbackError);
+        
+        res.status(500).json({
+          success: false,
+          error: 'Error en re-análisis',
+          message: 'No se pudo completar el re-análisis ni en VPS ni localmente',
+          vps_error: vpsError.message,
+          fallback_error: fallbackError.message,
+          admin_user: user.profile.email,
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+
+  } catch (error) {
+    console.error('❌ Error en /api/admin/reanalyze-tweets:', error);
+    res.status(500).json({
+      error: 'Error interno',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * Registra acciones de administrador
+ */
+async function logAdminAction(user, action, details) {
+  try {
+    if (supabase) {
+      const logEntry = {
+        admin_user_id: user.id,
+        admin_email: user.profile.email,
+        action: action,
+        details: details,
+        timestamp: new Date().toISOString(),
+        ip_address: null, // Podrías agregar req.ip aquí si lo necesitas
+      };
+
+      const { error } = await supabase
+        .from('admin_action_logs')
+        .insert([logEntry]);
+
+      if (error) {
+        console.error('Error guardando log de acción admin:', error);
+      } else {
+        console.log(`📊 Log de acción admin guardado: ${action} por ${user.profile.email}`);
+      }
+    }
+  } catch (error) {
+    console.error('Error en logAdminAction:', error);
+  }
+}
