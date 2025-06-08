@@ -2259,36 +2259,90 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
     
     // Generar estadísticas
     console.time('generacion-estadisticas');
-    const statistics = generateStatistics(processedAbout);
+    const rawStatistics = generateStatistics(processedAbout);
+    
+    // Sanitizar estadísticas para evitar problemas de serialización
+    const statistics = {
+      relevancia: {
+        alta: Number(rawStatistics.relevancia?.alta) || 0,
+        media: Number(rawStatistics.relevancia?.media) || 0,
+        baja: Number(rawStatistics.relevancia?.baja) || 0
+      },
+      contexto: {
+        local: Number(rawStatistics.contexto?.local) || 0,
+        global: Number(rawStatistics.contexto?.global) || 0
+      },
+      timestamp: new Date().toISOString(),
+      total_procesados: processedAbout.length
+    };
     console.timeEnd('generacion-estadisticas');
     
     // Formato about para compatibilidad con frontend
     const aboutArray = processedAbout.map(item => item.about);
     console.log(`📊 aboutArray generado con ${aboutArray.length} items`);
 
-    // --- SANITIZAR aboutArray para Supabase (VERSION SIMPLIFICADA) ---
+    // --- SANITIZAR aboutArray para Supabase (VERSION ULTRA-ROBUSTA) ---
     console.log('🧹 Creando versión ultra-simplificada de aboutArray para Supabase...');
+    
+    /**
+     * Función para sanitizar cualquier valor de forma segura para JSON
+     */
+    const sanitizeForJSON = (value, maxLength = 300) => {
+      if (value === null || value === undefined) return '';
+      
+      let str = String(value);
+      
+      // Remover caracteres de control y caracteres problemáticos
+      str = str.replace(/[\u0000-\u001F\u007F-\u009F\u2000-\u200F\uFEFF]/g, '');
+      
+      // Remover caracteres no válidos en JSON
+      str = str.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
+      
+      // Escapar comillas dobles y backslashes problemáticos
+      str = str.replace(/"/g, "'").replace(/\\/g, '/');
+      
+      // Truncar si es muy largo
+      if (str.length > maxLength) {
+        str = str.substring(0, maxLength);
+      }
+      
+      return str.trim();
+    };
     
     const ultraSimplifiedAboutArray = aboutArray.map((about, index) => {
       // Crear objeto ultra-simple, solo campos básicos y strings seguros
       const simplified = {
-        nombre: String(about.nombre || '').substring(0, 100).replace(/[\u0000-\u001F\u007F-\u009F]/g, ''), // Remover caracteres de control
-        categoria: String(about.categoria || 'Otros').substring(0, 50).replace(/[^a-zA-ZáéíóúÁÉÍÓÚñÑ\/\s]/g, ''), // Solo letras y espacios
-        resumen: String(about.resumen || '').substring(0, 300).replace(/[\u0000-\u001F\u007F-\u009F]/g, ''), // Máximo 300 chars, sin caracteres de control
+        nombre: sanitizeForJSON(about.nombre, 100) || `Tendencia ${index + 1}`,
+        categoria: ['Deportes', 'Política', 'Entretenimiento', 'Música', 'Tecnología', 'Economía', 'Sociedad', 'Otros']
+          .includes(about.categoria) ? about.categoria : 'Otros',
+        resumen: sanitizeForJSON(about.resumen, 300) || `Información sobre ${about.nombre || 'tendencia'}`,
         relevancia: ['alta', 'media', 'baja'].includes(about.relevancia) ? about.relevancia : 'baja',
         contexto_local: Boolean(about.contexto_local),
-        source: String(about.source || 'default').substring(0, 20),
-        tweets_usados: Number(about.tweets_used) || 0,
+        source: sanitizeForJSON(about.source, 20) || 'default',
+        tweets_usados: (typeof about.tweets_used === 'number' && !isNaN(about.tweets_used)) ? about.tweets_used : 0,
         index_orden: index
       };
       
-      // Solo agregar campos opcionales si son válidos
+      // Solo agregar campos opcionales si son válidos y seguros
       if (about.tipo && typeof about.tipo === 'string' && about.tipo.length > 0) {
-        simplified.tipo = String(about.tipo).substring(0, 30).replace(/[^a-zA-ZáéíóúÁÉÍÓÚñÑ]/g, '');
+        const tipoSanitized = sanitizeForJSON(about.tipo, 30);
+        if (tipoSanitized.length > 0) {
+          simplified.tipo = tipoSanitized;
+        }
       }
       
       if (about.razon_tendencia && typeof about.razon_tendencia === 'string' && about.razon_tendencia.length > 0) {
-        simplified.razon_tendencia = String(about.razon_tendencia).substring(0, 200).replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
+        const razonSanitized = sanitizeForJSON(about.razon_tendencia, 200);
+        if (razonSanitized.length > 0) {
+          simplified.razon_tendencia = razonSanitized;
+        }
+      }
+      
+      if (about.sentimiento_tweets && typeof about.sentimiento_tweets === 'string') {
+        const sentimientoSanitized = sanitizeForJSON(about.sentimiento_tweets, 20);
+        if (['positivo', 'negativo', 'neutral', 'mixto'].includes(sentimientoSanitized)) {
+          simplified.sentimiento_tweets = sentimientoSanitized;
+        }
       }
       
       return simplified;
@@ -2375,23 +2429,99 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
           processing_status: 'complete'
         };
         
-        // Verificar objeto completo
+        // VALIDACIÓN ULTRA-ROBUSTA para evitar PGRST102
+        console.log('🔍 VALIDACIÓN ULTRA-ROBUSTA...');
+        
+        /**
+         * Función recursiva para limpiar cualquier objeto de valores problemáticos
+         */
+        const deepCleanObject = (obj) => {
+          if (obj === null || obj === undefined) return null;
+          
+          if (typeof obj === 'string') {
+            // Limpiar strings problemáticos
+            return obj
+              .replace(/[\u0000-\u001F\u007F-\u009F]/g, '') // Caracteres de control
+              .replace(/[\x00-\x1F\x7F-\x9F]/g, '') // Caracteres no válidos
+              .replace(/"/g, "'") // Comillas problemáticas
+              .substring(0, 1000) // Límite de tamaño
+              .trim();
+          }
+          
+          if (typeof obj === 'number') {
+            return isNaN(obj) || !isFinite(obj) ? 0 : obj;
+          }
+          
+          if (typeof obj === 'boolean') {
+            return Boolean(obj);
+          }
+          
+          if (Array.isArray(obj)) {
+            return obj.map(item => deepCleanObject(item)).filter(item => item !== null);
+          }
+          
+          if (typeof obj === 'object') {
+            const cleaned = {};
+            for (const [key, value] of Object.entries(obj)) {
+              if (key && typeof key === 'string') {
+                const cleanedValue = deepCleanObject(value);
+                if (cleanedValue !== null && cleanedValue !== undefined) {
+                  cleaned[key] = cleanedValue;
+                }
+              }
+            }
+            return cleaned;
+          }
+          
+          return obj;
+        };
+        
+        // Limpiar el objeto completo
+        const cleanedUpdateObject = deepCleanObject(updateObject);
+        
+        // Verificar objeto limpio
         try {
-          const fullJson = JSON.stringify(updateObject);
-          console.log('✅ Objeto completo serializable:', fullJson.length, 'caracteres');
+          const fullJson = JSON.stringify(cleanedUpdateObject);
+          console.log('✅ Objeto limpio serializable:', fullJson.length, 'caracteres');
+          
+          // Verificar que no sea demasiado grande (límite de Supabase ~1MB)
+          if (fullJson.length > 900000) { // 900KB como límite seguro
+            console.warn('⚠️ Objeto muy grande, aplicando compresión adicional...');
+            
+            // Reducir datos si es muy grande
+            if (cleanedUpdateObject.about && cleanedUpdateObject.about.length > 10) {
+              cleanedUpdateObject.about = cleanedUpdateObject.about.slice(0, 10);
+              console.log('📦 Reducido about a 10 items por tamaño');
+            }
+            
+            // Acortar resúmenes si siguen siendo muy largos
+            cleanedUpdateObject.about = cleanedUpdateObject.about.map(item => ({
+              ...item,
+              resumen: item.resumen ? item.resumen.substring(0, 150) : ''
+            }));
+          }
+          
         } catch (fullError) {
-          console.error('❌ ERROR en objeto completo:', fullError.message);
-          console.log('📋 UpdateObject problemático:', updateObject);
-          throw new Error(`Objeto completo no serializable: ${fullError.message}`);
+          console.error('❌ ERROR en objeto limpio:', fullError.message);
+          console.log('📋 CleanedUpdateObject problemático:', cleanedUpdateObject);
+          throw new Error(`Objeto limpio no serializable: ${fullError.message}`);
         }
+        
+        // Usar el objeto limpio para la actualización
+        const finalUpdateObject = cleanedUpdateObject;
         
         console.log('🚀 Enviando actualización a Supabase...');
         console.log('📝 Record ID:', recordId);
-        console.log('📝 Update object keys:', Object.keys(updateObject));
+        console.log('📝 Final update object keys:', Object.keys(finalUpdateObject));
+        console.log('📝 Final object sizes:', {
+          about: finalUpdateObject.about?.length || 0,
+          statistics: Object.keys(finalUpdateObject.statistics || {}).length,
+          category_data: finalUpdateObject.category_data?.length || 0
+        });
         
         const { error: updateError } = await supabase
           .from('trends')
-          .update(updateObject)
+          .update(finalUpdateObject)
           .eq('id', recordId);
           
         if (updateError) {
@@ -2409,7 +2539,7 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
             console.log('📝 Actualizando solo campo about...');
             const { error: aboutError } = await supabase
               .from('trends')
-              .update({ about: ultraSimplifiedAboutArray })
+              .update({ about: finalUpdateObject.about || [] })
               .eq('id', recordId);
             
             if (aboutError) {
@@ -2426,7 +2556,7 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
             console.log('📝 Actualizando solo campo statistics...');
             const { error: statsError } = await supabase
               .from('trends')
-              .update({ statistics: statistics })
+              .update({ statistics: finalUpdateObject.statistics || {} })
               .eq('id', recordId);
             
             if (statsError) {
@@ -2443,7 +2573,7 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
             console.log('📝 Actualizando solo campo category_data...');
             const { error: categoryError } = await supabase
               .from('trends')
-              .update({ category_data: enrichedCategoryData })
+              .update({ category_data: finalUpdateObject.category_data || [] })
               .eq('id', recordId);
             
             if (categoryError) {
@@ -3510,20 +3640,14 @@ Busca profundamente, no digas "sin información". Si es apodo, identifica la per
           if (jsonMatch) {
             const parsed = JSON.parse(jsonMatch[0]);
             
-            // Enriquecer con metadata
+            // Enriquecer con metadata SIMPLIFICADA (sin objetos complejos)
             const enriched = {
               ...parsed,
               source: 'perplexity',
               model: 'sonar',
-              search_query: searchQuery,
               tweets_used: relevantTweets.length,
-              tweets_context: relevantTweets.map(t => ({
-                texto: t.texto.substring(0, 100) + '...',
-                likes: t.likes,
-                sentiment: t.categoria
-              })),
-              timestamp: new Date().toISOString(),
-              raw_response: rawResponse
+              timestamp: new Date().toISOString()
+              // REMOVIDOS: tweets_context, search_query, raw_response (causan problemas JSON)
             };
             
             console.log(`   📊 ${trendName}: Categoría=${enriched.categoria}, Relevancia=${enriched.relevancia}, Tweets=${relevantTweets.length}`);
@@ -3533,7 +3657,7 @@ Busca profundamente, no digas "sin información". Si es apodo, identifica la per
           console.log(`   ⚠️  Error parseando JSON para ${trendName}, usando respuesta raw`);
         }
         
-        // Si no se puede parsear JSON, crear estructura manual
+        // Si no se puede parsear JSON, crear estructura manual SIMPLIFICADA
         return {
           nombre: trendName,
           tipo: 'hashtag',
@@ -3543,10 +3667,9 @@ Busca profundamente, no digas "sin información". Si es apodo, identifica la per
           contexto_local: rawResponse.toLowerCase().includes('guatemala'),
           tweets_used: relevantTweets.length,
           sentimiento_tweets: relevantTweets.length > 0 ? 'mixto' : 'neutral',
-          palabras_clave: [trendName],
           source: 'perplexity',
-          model: 'sonar',
-          raw_response: rawResponse
+          model: 'sonar'
+          // REMOVIDOS: palabras_clave, raw_response (causan problemas JSON)
         };
       }
     } else {
