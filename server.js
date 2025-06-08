@@ -347,6 +347,9 @@ const verifyUserAccess = async (req, res, next) => {
     
     if (isFreeOperation) {
       console.log(`🆓 Operación gratuita: ${operation}`);
+      // Para operaciones gratuitas, asignar valores por defecto
+      req.isAdmin = false;
+      req.operationCost = 0; // Operación gratuita, 0 créditos
       return next();
     }
 
@@ -539,11 +542,22 @@ function calculateDocumentCost(responseData) {
  */
 async function logUsage(user, operation, credits, req) {
   try {
+    // VALIDAR Y SANITIZAR credits_consumed
+    let creditsConsumed = 0; // Valor por defecto
+    
+    if (typeof credits === 'number' && !isNaN(credits) && isFinite(credits)) {
+      creditsConsumed = Math.max(0, credits); // Asegurar que no sea negativo
+    } else if (typeof credits === 'string' && !isNaN(parseFloat(credits))) {
+      creditsConsumed = Math.max(0, parseFloat(credits));
+    }
+    
+    console.log(`📊 Logging uso: ${operation}, créditos original: ${credits} (tipo: ${typeof credits}), créditos sanitizado: ${creditsConsumed}`);
+    
     const logEntry = {
       user_id: user.id,
       user_email: user.profile.email,
       operation: operation,
-      credits_consumed: credits,
+      credits_consumed: creditsConsumed, // Ahora garantizamos que sea un número válido
       ip_address: req.ip || req.connection.remoteAddress,
       user_agent: req.headers['user-agent'],
       timestamp: new Date().toISOString(),
@@ -564,13 +578,15 @@ async function logUsage(user, operation, credits, req) {
 
       if (error) {
         console.error('❌ Error guardando log de uso:', error);
+        console.error('📋 Log entry que causó error:', JSON.stringify(logEntry, null, 2));
         // No fallar la operación por error de logging
       } else {
-        console.log(`📊 Log guardado: ${operation} por ${user.profile.email}`);
+        console.log(`📊 Log guardado: ${operation} por ${user.profile.email} (${creditsConsumed} créditos)`);
       }
     }
   } catch (error) {
     console.error('❌ Error en logUsage:', error);
+    console.error('📋 Datos recibidos:', { operation, credits, userEmail: user?.profile?.email });
   }
 }
 
@@ -1756,29 +1772,149 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
           recordId: recordId
         });
         
-        // Verificar que los datos se pueden serializar antes de enviar
+        // DEBUGGING DETALLADO - Validar cada campo individualmente
+        console.log('🔍 DEBUGGING DETALLADO - Validando cada campo individualmente...');
+        
+        // Verificar sanitizedAboutArray
         try {
-          JSON.stringify(sanitizedAboutArray);
-          JSON.stringify(statistics);
-          JSON.stringify(enrichedCategoryData);
-          console.log('✅ Datos validados para serialización JSON');
-        } catch (serializationError) {
-          console.error('❌ Error de serialización:', serializationError);
-          throw new Error(`Datos no serializables: ${serializationError.message}`);
+          const aboutJson = JSON.stringify(sanitizedAboutArray);
+          console.log('✅ sanitizedAboutArray serializable:', aboutJson.length, 'caracteres');
+          if (sanitizedAboutArray.length > 0) {
+            console.log('📋 Primer item about:', JSON.stringify(sanitizedAboutArray[0], null, 2));
+          }
+        } catch (aboutError) {
+          console.error('❌ ERROR en sanitizedAboutArray:', aboutError.message);
+          console.log('📋 Datos problemáticos en about:', sanitizedAboutArray);
+          throw new Error(`sanitizedAboutArray no serializable: ${aboutError.message}`);
         }
+        
+        // Verificar statistics
+        try {
+          const statsJson = JSON.stringify(statistics);
+          console.log('✅ statistics serializable:', statsJson.length, 'caracteres');
+          console.log('📋 statistics content:', JSON.stringify(statistics, null, 2));
+        } catch (statsError) {
+          console.error('❌ ERROR en statistics:', statsError.message);
+          console.log('📋 Datos problemáticos en statistics:', statistics);
+          throw new Error(`statistics no serializable: ${statsError.message}`);
+        }
+        
+        // Verificar enrichedCategoryData
+        try {
+          const categoryJson = JSON.stringify(enrichedCategoryData);
+          console.log('✅ enrichedCategoryData serializable:', categoryJson.length, 'caracteres');
+          console.log('📋 categoryData content:', JSON.stringify(enrichedCategoryData, null, 2));
+        } catch (categoryError) {
+          console.error('❌ ERROR en enrichedCategoryData:', categoryError.message);
+          console.log('📋 Datos problemáticos en categoryData:', enrichedCategoryData);
+          throw new Error(`enrichedCategoryData no serializable: ${categoryError.message}`);
+        }
+        
+        console.log('✅ Todos los campos validados individualmente');
+        
+        // Preparar objeto completo de actualización
+        const updateObject = {
+          about: sanitizedAboutArray,
+          statistics: statistics,
+          category_data: enrichedCategoryData,
+          processing_status: 'complete'
+        };
+        
+        // Verificar objeto completo
+        try {
+          const fullJson = JSON.stringify(updateObject);
+          console.log('✅ Objeto completo serializable:', fullJson.length, 'caracteres');
+        } catch (fullError) {
+          console.error('❌ ERROR en objeto completo:', fullError.message);
+          console.log('📋 UpdateObject problemático:', updateObject);
+          throw new Error(`Objeto completo no serializable: ${fullError.message}`);
+        }
+        
+        console.log('🚀 Enviando actualización a Supabase...');
+        console.log('📝 Record ID:', recordId);
+        console.log('📝 Update object keys:', Object.keys(updateObject));
         
         const { error: updateError } = await supabase
           .from('trends')
-          .update({
-            about: sanitizedAboutArray,
-            statistics: statistics,
-            category_data: enrichedCategoryData,
-            processing_status: 'complete'
-          })
+          .update(updateObject)
           .eq('id', recordId);
           
         if (updateError) {
-          console.error('❌ Error actualizando registro con about:', updateError, JSON.stringify(updateError, null, 2));
+          console.error('❌ Error actualizando registro completo:', updateError, JSON.stringify(updateError, null, 2));
+          
+          // FALLBACK: Intentar actualizar campo por campo para identificar el problema
+          console.log('🔄 FALLBACK: Intentando actualización campo por campo...');
+          
+          let aboutSuccess = false;
+          let statsSuccess = false;
+          let categorySuccess = false;
+          
+          try {
+            // Actualizar about solo
+            console.log('📝 Actualizando solo campo about...');
+            const { error: aboutError } = await supabase
+              .from('trends')
+              .update({ about: sanitizedAboutArray })
+              .eq('id', recordId);
+            
+            if (aboutError) {
+              console.error('❌ Error en campo about:', aboutError.message, JSON.stringify(aboutError, null, 2));
+            } else {
+              console.log('✅ Campo about actualizado exitosamente');
+              aboutSuccess = true;
+            }
+            
+            // Pausa corta entre actualizaciones
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Actualizar statistics solo
+            console.log('📝 Actualizando solo campo statistics...');
+            const { error: statsError } = await supabase
+              .from('trends')
+              .update({ statistics: statistics })
+              .eq('id', recordId);
+            
+            if (statsError) {
+              console.error('❌ Error en campo statistics:', statsError.message, JSON.stringify(statsError, null, 2));
+            } else {
+              console.log('✅ Campo statistics actualizado exitosamente');
+              statsSuccess = true;
+            }
+            
+            // Pausa corta entre actualizaciones
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Actualizar category_data solo
+            console.log('📝 Actualizando solo campo category_data...');
+            const { error: categoryError } = await supabase
+              .from('trends')
+              .update({ category_data: enrichedCategoryData })
+              .eq('id', recordId);
+            
+            if (categoryError) {
+              console.error('❌ Error en campo category_data:', categoryError.message, JSON.stringify(categoryError, null, 2));
+            } else {
+              console.log('✅ Campo category_data actualizado exitosamente');
+              categorySuccess = true;
+            }
+            
+            // Actualizar processing_status al final si al menos un campo se actualizó
+            if (aboutSuccess || statsSuccess || categorySuccess) {
+              console.log('📝 Actualizando processing_status...');
+              await supabase
+                .from('trends')
+                .update({ processing_status: 'complete' })
+                .eq('id', recordId);
+              console.log('✅ Campo processing_status actualizado');
+            }
+              
+            console.log('✅ Actualización campo por campo completada');
+            console.log(`📊 Resumen: about=${aboutSuccess}, stats=${statsSuccess}, category=${categorySuccess}`);
+            
+          } catch (fallbackError) {
+            console.error('❌ Error en fallback:', fallbackError.message);
+          }
+          
         } else {
           console.log('✅ Registro actualizado exitosamente con about, estadísticas y categoryData enriquecido');
           
