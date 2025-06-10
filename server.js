@@ -1377,6 +1377,8 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
     // 1. OBTENER LOGS DE USUARIO (usage_logs) si corresponde
     if (!log_type || log_type === 'all' || log_type === 'user') {
       console.log('📊 Consultando usage_logs...');
+      console.log('🔑 Usuario:', req.user.email);
+      console.log('🎭 Rol:', req.user.profile.role);
       
       let userQuery = supabase
         .from('usage_logs')
@@ -1405,9 +1407,11 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
 
       if (userError) {
         console.error('❌ Error obteniendo logs de usuario:', userError);
+        console.error('Detalles del error:', JSON.stringify(userError, null, 2));
         return res.status(500).json({
           error: 'Error obteniendo logs',
-          message: userError.message
+          message: userError.message,
+          details: userError
         });
       }
 
@@ -1424,6 +1428,12 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
         }));
       } else {
         console.log('⚠️ No se encontraron logs');
+        console.log('Query params:', {
+          days,
+          user_email,
+          operation,
+          limit
+        });
       }
     }
 
@@ -4215,3 +4225,99 @@ app.get('/api/admin/logging-status', verifyUserAccess, async (req, res) => {
 // 🎬 IMPORTAR Y USAR RUTAS DEL TRADUCTOR DE VIDEO
 const videoTranslatorRoutes = require('./routes');
 app.use('/api', videoTranslatorRoutes);
+
+// Agregar endpoint de estadísticas
+app.get('/api/admin/logs/stats', verifyUserAccess, async (req, res) => {
+  try {
+    const user = req.user;
+    
+    // Verificar que el usuario sea admin
+    if (user.profile.role !== 'admin') {
+      return res.status(403).json({
+        error: 'Acceso denegado',
+        message: 'Solo los administradores pueden acceder a este endpoint'
+      });
+    }
+
+    const { days = 7, log_type } = req.query;
+    console.log(`📊 Admin ${user.profile.email} consultando estadísticas de logs (${days} días, tipo: ${log_type || 'all'})`);
+
+    if (!supabase) {
+      return res.status(503).json({
+        error: 'Base de datos no configurada',
+        message: 'Supabase no está disponible'
+      });
+    }
+
+    const daysAgo = new Date();
+    daysAgo.setDate(daysAgo.getDate() - parseInt(days));
+
+    // Obtener logs de usuario
+    const { data: userLogs, error: userError } = await supabase
+      .from('usage_logs')
+      .select('*')
+      .gte('timestamp', daysAgo.toISOString());
+
+    if (userError) {
+      console.error('Error obteniendo logs:', userError);
+      return res.status(500).json({
+        error: 'Error obteniendo logs',
+        message: userError.message
+      });
+    }
+
+    // Procesar estadísticas
+    const stats = {
+      total_logs: userLogs?.length || 0,
+      by_operation: {},
+      by_user: {},
+      total_credits: 0,
+      period_days: parseInt(days)
+    };
+
+    if (userLogs) {
+      userLogs.forEach(log => {
+        // Contar por operación
+        if (!stats.by_operation[log.operation]) {
+          stats.by_operation[log.operation] = {
+            count: 0,
+            credits: 0
+          };
+        }
+        stats.by_operation[log.operation].count++;
+        stats.by_operation[log.operation].credits += log.credits_consumed || 0;
+
+        // Contar por usuario
+        if (!stats.by_user[log.user_email]) {
+          stats.by_user[log.user_email] = {
+            count: 0,
+            credits: 0
+          };
+        }
+        stats.by_user[log.user_email].count++;
+        stats.by_user[log.user_email].credits += log.credits_consumed || 0;
+
+        // Total de créditos
+        stats.total_credits += log.credits_consumed || 0;
+      });
+    }
+
+    res.json({
+      success: true,
+      statistics: stats,
+      metadata: {
+        period: `${days} días`,
+        generated_at: new Date().toISOString(),
+        generated_by: user.profile.email,
+        timezone: 'America/Guatemala'
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo estadísticas:', error);
+    res.status(500).json({
+      error: 'Error interno',
+      message: error.message
+    });
+  }
+});
