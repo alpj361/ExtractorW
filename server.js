@@ -1332,6 +1332,13 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
     console.log(`👑 Admin ${user.profile.email} consultando logs con filtros`, {
       log_type, success, user_email, operation, days
     });
+    
+    // Si log_type es 'user', forzar que solo consulte usage_logs
+    if (log_type === 'user') {
+      console.log('🔒 Filtro específico: SOLO logs de usuario (usage_logs)');
+    } else if (log_type === 'system') {
+      console.log('🔒 Filtro específico: SOLO logs del sistema (system_execution_logs)');
+    }
 
     if (!supabase) {
       return res.status(503).json({
@@ -1566,8 +1573,8 @@ app.get('/api/admin/logs/stats', verifyUserAccess, async (req, res) => {
       });
     }
 
-    const { days = 7 } = req.query;
-    console.log(`📊 Admin ${user.profile.email} consultando estadísticas de logs (${days} días) desde ambas tablas`);
+    const { days = 7, log_type } = req.query;
+    console.log(`📊 Admin ${user.profile.email} consultando estadísticas de logs (${days} días, tipo: ${log_type || 'all'})`);
 
     if (!supabase) {
       return res.status(503).json({
@@ -1579,17 +1586,34 @@ app.get('/api/admin/logs/stats', verifyUserAccess, async (req, res) => {
     const daysAgo = new Date();
     daysAgo.setDate(daysAgo.getDate() - parseInt(days));
 
-    // 1. OBTENER LOGS DE USUARIO (usage_logs)
-    const { data: userLogsData, error: userError } = await supabase
-      .from('usage_logs')
-      .select('log_type, operation, success, credits_consumed, timestamp, user_role')
-      .gte('timestamp', daysAgo.toISOString());
+    let userLogsData = null;
+    let systemLogsData = null;
+    let userError = null;
+    let systemError = null;
 
-    // 2. OBTENER LOGS DEL SISTEMA (system_execution_logs)
-    const { data: systemLogsData, error: systemError } = await supabase
-      .from('system_execution_logs')
-      .select('script_name, status, created_at, tweets_processed, ai_requests_made, estimated_cost_usd')
-      .gte('created_at', daysAgo.toISOString());
+    // 1. OBTENER LOGS DE USUARIO (usage_logs) - solo si se solicita
+    if (!log_type || log_type === 'all' || log_type === 'user') {
+      console.log('📊 Consultando usage_logs...');
+      const { data, error } = await supabase
+        .from('usage_logs')
+        .select('log_type, operation, success, credits_consumed, timestamp, user_role')
+        .gte('timestamp', daysAgo.toISOString());
+      
+      userLogsData = data;
+      userError = error;
+    }
+
+    // 2. OBTENER LOGS DEL SISTEMA (system_execution_logs) - solo si se solicita
+    if (!log_type || log_type === 'all' || log_type === 'system') {
+      console.log('🤖 Consultando system_execution_logs...');
+      const { data, error } = await supabase
+        .from('system_execution_logs')
+        .select('script_name, status, created_at, tweets_processed, ai_requests_made, estimated_cost_usd')
+        .gte('created_at', daysAgo.toISOString());
+      
+      systemLogsData = data;
+      systemError = error;
+    }
 
     if (userError) {
       console.error('Error obteniendo logs de usuario:', userError);
@@ -1668,6 +1692,13 @@ app.get('/api/admin/logs/stats', verifyUserAccess, async (req, res) => {
       sources: {
         usage_logs: userLogsData?.length || 0,
         system_execution_logs: systemLogsData?.length || 0
+      },
+      filter_applied: {
+        log_type: log_type || 'all',
+        days: parseInt(days),
+        note: log_type === 'user' ? 'Solo logs de usuario' : 
+              log_type === 'system' ? 'Solo logs del sistema' : 
+              'Todos los logs'
       }
     };
 
@@ -4499,3 +4530,7 @@ app.get('/api/admin/logging-status', verifyUserAccess, async (req, res) => {
     });
   }
 });
+
+// 🎬 IMPORTAR Y USAR RUTAS DEL TRADUCTOR DE VIDEO
+const videoTranslatorRoutes = require('./routes');
+app.use('/api', videoTranslatorRoutes);
