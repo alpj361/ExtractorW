@@ -587,7 +587,6 @@ async function logUsage(user, operation, credits, req) {
       user_email: user.profile.email,
       user_role: user.profile.role || 'user',
       operation: operation,
-      log_type: 'user', // Tipo de log: user vs system
       credits_consumed: creditsConsumed,
       ip_address: req.ip || req.connection.remoteAddress,
       user_agent: req.headers['user-agent'],
@@ -736,7 +735,6 @@ async function logError(operation, errorDetails, user = null, req = null) {
         user_email: user.profile.email,
         user_role: user.profile.role || 'user',
         operation: operation,
-        log_type: 'user',
         credits_consumed: 0, // Errores no consumen créditos
         ip_address: req?.ip || req?.connection?.remoteAddress || 'unknown',
         user_agent: req?.headers?.['user-agent'] || 'unknown',
@@ -1328,6 +1326,11 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
       limit = 100,
       offset = 0
     } = req.query;
+    
+    // Convertir valores a números
+    const numDays = parseInt(days) || 7;
+    const numLimit = parseInt(limit) || 100;
+    const numOffset = parseInt(offset) || 0;
 
     console.log(`👑 Admin ${user.profile.email} consultando logs con filtros`, {
       log_type, success, user_email, operation, days
@@ -1355,6 +1358,13 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
     // 1. OBTENER LOGS DE USUARIO (usage_logs) si corresponde
     if (!log_type || log_type === 'all' || log_type === 'user') {
       console.log('📊 Consultando usage_logs...');
+      console.log('Filtros aplicados:', {
+        daysAgo: daysAgo.toISOString(),
+        user_email,
+        operation,
+        success,
+        limit: limit * 2
+      });
       
       let userQuery = supabase
         .from('usage_logs')
@@ -1364,23 +1374,31 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
       // Aplicar filtros específicos de usuario
       if (user_email && user_email !== 'all') {
         userQuery = userQuery.ilike('user_email', `%${user_email}%`);
+        console.log('🔍 Aplicando filtro de email:', user_email);
       }
       
       if (operation && operation !== 'all') {
         userQuery = userQuery.eq('operation', operation);
+        console.log('🔍 Aplicando filtro de operación:', operation);
       }
 
       if (success && success !== 'all') {
         userQuery = userQuery.eq('success', success === 'true');
+        console.log('🔍 Aplicando filtro de éxito:', success);
       }
+
+      console.log('🔍 Query final:', userQuery.toString());
 
       const { data: userLogs, error: userError } = await userQuery
         .order('timestamp', { ascending: false })
         .limit(limit * 2); // Obtener más para poder mezclar y paginar después
 
       if (userError) {
-        console.error('Error obteniendo logs de usuario:', userError);
-      } else if (userLogs) {
+        console.error('❌ Error obteniendo logs de usuario:', userError);
+        console.error('Detalles del error:', JSON.stringify(userError, null, 2));
+      } else if (userLogs && userLogs.length > 0) {
+        console.log(`✅ Logs de usuario obtenidos: ${userLogs.length} registros`);
+        console.log('📋 Muestra de logs:', userLogs.slice(0, 2));
         // Normalizar logs de usuario
         const normalizedUserLogs = userLogs.map(log => ({
           ...log,
@@ -1390,6 +1408,13 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
           execution_time: log.response_time
         }));
         allLogs.push(...normalizedUserLogs);
+      } else {
+        console.log('⚠️ No se encontraron logs de usuario');
+        if (userLogs) {
+          console.log('📋 Array de logs vacío');
+        } else {
+          console.log('📋 No hay datos de logs');
+        }
       }
     }
 
@@ -1596,7 +1621,7 @@ app.get('/api/admin/logs/stats', verifyUserAccess, async (req, res) => {
       console.log('📊 Consultando usage_logs...');
       const { data, error } = await supabase
         .from('usage_logs')
-        .select('log_type, operation, success, credits_consumed, timestamp, user_role')
+        .select('operation, success, credits_consumed, timestamp, user_role')
         .gte('timestamp', daysAgo.toISOString());
       
       userLogsData = data;
@@ -1813,6 +1838,64 @@ app.get('/api/admin/logs/stats', verifyUserAccess, async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error generando estadísticas de logs:', error);
+    res.status(500).json({
+      error: 'Error interno',
+      message: error.message
+    });
+  }
+});
+
+// Endpoint de prueba para verificar logs
+app.get('/api/admin/test-logs', verifyUserAccess, async (req, res) => {
+  try {
+    const user = req.user;
+    
+    // Verificar que el usuario sea admin
+    if (user.profile.role !== 'admin') {
+      return res.status(403).json({
+        error: 'Acceso denegado',
+        message: 'Solo los administradores pueden acceder a este endpoint'
+      });
+    }
+
+    console.log('🧪 Probando acceso a usage_logs...');
+
+    // Intento simple de obtener logs
+    const { data, error, count } = await supabase
+      .from('usage_logs')
+      .select('*', { count: 'exact' })
+      .limit(5)
+      .order('timestamp', { ascending: false });
+
+    if (error) {
+      console.error('❌ Error al consultar usage_logs:', error);
+      return res.json({
+        success: false,
+        error: error.message,
+        errorDetails: error,
+        table: 'usage_logs',
+        query: 'SELECT * FROM usage_logs LIMIT 5'
+      });
+    }
+
+    console.log(`✅ Consulta exitosa: ${data?.length || 0} registros obtenidos, ${count} total`);
+    
+    // Verificar estructura de los datos
+    const sampleRecord = data && data.length > 0 ? data[0] : null;
+    const fields = sampleRecord ? Object.keys(sampleRecord) : [];
+
+    res.json({
+      success: true,
+      total_count: count,
+      records_retrieved: data?.length || 0,
+      fields_found: fields,
+      has_log_type_field: fields.includes('log_type'),
+      sample_record: sampleRecord,
+      all_records: data
+    });
+
+  } catch (error) {
+    console.error('❌ Error en test-logs:', error);
     res.status(500).json({
       error: 'Error interno',
       message: error.message
