@@ -1350,6 +1350,25 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
       });
     }
 
+    // Test query to verify database access
+    console.log('🧪 Ejecutando query de prueba...');
+    const { data: testData, error: testError } = await supabase
+      .from('usage_logs')
+      .select('*');
+
+    if (testError) {
+      console.error('❌ Error en query de prueba:', testError);
+      return res.status(500).json({
+        error: 'Error accediendo a la base de datos',
+        message: testError.message
+      });
+    } else {
+      console.log('✅ Query de prueba exitosa. Total registros:', testData?.length || 0);
+      if (testData && testData.length > 0) {
+        console.log('📋 Primer registro:', JSON.stringify(testData[0], null, 2));
+      }
+    }
+
     const daysAgo = new Date();
     daysAgo.setDate(daysAgo.getDate() - parseInt(days));
 
@@ -1358,488 +1377,61 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
     // 1. OBTENER LOGS DE USUARIO (usage_logs) si corresponde
     if (!log_type || log_type === 'all' || log_type === 'user') {
       console.log('📊 Consultando usage_logs...');
-      console.log('Filtros aplicados:', {
-        daysAgo: daysAgo.toISOString(),
-        user_email,
-        operation,
-        limit: limit * 2
-      });
       
       let userQuery = supabase
         .from('usage_logs')
-        .select('id, user_id, user_email, operation, credits_consumed, ip_address, user_agent, timestamp, request_params, response_time, created_at')
-        .gte('timestamp', daysAgo.toISOString());
+        .select('*')
+        .order('timestamp', { ascending: false });
 
-      // Aplicar filtros específicos de usuario
+      // Solo agregar filtros si es necesario
+      if (days && days !== '0') {
+        userQuery = userQuery.gte('timestamp', daysAgo.toISOString());
+        console.log('📅 Filtro de fecha:', daysAgo.toISOString());
+      }
+
       if (user_email && user_email !== 'all') {
         userQuery = userQuery.ilike('user_email', `%${user_email}%`);
-        console.log('🔍 Aplicando filtro de email:', user_email);
+        console.log('👤 Filtro de email:', user_email);
       }
       
       if (operation && operation !== 'all') {
         userQuery = userQuery.eq('operation', operation);
-        console.log('🔍 Aplicando filtro de operación:', operation);
+        console.log('🔧 Filtro de operación:', operation);
       }
 
-      // Removemos el filtro de success ya que no existe en la tabla
       console.log('🔍 Query final:', userQuery.toString());
 
-      const { data: userLogs, error: userError } = await userQuery
-        .order('timestamp', { ascending: false })
-        .limit(limit * 2); // Obtener más para poder mezclar y paginar después
+      const { data: userLogs, error: userError } = await userQuery;
 
       if (userError) {
         console.error('❌ Error obteniendo logs de usuario:', userError);
-        console.error('Detalles del error:', JSON.stringify(userError, null, 2));
-      } else if (userLogs && userLogs.length > 0) {
-        console.log(`✅ Logs de usuario obtenidos: ${userLogs.length} registros`);
-        console.log('📋 Muestra de logs:', userLogs.slice(0, 2));
-        // Normalizar logs de usuario
-        const normalizedUserLogs = userLogs.map(log => ({
-          id: log.id,
-          user_id: log.user_id,
-          user_email: log.user_email,
-          operation: log.operation,
-          credits_consumed: log.credits_consumed || 0,
-          ip_address: log.ip_address || 'unknown',
-          user_agent: log.user_agent || 'unknown',
-          timestamp: log.timestamp || log.created_at,
-          request_data: log.request_params ? JSON.parse(JSON.stringify(log.request_params)) : {},
+        return res.status(500).json({
+          error: 'Error obteniendo logs',
+          message: userError.message
+        });
+      }
+
+      if (userLogs && userLogs.length > 0) {
+        console.log(`✅ Logs encontrados: ${userLogs.length}`);
+        allLogs = userLogs.map(log => ({
+          ...log,
           log_type: 'user',
           source_table: 'usage_logs',
-          execution_time: log.response_time ? `${log.response_time}ms` : null,
-          is_success: true, // Por defecto asumimos éxito si no hay campo de error
+          is_success: true,
           formatted_time: new Date(log.timestamp || log.created_at).toLocaleString('es-ES', {
             timeZone: 'America/Guatemala'
           })
         }));
-        allLogs.push(...normalizedUserLogs);
       } else {
-        console.log('⚠️ No se encontraron logs de usuario');
-        if (userLogs) {
-          console.log('📋 Array de logs vacío');
-        } else {
-          console.log('📋 No hay datos de logs');
-        }
+        console.log('⚠️ No se encontraron logs');
       }
     }
 
-    // 2. OBTENER LOGS DEL SISTEMA (system_execution_logs) si corresponde
-    if (!log_type || log_type === 'all' || log_type === 'system') {
-      console.log('🤖 Consultando system_execution_logs...');
-      
-      let systemQuery = supabase
-        .from('system_execution_logs')
-        .select('*')
-        .gte('created_at', daysAgo.toISOString());
-
-      // Aplicar filtros específicos del sistema
-      if (operation && operation !== 'all') {
-        systemQuery = systemQuery.eq('script_name', operation);
-      }
-
-      if (success && success !== 'all') {
-        const statusFilter = success === 'true' ? 'completed' : 'failed';
-        systemQuery = systemQuery.eq('status', statusFilter);
-      }
-
-      const { data: systemLogs, error: systemError } = await systemQuery
-        .order('created_at', { ascending: false })
-        .limit(limit * 2); // Obtener más para poder mezclar y paginar después
-
-      if (systemError) {
-        console.error('Error obteniendo logs del sistema:', systemError);
-      } else if (systemLogs) {
-        // Normalizar logs del sistema para que sean compatibles
-        const normalizedSystemLogs = systemLogs.map(log => ({
-          id: log.id,
-          user_id: null,
-          user_email: 'SYSTEM',
-          user_role: 'system',
-          operation: log.script_name,
-          log_type: 'system',
-          credits_consumed: 0,
-          ip_address: log.metadata?.ip_address || 'localhost',
-          user_agent: log.metadata?.user_agent || 'ExtractorW-System',
-          timestamp: log.created_at,
-          request_params: JSON.stringify(log.metadata || {}), // Mapear metadata a request_params
-          response_time: log.duration_seconds ? `${log.duration_seconds}s` : null,
-          success: log.status === 'completed',
-          error_details: JSON.stringify(log.error_details || []),
-          source_table: 'system_execution_logs',
-          normalized_details: JSON.stringify({
-            script_name: log.script_name,
-            status: log.status,
-            trends_found: log.trends_found,
-            tweets_processed: log.tweets_processed,
-            ai_requests_made: log.ai_requests_made,
-            estimated_cost_usd: log.estimated_cost_usd,
-            location: log.location,
-            environment: log.environment
-          }),
-          execution_time: log.duration_seconds ? `${log.duration_seconds}s` : null,
-          // Campos adicionales específicos del sistema
-          system_metrics: {
-            trends_found: log.trends_found,
-            tweets_found: log.tweets_found,
-            tweets_processed: log.tweets_processed,
-            tweets_saved: log.tweets_saved,
-            tweets_failed: log.tweets_failed,
-            ai_requests_made: log.ai_requests_made,
-            ai_requests_successful: log.ai_requests_successful,
-            estimated_cost_usd: log.estimated_cost_usd
-          }
-        }));
-        allLogs.push(...normalizedSystemLogs);
-      }
-    }
-
-    // 3. ORDENAR Y PAGINAR LOGS COMBINADOS
-    allLogs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-    
-    const totalLogs = allLogs.length;
-    const paginatedLogs = allLogs.slice(offset, offset + limit);
-
-    // 4. PROCESAR LOGS PARA MEJORAR LA VISUALIZACIÓN
-    const processedLogs = paginatedLogs.map(log => {
-      let requestData = {};
-      try {
-        requestData = JSON.parse(log.normalized_details || log.request_params || '{}');
-      } catch (e) {
-        requestData = { raw: log.normalized_details || log.request_params };
-      }
-
-      let errorData = null;
-      if (log.error_details) {
-        try {
-          errorData = JSON.parse(log.error_details);
-        } catch (e) {
-          errorData = { message: log.error_details };
-        }
-      }
-
-      return {
-        ...log,
-        request_data: requestData,
-        error_data: errorData,
-        is_system: log.log_type === 'system',
-        is_success: log.success,
-        formatted_time: new Date(log.timestamp).toLocaleString('es-ES', {
-          timeZone: 'America/Guatemala',
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit'
-        })
-      };
-    });
-
-    // 5. GENERAR ESTADÍSTICAS RÁPIDAS
-    const stats = {
-      total_logs: totalLogs,
-      user_logs: allLogs.filter(log => log.log_type === 'user').length,
-      system_logs: allLogs.filter(log => log.log_type === 'system').length,
-      success_logs: allLogs.filter(log => log.success === true).length,
-      error_logs: allLogs.filter(log => log.success === false).length,
-      total_credits_consumed: allLogs
-        .filter(log => log.log_type === 'user')
-        .reduce((sum, log) => sum + (log.credits_consumed || 0), 0)
-    };
-
+    // Devolver resultados
     res.json({
-      logs: processedLogs,
-      pagination: {
-        total: totalLogs,
-        limit: parseInt(limit),
-        offset: parseInt(offset),
-        has_more: totalLogs > (parseInt(offset) + parseInt(limit))
-      },
-      filters_applied: {
-        user_email: user_email || null,
-        operation: operation || null,
-        log_type: log_type || null,
-        success: success || null,
-        days: parseInt(days)
-      },
-      statistics: stats,
-      sources: {
-        usage_logs: allLogs.filter(log => log.source_table === 'usage_logs').length,
-        system_execution_logs: allLogs.filter(log => log.source_table === 'system_execution_logs').length
-      },
-      available_filters: {
-        log_types: ['user', 'system'],
-        success_states: ['true', 'false'],
-        common_operations: [
-          '/api/processTrends',
-          '/api/cron/processTrends',
-          '/api/sondeo',
-          '/api/create-document',
-          '/api/trending-tweets'
-        ]
-      },
+      logs: allLogs,
+      total: allLogs.length,
       timestamp: new Date().toISOString()
-    });
-
-  } catch (error) {
-    console.error('❌ Error obteniendo logs filtrados:', error);
-    res.status(500).json({
-      error: 'Error interno',
-      message: error.message
-    });
-  }
-});
-
-// Nuevo endpoint para estadísticas específicas de logs
-app.get('/api/admin/logs/stats', verifyUserAccess, async (req, res) => {
-  try {
-    const user = req.user;
-    
-    // Verificar que el usuario sea admin
-    if (user.profile.role !== 'admin') {
-      return res.status(403).json({
-        error: 'Acceso denegado',
-        message: 'Solo los administradores pueden acceder a este endpoint'
-      });
-    }
-
-    const { days = 7, log_type } = req.query;
-    console.log(`📊 Admin ${user.profile.email} consultando estadísticas de logs (${days} días, tipo: ${log_type || 'all'})`);
-
-    if (!supabase) {
-      return res.status(503).json({
-        error: 'Base de datos no configurada',
-        message: 'Supabase no está disponible'
-      });
-    }
-
-    const daysAgo = new Date();
-    daysAgo.setDate(daysAgo.getDate() - parseInt(days));
-
-    let userLogsData = null;
-    let systemLogsData = null;
-    let userError = null;
-    let systemError = null;
-
-    // 1. OBTENER LOGS DE USUARIO (usage_logs) - solo si se solicita
-    if (!log_type || log_type === 'all' || log_type === 'user') {
-      console.log('📊 Consultando usage_logs...');
-      const { data, error } = await supabase
-        .from('usage_logs')
-        .select('operation, success, credits_consumed, timestamp, user_role')
-        .gte('timestamp', daysAgo.toISOString());
-      
-      userLogsData = data;
-      userError = error;
-    }
-
-    // 2. OBTENER LOGS DEL SISTEMA (system_execution_logs) - solo si se solicita
-    if (!log_type || log_type === 'all' || log_type === 'system') {
-      console.log('🤖 Consultando system_execution_logs...');
-      const { data, error } = await supabase
-        .from('system_execution_logs')
-        .select('script_name, status, created_at, tweets_processed, ai_requests_made, estimated_cost_usd')
-        .gte('created_at', daysAgo.toISOString());
-      
-      systemLogsData = data;
-      systemError = error;
-    }
-
-    if (userError) {
-      console.error('Error obteniendo logs de usuario:', userError);
-    }
-    
-    if (systemError) {
-      console.error('Error obteniendo logs del sistema:', systemError);
-    }
-
-    // 3. NORMALIZAR Y COMBINAR DATOS
-    let allLogsData = [];
-
-    // Procesar logs de usuario
-    if (userLogsData) {
-      const normalizedUserLogs = userLogsData.map(log => ({
-        log_type: 'user',
-        operation: log.operation,
-        success: log.success,
-        credits_consumed: log.credits_consumed || 0,
-        timestamp: log.timestamp,
-        user_role: log.user_role,
-        source: 'usage_logs'
-      }));
-      allLogsData.push(...normalizedUserLogs);
-    }
-
-    // Procesar logs del sistema
-    if (systemLogsData) {
-      const normalizedSystemLogs = systemLogsData.map(log => ({
-        log_type: 'system',
-        operation: log.script_name,
-        success: log.status === 'completed',
-        credits_consumed: 0, // Sistema no consume créditos de usuario
-        timestamp: log.created_at,
-        user_role: 'system',
-        source: 'system_execution_logs',
-        system_metrics: {
-          tweets_processed: log.tweets_processed || 0,
-          ai_requests_made: log.ai_requests_made || 0,
-          estimated_cost_usd: log.estimated_cost_usd || 0
-        }
-      }));
-      allLogsData.push(...normalizedSystemLogs);
-    }
-
-    // 4. PROCESAR ESTADÍSTICAS
-    const stats = {
-      overview: {
-        total_logs: allLogsData.length,
-        user_logs: 0,
-        system_logs: 0,
-        success_logs: 0,
-        error_logs: 0,
-        total_credits_consumed: 0,
-        period_days: parseInt(days)
-      },
-      by_type: {
-        user: {
-          total: 0,
-          success: 0,
-          errors: 0,
-          credits_consumed: 0,
-          operations: {}
-        },
-        system: {
-          total: 0,
-          success: 0,
-          errors: 0,
-          credits_consumed: 0,
-          operations: {}
-        }
-      },
-      top_operations: [],
-      daily_breakdown: {},
-      error_summary: [],
-      sources: {
-        usage_logs: userLogsData?.length || 0,
-        system_execution_logs: systemLogsData?.length || 0
-      },
-      filter_applied: {
-        log_type: log_type || 'all',
-        days: parseInt(days),
-        note: log_type === 'user' ? 'Solo logs de usuario' : 
-              log_type === 'system' ? 'Solo logs del sistema' : 
-              'Todos los logs'
-      }
-    };
-
-    if (allLogsData.length > 0) {
-      // Procesar cada log
-      allLogsData.forEach(log => {
-        const logType = log.log_type;
-        const isSuccess = log.success !== false; // Default true si no está definido
-        const credits = log.credits_consumed || 0;
-        const operation = log.operation || 'unknown';
-        
-        // Estadísticas generales
-        stats.overview[`${logType}_logs`]++;
-        if (isSuccess) {
-          stats.overview.success_logs++;
-        } else {
-          stats.overview.error_logs++;
-        }
-        stats.overview.total_credits_consumed += credits;
-
-        // Estadísticas por tipo
-        const typeStats = stats.by_type[logType];
-        if (typeStats) {
-          typeStats.total++;
-          if (isSuccess) {
-            typeStats.success++;
-          } else {
-            typeStats.errors++;
-          }
-          typeStats.credits_consumed += credits;
-          
-          // Contar operaciones
-          if (!typeStats.operations[operation]) {
-            typeStats.operations[operation] = { count: 0, credits: 0, errors: 0 };
-          }
-          typeStats.operations[operation].count++;
-          typeStats.operations[operation].credits += credits;
-          if (!isSuccess) {
-            typeStats.operations[operation].errors++;
-          }
-        }
-
-        // Desglose diario
-        const dateKey = log.timestamp.split('T')[0];
-        if (!stats.daily_breakdown[dateKey]) {
-          stats.daily_breakdown[dateKey] = {
-            user_logs: 0,
-            system_logs: 0,
-            success_logs: 0,
-            error_logs: 0,
-            credits_consumed: 0
-          };
-        }
-        stats.daily_breakdown[dateKey][`${logType}_logs`]++;
-        stats.daily_breakdown[dateKey][isSuccess ? 'success_logs' : 'error_logs']++;
-        stats.daily_breakdown[dateKey].credits_consumed += credits;
-
-        // Recopilar errores
-        if (!isSuccess) {
-          stats.error_summary.push({
-            operation,
-            log_type: logType,
-            timestamp: log.timestamp,
-            user_role: log.user_role,
-            source: log.source
-          });
-        }
-      });
-
-      // Top operaciones
-      const allOperations = {};
-      Object.keys(stats.by_type).forEach(type => {
-        Object.entries(stats.by_type[type].operations).forEach(([op, data]) => {
-          if (!allOperations[op]) {
-            allOperations[op] = { count: 0, credits: 0, errors: 0, types: [] };
-          }
-          allOperations[op].count += data.count;
-          allOperations[op].credits += data.credits;
-          allOperations[op].errors += data.errors;
-          if (!allOperations[op].types.includes(type)) {
-            allOperations[op].types.push(type);
-          }
-        });
-      });
-
-      stats.top_operations = Object.entries(allOperations)
-        .map(([operation, data]) => ({
-          operation,
-          ...data,
-          success_rate: data.count > 0 ? (((data.count - data.errors) / data.count) * 100).toFixed(1) + '%' : '0%'
-        }))
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 10);
-
-      // Convertir daily_breakdown a array ordenado
-      stats.daily_breakdown = Object.entries(stats.daily_breakdown)
-        .map(([date, data]) => ({ date, ...data }))
-        .sort((a, b) => a.date.localeCompare(b.date));
-    }
-
-    res.json({
-      success: true,
-      statistics: stats,
-      metadata: {
-        period: `${days} días`,
-        generated_at: new Date().toISOString(),
-        generated_by: user.profile.email,
-        timezone: 'America/Guatemala',
-        tables_consulted: ['usage_logs', 'system_execution_logs']
-      }
     });
 
   } catch (error) {
