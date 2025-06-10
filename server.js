@@ -312,8 +312,11 @@ if (SUPABASE_URL && SUPABASE_ANON_KEY) {
 // Costos por operación (en créditos)
 const CREDIT_COSTS = {
   '/api/processTrends': 3,
+  'processTrends': 3, // Añadido para manejar ambas versiones del path
   '/api/sondeo': 1,
+  'sondeo': 1, // Añadido para manejar ambas versiones del path
   '/api/create-document': { min: 2, max: 5 }, // Será calculado dinámicamente
+  'create-document': { min: 2, max: 5 }, // Añadido para manejar ambas versiones del path
   '/api/send-email': 0, // Gratis
   '/api/trending-tweets': 0, // Gratis
   '/api/test-email': 0 // Gratis (testing)
@@ -399,7 +402,20 @@ const verifyUserAccess = async (req, res, next) => {
     }
 
     // Verificar créditos disponibles
-    const operationCost = CREDIT_COSTS[operation];
+    // Encontrar la operación exacta o la operación base
+    let operationCost = CREDIT_COSTS[operation];
+    if (!operationCost && operationCost !== 0) {
+      console.log(`⚠️ Buscando coincidencia para operación: ${operation}`);
+      // Intentar buscar una coincidencia parcial (por ejemplo, /api/processTrends puede coincidir con processTrends)
+      for (const definedOp in CREDIT_COSTS) {
+        if (operation.includes(definedOp) || definedOp.includes(operation)) {
+          operationCost = CREDIT_COSTS[definedOp];
+          console.log(`✅ Coincidencia encontrada: ${definedOp} con costo ${operationCost}`);
+          break;
+        }
+      }
+    }
+
     if (!operationCost && operationCost !== 0) {
       console.warn(`⚠️  Operación no definida en costos: ${operation}`);
       return res.status(400).json({
@@ -1784,9 +1800,13 @@ app.get('/api/admin/test-logs', verifyUserAccess, async (req, res) => {
 
 // Aplicar middlewares globales para operaciones que requieren créditos
 app.use(addTimestamp);
+// Corregir la aplicación de middleware para asegurar que coincida con la ruta exacta
 app.use('/api/processTrends', verifyUserAccess, debitCredits);
+app.use('/processTrends', verifyUserAccess, debitCredits); // Ruta alternativa
 app.use('/api/sondeo', verifyUserAccess, debitCredits);
+app.use('/sondeo', verifyUserAccess, debitCredits); // Ruta alternativa
 app.use('/api/create-document', verifyUserAccess, debitCredits);
+app.use('/create-document', verifyUserAccess, debitCredits); // Ruta alternativa
 
 // 📄 ============ ENDPOINT PARA CREAR DOCUMENTOS ============
 
@@ -1932,6 +1952,8 @@ app.post('/api/create-document', async (req, res) => {
 app.post('/api/processTrends', async (req, res) => {
   console.time('procesamiento-total');
   console.log(`[${new Date().toISOString()}] Solicitud recibida en /api/processTrends`);
+  console.log(`Ruta: ${req.path}, Base URL: ${req.baseUrl}, Original URL: ${req.originalUrl}`);
+  console.log(`Operación costo asignado: ${req.operationCost}`);
   
   try {
     // 1. Obtener datos crudos
