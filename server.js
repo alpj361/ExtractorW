@@ -1362,13 +1362,12 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
         daysAgo: daysAgo.toISOString(),
         user_email,
         operation,
-        success,
         limit: limit * 2
       });
       
       let userQuery = supabase
         .from('usage_logs')
-        .select('*')
+        .select('id, user_id, user_email, operation, credits_consumed, ip_address, user_agent, timestamp, request_params, response_time, created_at')
         .gte('timestamp', daysAgo.toISOString());
 
       // Aplicar filtros específicos de usuario
@@ -1382,11 +1381,7 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
         console.log('🔍 Aplicando filtro de operación:', operation);
       }
 
-      if (success && success !== 'all') {
-        userQuery = userQuery.eq('success', success === 'true');
-        console.log('🔍 Aplicando filtro de éxito:', success);
-      }
-
+      // Removemos el filtro de success ya que no existe en la tabla
       console.log('🔍 Query final:', userQuery.toString());
 
       const { data: userLogs, error: userError } = await userQuery
@@ -1401,11 +1396,22 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
         console.log('📋 Muestra de logs:', userLogs.slice(0, 2));
         // Normalizar logs de usuario
         const normalizedUserLogs = userLogs.map(log => ({
-          ...log,
+          id: log.id,
+          user_id: log.user_id,
+          user_email: log.user_email,
+          operation: log.operation,
+          credits_consumed: log.credits_consumed || 0,
+          ip_address: log.ip_address || 'unknown',
+          user_agent: log.user_agent || 'unknown',
+          timestamp: log.timestamp || log.created_at,
+          request_data: log.request_params ? JSON.parse(JSON.stringify(log.request_params)) : {},
           log_type: 'user',
           source_table: 'usage_logs',
-          normalized_details: log.request_params,
-          execution_time: log.response_time
+          execution_time: log.response_time ? `${log.response_time}ms` : null,
+          is_success: true, // Por defecto asumimos éxito si no hay campo de error
+          formatted_time: new Date(log.timestamp || log.created_at).toLocaleString('es-ES', {
+            timeZone: 'America/Guatemala'
+          })
         }));
         allLogs.push(...normalizedUserLogs);
       } else {
