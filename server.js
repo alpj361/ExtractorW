@@ -597,7 +597,7 @@ async function logUsage(user, operation, credits, req) {
         query: req.query,
         body_keys: req.body ? Object.keys(req.body) : []
       }),
-      response_time: Date.now() - req.startTime,
+      response_time: req.startTime ? Date.now() - req.startTime : null,
       success: true, // Asumimos éxito si llegó aquí
       error_details: null
     };
@@ -1453,6 +1453,275 @@ app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
   }
 });
 
+// Endpoint para obtener usuarios con filtros específicos
+app.get('/api/admin/users', verifyUserAccess, async (req, res) => {
+  try {
+    const user = req.user;
+    
+    // Verificar que el usuario sea admin
+    if (user.profile.role !== 'admin') {
+      return res.status(403).json({
+        error: 'Acceso denegado',
+        message: 'Solo los administradores pueden acceder a este endpoint'
+      });
+    }
+
+    const { 
+      user_type, 
+      role, 
+      low_credits, 
+      limit = 50, 
+      offset = 0,
+      order_by = 'created_at',
+      order_direction = 'desc'
+    } = req.query;
+
+    console.log(`👑 Admin ${user.profile.email} consultando usuarios con filtros`);
+
+    if (!supabase) {
+      return res.status(503).json({
+        error: 'Base de datos no configurada',
+        message: 'Supabase no está disponible'
+      });
+    }
+
+    let query = supabase
+      .from('profiles')
+      .select('id, email, user_type, role, credits, created_at, updated_at');
+
+    // Aplicar filtros
+    if (user_type) {
+      query = query.eq('user_type', user_type);
+    }
+    
+    if (role) {
+      query = query.eq('role', role);
+    }
+    
+    if (low_credits === 'true') {
+      query = query.lte('credits', 10).neq('role', 'admin');
+    }
+
+    // Aplicar ordenamiento
+    const validOrderBy = ['created_at', 'credits', 'email', 'user_type'];
+    const validDirection = ['asc', 'desc'];
+    
+    if (validOrderBy.includes(order_by) && validDirection.includes(order_direction)) {
+      query = query.order(order_by, { ascending: order_direction === 'asc' });
+    }
+
+    // Aplicar límite y offset
+    query = query.range(offset, offset + limit - 1);
+
+    const { data: usersData, error } = await query;
+
+    if (error) {
+      console.error('Error obteniendo usuarios filtrados:', error);
+      return res.status(500).json({
+        error: 'Error obteniendo usuarios',
+        message: error.message
+      });
+    }
+
+    // Obtener el conteo total para paginación
+    let countQuery = supabase
+      .from('profiles')
+      .select('*', { count: 'exact', head: true });
+
+    if (user_type) countQuery = countQuery.eq('user_type', user_type);
+    if (role) countQuery = countQuery.eq('role', role);
+    if (low_credits === 'true') countQuery = countQuery.lte('credits', 10).neq('role', 'admin');
+
+    const { count, error: countError } = await countQuery;
+
+    const processedUsers = usersData?.map(userData => ({
+      id: userData.id,
+      email: userData.email,
+      user_type: userData.user_type,
+      role: userData.role,
+      credits: userData.role === 'admin' ? 'ilimitado' : userData.credits,
+      credits_numeric: userData.role === 'admin' ? null : userData.credits,
+      is_low_credits: userData.role !== 'admin' && userData.credits <= 10,
+      created_at: userData.created_at,
+      updated_at: userData.updated_at
+    })) || [];
+
+    res.json({
+      users: processedUsers,
+      pagination: {
+        total: count || 0,
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        has_more: (count || 0) > (parseInt(offset) + parseInt(limit))
+      },
+      filters_applied: {
+        user_type: user_type || null,
+        role: role || null,
+        low_credits: low_credits === 'true',
+        order_by,
+        order_direction
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo usuarios filtrados:', error);
+    res.status(500).json({
+      error: 'Error interno',
+      message: error.message
+    });
+  }
+});
+
+// Endpoint para obtener logs con filtros avanzados
+app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
+  try {
+    const user = req.user;
+    
+    // Verificar que el usuario sea admin
+    if (user.profile.role !== 'admin') {
+      return res.status(403).json({
+        error: 'Acceso denegado',
+        message: 'Solo los administradores pueden acceder a este endpoint'
+      });
+    }
+
+    const { 
+      user_email,
+      operation,
+      log_type, // 'user', 'system', o ambos
+      success, // true, false, o ambos
+      days = 7,
+      limit = 100,
+      offset = 0
+    } = req.query;
+    
+    // Convertir valores a números
+    const numDays = parseInt(days) || 7;
+    const numLimit = parseInt(limit) || 100;
+    const numOffset = parseInt(offset) || 0;
+
+    console.log(`👑 Admin ${user.profile.email} consultando logs con filtros`, {
+      log_type, success, user_email, operation, days
+    });
+    
+    // Si log_type es 'user', forzar que solo consulte usage_logs
+    if (log_type === 'user') {
+      console.log('🔒 Filtro específico: SOLO logs de usuario (usage_logs)');
+    } else if (log_type === 'system') {
+      console.log('🔒 Filtro específico: SOLO logs del sistema (system_execution_logs)');
+    }
+
+    if (!supabase) {
+      return res.status(503).json({
+        error: 'Base de datos no configurada',
+        message: 'Supabase no está disponible'
+      });
+    }
+
+    // Test query to verify database access
+    console.log('🧪 Ejecutando query de prueba...');
+    const { data: testData, error: testError } = await supabase
+      .from('usage_logs')
+      .select('*');
+
+    if (testError) {
+      console.error('❌ Error en query de prueba:', testError);
+      return res.status(500).json({
+        error: 'Error accediendo a la base de datos',
+        message: testError.message
+      });
+    } else {
+      console.log('✅ Query de prueba exitosa. Total registros:', testData?.length || 0);
+      if (testData && testData.length > 0) {
+        console.log('📋 Primer registro:', JSON.stringify(testData[0], null, 2));
+      }
+    }
+
+    const daysAgo = new Date();
+    daysAgo.setDate(daysAgo.getDate() - parseInt(days));
+
+    let allLogs = [];
+    
+    // 1. OBTENER LOGS DE USUARIO (usage_logs) si corresponde
+    if (!log_type || log_type === 'all' || log_type === 'user') {
+      console.log('📊 Consultando usage_logs...');
+      console.log('🔑 Usuario:', req.user.email);
+      console.log('🎭 Rol:', req.user.profile.role);
+      
+      let userQuery = supabase
+        .from('usage_logs')
+        .select('*')
+        .order('timestamp', { ascending: false });
+
+      // Solo agregar filtros si es necesario
+      if (days && days !== '0') {
+        userQuery = userQuery.gte('timestamp', daysAgo.toISOString());
+        console.log('📅 Filtro de fecha:', daysAgo.toISOString());
+      }
+
+      if (user_email && user_email !== 'all') {
+        userQuery = userQuery.ilike('user_email', `%${user_email}%`);
+        console.log('👤 Filtro de email:', user_email);
+      }
+      
+      if (operation && operation !== 'all') {
+        userQuery = userQuery.eq('operation', operation);
+        console.log('🔧 Filtro de operación:', operation);
+      }
+
+      console.log('🔍 Query final:', userQuery.toString());
+
+      const { data: userLogs, error: userError } = await userQuery;
+
+      if (userError) {
+        console.error('❌ Error obteniendo logs de usuario:', userError);
+        console.error('Detalles del error:', JSON.stringify(userError, null, 2));
+        return res.status(500).json({
+          error: 'Error obteniendo logs',
+          message: userError.message,
+          details: userError
+        });
+      }
+
+      if (userLogs && userLogs.length > 0) {
+        console.log(`✅ Logs encontrados: ${userLogs.length}`);
+        allLogs = userLogs.map(log => ({
+          ...log,
+          log_type: 'user',
+          source_table: 'usage_logs',
+          is_success: true,
+          formatted_time: new Date(log.timestamp || log.created_at).toLocaleString('es-ES', {
+            timeZone: 'America/Guatemala'
+          })
+        }));
+      } else {
+        console.log('⚠️ No se encontraron logs');
+        console.log('Query params:', {
+          days,
+          user_email,
+          operation,
+          limit
+        });
+      }
+    }
+
+    // Devolver resultados
+    res.json({
+      logs: allLogs,
+      total: allLogs.length,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Error generando estadísticas de logs:', error);
+    res.status(500).json({
+      error: 'Error interno',
+      message: error.message
+    });
+  }
+});
+
 // Endpoint de prueba para verificar logs
 app.get('/api/admin/test-logs', verifyUserAccess, async (req, res) => {
   try {
@@ -1867,10 +2136,11 @@ app.post('/api/processTrends', async (req, res) => {
     // Agrupar por categoría
     const categoryMap = {};
     top10.forEach(trend => {
-      if (categoryMap[trend.category]) {
-        categoryMap[trend.category] += 1;
+      const category = trend.category || 'Otros';
+      if (categoryMap[category]) {
+        categoryMap[category] += 1;
       } else {
-        categoryMap[trend.category] = 1;
+        categoryMap[category] = 1;
       }
     });
     const categoryData = Object.entries(categoryMap).map(([category, count]) => ({
@@ -2151,86 +2421,8 @@ async function processAboutInBackground(top10, rawData, recordId, timestamp) {
           processing_status: 'complete'
         };
         
-        // VALIDACIÓN ULTRA-ROBUSTA para evitar PGRST102
-        console.log('🔍 VALIDACIÓN ULTRA-ROBUSTA...');
-        
-        /**
-         * Función recursiva para limpiar cualquier objeto de valores problemáticos
-         */
-        const deepCleanObject = (obj) => {
-          if (obj === null || obj === undefined) return null;
-          
-          if (typeof obj === 'string') {
-            // Limpiar strings problemáticos
-            return obj
-              .replace(/[\u0000-\u001F\u007F-\u009F]/g, '') // Caracteres de control
-              .replace(/[\x00-\x1F\x7F-\x9F]/g, '') // Caracteres no válidos
-              .replace(/"/g, "'") // Comillas problemáticas
-              .substring(0, 1000) // Límite de tamaño
-              .trim();
-          }
-          
-          if (typeof obj === 'number') {
-            return isNaN(obj) || !isFinite(obj) ? 0 : obj;
-          }
-          
-          if (typeof obj === 'boolean') {
-            return Boolean(obj);
-          }
-          
-          if (Array.isArray(obj)) {
-            return obj.map(item => deepCleanObject(item)).filter(item => item !== null);
-          }
-          
-          if (typeof obj === 'object') {
-            const cleaned = {};
-            for (const [key, value] of Object.entries(obj)) {
-              if (key && typeof key === 'string') {
-                const cleanedValue = deepCleanObject(value);
-                if (cleanedValue !== null && cleanedValue !== undefined) {
-                  cleaned[key] = cleanedValue;
-                }
-              }
-            }
-            return cleaned;
-          }
-          
-          return obj;
-        };
-        
-        // Limpiar el objeto completo
-        const cleanedUpdateObject = deepCleanObject(updateObject);
-        
-        // Verificar objeto limpio
-        try {
-          const fullJson = JSON.stringify(cleanedUpdateObject);
-          console.log('✅ Objeto limpio serializable:', fullJson.length, 'caracteres');
-          
-          // Verificar que no sea demasiado grande (límite de Supabase ~1MB)
-          if (fullJson.length > 900000) { // 900KB como límite seguro
-            console.warn('⚠️ Objeto muy grande, aplicando compresión adicional...');
-            
-            // Reducir datos si es muy grande
-            if (cleanedUpdateObject.about && cleanedUpdateObject.about.length > 10) {
-              cleanedUpdateObject.about = cleanedUpdateObject.about.slice(0, 10);
-              console.log('📦 Reducido about a 10 items por tamaño');
-            }
-            
-            // Acortar resúmenes si siguen siendo muy largos
-            cleanedUpdateObject.about = cleanedUpdateObject.about.map(item => ({
-              ...item,
-              resumen: item.resumen ? item.resumen.substring(0, 150) : ''
-            }));
-          }
-          
-        } catch (fullError) {
-          console.error('❌ ERROR en objeto limpio:', fullError.message);
-          console.log('📋 CleanedUpdateObject problemático:', cleanedUpdateObject);
-          throw new Error(`Objeto limpio no serializable: ${fullError.message}`);
-        }
-        
-        // Usar el objeto limpio para la actualización
-        const finalUpdateObject = cleanedUpdateObject;
+        // USAR EL OBJETO LIMPIO PARA LA ACTUALIZACIÓN
+        const finalUpdateObject = updateObject;
         
         console.log('🚀 Enviando actualización a Supabase...');
         console.log('📝 Record ID:', recordId);
@@ -2861,7 +3053,7 @@ app.post('/api/sondeo', async (req, res) => {
       max_tokens: 600
     };
 
-    // Llamada a Perplexity
+    // Llamar a Perplexity
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
       headers: {
@@ -3005,9 +3197,9 @@ app.get('/api/trending-tweets', async (req, res) => {
   }
 });
 
-
-
-// Función auxiliar para análisis de sentimiento básico (sin IA)
+/**
+ * Función auxiliar para análisis de sentimiento básico (sin IA)
+ */
 function basicSentimentAnalysis(text) {
   const positiveWords = [
     'bueno', 'excelente', 'genial', 'fantástico', 'increíble', 'perfecto', 'maravilloso',
@@ -3150,7 +3342,7 @@ async function categorizeTrendWithAI(trendName) {
         'HTTP-Referer': 'https://pulse.domain.com'
       },
       body: JSON.stringify({
-        model: 'openai/gpt-4o:online',
+        model: 'openai/gpt-4-turbo:online',
         messages: [
           {
             role: 'system',
@@ -3209,7 +3401,7 @@ async function splitNameMentionsWithAI(trendRaw) {
         const raw = data.choices[0].message.content;
         console.log('[IA Split][RAW]', raw);
         try {
-          // Intentar parsear como JSON directo
+          // Intentar extraer JSON de la respuesta
           const parsed = JSON.parse(raw);
           return parsed;
         } catch (e) {
@@ -3311,7 +3503,7 @@ Responde SOLO en JSON:
   "contexto_local": true/false,
   "razon_tendencia": "Evento específico que causó la tendencia",
   "sentimiento_tweets": "positivo|negativo|neutral|mixto"
-}`;
+`;
 
     const payload = {
       model: 'sonar',
@@ -3853,7 +4045,7 @@ app.post('/api/test-email', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Error probando SMTP:', error.message);
+    console.error('❌ Error probando SMTP:', error);
     res.status(500).json({ 
       success: false, 
       error: error.message,
@@ -4222,11 +4414,7 @@ app.get('/api/admin/logging-status', verifyUserAccess, async (req, res) => {
   }
 });
 
-// 🎬 IMPORTAR Y USAR RUTAS DEL TRADUCTOR DE VIDEO
-const videoTranslatorRoutes = require('./routes');
-app.use('/api', videoTranslatorRoutes);
-
-// Agregar endpoint de estadísticas
+// Endpoint para obtener estadísticas de logs
 app.get('/api/admin/logs/stats', verifyUserAccess, async (req, res) => {
   try {
     const user = req.user;
@@ -4268,37 +4456,59 @@ app.get('/api/admin/logs/stats', verifyUserAccess, async (req, res) => {
 
     // Procesar estadísticas
     const stats = {
-      total_logs: userLogs?.length || 0,
-      by_operation: {},
-      by_user: {},
-      total_credits: 0,
-      period_days: parseInt(days)
+      overview: {
+        total_logs: userLogs?.length || 0,
+        user_logs: userLogs?.length || 0,
+        system_logs: 0, // Currently only processing user logs
+        success_logs: userLogs?.filter(log => !log.error_data)?.length || 0,
+        error_logs: userLogs?.filter(log => log.error_data)?.length || 0,
+        total_credits_consumed: 0,
+        period_days: parseInt(days)
+      },
+      by_type: {
+        user: {
+          total: userLogs?.length || 0,
+          success: userLogs?.filter(log => !log.error_data)?.length || 0,
+          errors: userLogs?.filter(log => log.error_data)?.length || 0,
+          credits_consumed: 0,
+          operations: {}
+        },
+        system: {
+          total: 0,
+          success: 0,
+          errors: 0,
+          credits_consumed: 0,
+          operations: {}
+        }
+      },
+      daily_breakdown: [],
+      error_summary: [],
+      sources: {
+        usage_logs: userLogs?.length || 0,
+        system_execution_logs: 0
+      }
     };
 
     if (userLogs) {
       userLogs.forEach(log => {
-        // Contar por operación
-        if (!stats.by_operation[log.operation]) {
-          stats.by_operation[log.operation] = {
+        // Contar créditos totales
+        const credits = log.credits_consumed || 0;
+        stats.overview.total_credits_consumed += credits;
+        stats.by_type.user.credits_consumed += credits;
+
+        // Contar por operación en user type
+        if (!stats.by_type.user.operations[log.operation]) {
+          stats.by_type.user.operations[log.operation] = {
             count: 0,
-            credits: 0
+            credits: 0,
+            errors: 0
           };
         }
-        stats.by_operation[log.operation].count++;
-        stats.by_operation[log.operation].credits += log.credits_consumed || 0;
-
-        // Contar por usuario
-        if (!stats.by_user[log.user_email]) {
-          stats.by_user[log.user_email] = {
-            count: 0,
-            credits: 0
-          };
+        stats.by_type.user.operations[log.operation].count++;
+        stats.by_type.user.operations[log.operation].credits += credits;
+        if (log.error_data) {
+          stats.by_type.user.operations[log.operation].errors++;
         }
-        stats.by_user[log.user_email].count++;
-        stats.by_user[log.user_email].credits += log.credits_consumed || 0;
-
-        // Total de créditos
-        stats.total_credits += log.credits_consumed || 0;
       });
     }
 
@@ -4321,3 +4531,8 @@ app.get('/api/admin/logs/stats', verifyUserAccess, async (req, res) => {
     });
   }
 });
+
+// 🎬 IMPORTAR Y USAR RUTAS DEL TRADUCTOR DE VIDEO
+const videoTranslatorRoutes = require('./routes');
+app.use('/api', videoTranslatorRoutes);
+
