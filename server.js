@@ -601,7 +601,6 @@ async function logUsage(user, operation, credits, req) {
     const logEntry = {
       user_id: user.id,
       user_email: user.profile.email,
-      user_role: user.profile.role || 'user',
       operation: operation,
       credits_consumed: creditsConsumed,
       ip_address: req.ip || req.connection.remoteAddress,
@@ -611,11 +610,12 @@ async function logUsage(user, operation, credits, req) {
         method: req.method,
         params: req.params,
         query: req.query,
-        body_keys: req.body ? Object.keys(req.body) : []
+        body_keys: req.body ? Object.keys(req.body) : [],
+        user_role: user.profile.role || 'user', // Mover role a request_params
+        success: true // Mover success a request_params
       }),
-      response_time: req.startTime ? Date.now() - req.startTime : null,
-      success: true, // Asumimos éxito si llegó aquí
-      error_details: null
+      response_time: req.startTime ? Date.now() - req.startTime : null
+      // Removido error_details que no existe en el esquema
     };
 
     // Guardar en tabla de logs (crear si no existe)
@@ -749,7 +749,6 @@ async function logError(operation, errorDetails, user = null, req = null) {
       const userLogEntry = {
         user_id: user.id,
         user_email: user.profile.email,
-        user_role: user.profile.role || 'user',
         operation: operation,
         credits_consumed: 0, // Errores no consumen créditos
         ip_address: req?.ip || req?.connection?.remoteAddress || 'unknown',
@@ -757,13 +756,17 @@ async function logError(operation, errorDetails, user = null, req = null) {
         timestamp: new Date().toISOString(),
         request_params: req ? JSON.stringify({
           method: req.method,
+          user_role: user.profile.role || 'user',
+          error_info: errorDetails, // Incluir info de error en request_params
           params: req.params,
           query: req.query,
-          body_keys: req.body ? Object.keys(req.body) : []
-        }) : '{}',
-        response_time: req && req.startTime ? Date.now() - req.startTime : null,
-        success: false,
-        error_details: JSON.stringify(errorDetails)
+          body_keys: req.body ? Object.keys(req.body) : [],
+          success: false // Mover success a request_params
+        }) : JSON.stringify({ 
+          error_message: 'Sin datos de request',
+          error_info: errorDetails
+        }),
+        response_time: req && req.startTime ? Date.now() - req.startTime : null
       };
 
       if (supabase) {
