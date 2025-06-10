@@ -4225,6 +4225,10 @@ app.get('/api/admin/logs/stats', verifyUserAccess, async (req, res) => {
       });
     }
 
+    // Inicializar estructura para top operations
+    const operationsMap = {};
+    const typesMap = {};
+
     // Procesar estadísticas
     const stats = {
       overview: {
@@ -4252,6 +4256,7 @@ app.get('/api/admin/logs/stats', verifyUserAccess, async (req, res) => {
           operations: {}
         }
       },
+      top_operations: [],
       daily_breakdown: [],
       error_summary: [],
       sources: {
@@ -4280,8 +4285,40 @@ app.get('/api/admin/logs/stats', verifyUserAccess, async (req, res) => {
         if (log.error_data) {
           stats.by_type.user.operations[log.operation].errors++;
         }
+        
+        // Construir datos para top_operations
+        if (!operationsMap[log.operation]) {
+          operationsMap[log.operation] = {
+            operation: log.operation,
+            count: 0,
+            credits: 0,
+            errors: 0,
+            types: []
+          };
+        }
+        
+        operationsMap[log.operation].count++;
+        operationsMap[log.operation].credits += credits;
+        if (log.error_data) {
+          operationsMap[log.operation].errors++;
+        }
+        
+        // Registrar tipo de operación (siempre será 'user' en este caso)
+        if (!operationsMap[log.operation].types.includes('user')) {
+          operationsMap[log.operation].types.push('user');
+        }
       });
     }
+    
+    // Convertir mapa de operaciones a array y ordenar por count
+    stats.top_operations = Object.values(operationsMap)
+      .sort((a, b) => b.count - a.count)
+      .map(op => ({
+        ...op,
+        success_rate: op.count > 0 ? 
+          ((op.count - op.errors) / op.count * 100).toFixed(1) + '%' : 
+          '0.0%'
+      }));
 
     res.json({
       success: true,
@@ -4290,7 +4327,8 @@ app.get('/api/admin/logs/stats', verifyUserAccess, async (req, res) => {
         period: `${days} días`,
         generated_at: new Date().toISOString(),
         generated_by: user.profile.email,
-        timezone: 'America/Guatemala'
+        timezone: 'America/Guatemala',
+        tables_consulted: ['usage_logs']
       }
     });
 
