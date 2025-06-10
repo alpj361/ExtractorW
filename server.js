@@ -1545,6 +1545,99 @@ app.get('/api/admin/test-logs', verifyUserAccess, async (req, res) => {
   }
 });
 
+// Endpoint de prueba para crear logs de ejemplo
+app.post('/api/admin/create-test-logs', verifyUserAccess, async (req, res) => {
+  try {
+    const user = req.user;
+    
+    // Verificar que el usuario sea admin
+    if (user.profile.role !== 'admin') {
+      return res.status(403).json({
+        error: 'Acceso denegado',
+        message: 'Solo los administradores pueden acceder a este endpoint'
+      });
+    }
+
+    console.log(`👑 Admin ${user.profile.email} creando logs de prueba`);
+
+    if (!supabase) {
+      return res.status(503).json({
+        error: 'Base de datos no configurada',
+        message: 'Supabase no está disponible'
+      });
+    }
+
+    // Crear 5 registros de ejemplo
+    const testOperations = [
+      'api/processTrends',
+      'api/sondeo', 
+      'api/create-document',
+      'api/test-email',
+      'api/trending-tweets'
+    ];
+    
+    const now = new Date();
+    const testLogs = [];
+    
+    for (let i = 0; i < 5; i++) {
+      const timestamp = new Date(now);
+      timestamp.setHours(now.getHours() - i);
+      
+      const logEntry = {
+        user_id: user.id,
+        user_email: user.profile.email,
+        operation: testOperations[i % testOperations.length],
+        credits_consumed: i + 1,
+        ip_address: req.ip || req.connection.remoteAddress,
+        user_agent: req.headers['user-agent'],
+        timestamp: timestamp.toISOString(),
+        request_params: JSON.stringify({
+          method: 'POST',
+          params: {},
+          query: {},
+          body_keys: ['test_param_' + i],
+          user_role: user.profile.role,
+          success: i !== 3 // El cuarto registro será un error para probar
+        }),
+        response_time: 100 + (i * 50)
+      };
+      
+      testLogs.push(logEntry);
+    }
+    
+    // Insertar logs de prueba
+    const { data, error } = await supabase
+      .from('usage_logs')
+      .insert(testLogs);
+      
+    if (error) {
+      console.error('❌ Error creando logs de prueba:', error);
+      return res.status(500).json({
+        success: false,
+        error: 'Error creando logs de prueba',
+        message: error.message,
+        details: error
+      });
+    }
+    
+    console.log(`✅ ${testLogs.length} logs de prueba creados correctamente`);
+    
+    res.json({
+      success: true,
+      message: `${testLogs.length} logs de prueba creados correctamente`,
+      logs: testLogs,
+      instructions: 'Ahora prueba a consultar /api/admin/logs?log_type=user para ver los logs creados'
+    });
+
+  } catch (error) {
+    console.error('❌ Error creando logs de prueba:', error);
+    res.status(500).json({
+      error: 'Error interno',
+      message: error.message
+    });
+  }
+});
+
 // 📊 ============ FIN ENDPOINTS PANEL DE ADMINISTRACIÓN ============
 
 // Aplicar middlewares globales para operaciones que requieren créditos
@@ -4344,4 +4437,377 @@ app.get('/api/admin/logs/stats', verifyUserAccess, async (req, res) => {
 // 🎬 IMPORTAR Y USAR RUTAS DEL TRADUCTOR DE VIDEO
 const videoTranslatorRoutes = require('./routes');
 app.use('/api', videoTranslatorRoutes);
+
+// Endpoint de diagnóstico detallado para los logs
+app.get('/api/admin/logs-diagnostic', verifyUserAccess, async (req, res) => {
+  try {
+    const user = req.user;
+    
+    // Verificar que el usuario sea admin
+    if (user.profile.role !== 'admin') {
+      return res.status(403).json({
+        error: 'Acceso denegado',
+        message: 'Solo los administradores pueden acceder a este endpoint'
+      });
+    }
+
+    console.log('🔍 Iniciando diagnóstico de logs...');
+    const diagnosticResults = {
+      timestamp: new Date().toISOString(),
+      supabase_client: !!supabase,
+      database_connection: false,
+      tables: {
+        usage_logs: {
+          exists: false,
+          columns: [],
+          row_count: 0,
+          sample_rows: [],
+          query_result: null,
+          error: null
+        },
+        system_execution_logs: {
+          exists: false,
+          columns: [],
+          row_count: 0
+        }
+      },
+      queries: {
+        simple: {
+          query: "SELECT * FROM usage_logs LIMIT 5",
+          success: false,
+          rows: 0,
+          error: null
+        },
+        filtered: {
+          query: "SELECT * FROM usage_logs WHERE timestamp > NOW() - INTERVAL '7 days' LIMIT 5",
+          success: false,
+          rows: 0,
+          error: null
+        }
+      },
+      troubleshooting: {
+        rls_active: true,
+        rls_policies: [],
+        user_role: user.profile.role,
+        user_email: user.profile.email,
+        timezone: 'America/Guatemala'
+      }
+    };
+
+    // 1. Probar conexión básica a la base de datos
+    try {
+      const { data: healthCheck, error: healthError } = await supabase.rpc('version');
+      diagnosticResults.database_connection = !healthError;
+      if (healthError) {
+        diagnosticResults.database_error = healthError.message;
+      }
+    } catch (error) {
+      diagnosticResults.database_error = error.message;
+    }
+
+    // 2. Verificar tabla usage_logs
+    try {
+      // Check if table exists
+      const { data: tableInfo, error: tableError } = await supabase
+        .from('information_schema.tables')
+        .select('*')
+        .eq('table_name', 'usage_logs')
+        .single();
+      
+      diagnosticResults.tables.usage_logs.exists = !!tableInfo && !tableError;
+      
+      if (tableError) {
+        diagnosticResults.tables.usage_logs.error = tableError.message;
+      } else {
+        // Get columns
+        const { data: columnsInfo, error: columnsError } = await supabase
+          .from('information_schema.columns')
+          .select('column_name, data_type')
+          .eq('table_name', 'usage_logs');
+        
+        if (!columnsError && columnsInfo) {
+          diagnosticResults.tables.usage_logs.columns = columnsInfo;
+        }
+        
+        // Count rows
+        const { count, error: countError } = await supabase
+          .from('usage_logs')
+          .select('*', { count: 'exact', head: true });
+        
+        if (!countError) {
+          diagnosticResults.tables.usage_logs.row_count = count || 0;
+        }
+        
+        // Get sample rows
+        const { data: sampleRows, error: sampleError } = await supabase
+          .from('usage_logs')
+          .select('*')
+          .limit(5);
+        
+        if (!sampleError && sampleRows) {
+          diagnosticResults.tables.usage_logs.sample_rows = sampleRows;
+        }
+      }
+    } catch (error) {
+      diagnosticResults.tables.usage_logs.error = error.message;
+    }
+
+    // 3. Probar consulta simple
+    try {
+      const { data, error } = await supabase
+        .from('usage_logs')
+        .select('*')
+        .limit(5);
+      
+      diagnosticResults.queries.simple.success = !error;
+      diagnosticResults.queries.simple.rows = data?.length || 0;
+      diagnosticResults.queries.simple.result = data;
+      
+      if (error) {
+        diagnosticResults.queries.simple.error = error.message;
+      }
+    } catch (error) {
+      diagnosticResults.queries.simple.error = error.message;
+    }
+
+    // 4. Probar consulta filtrada
+    try {
+      const daysAgo = new Date();
+      daysAgo.setDate(daysAgo.getDate() - 7);
+      
+      const { data, error } = await supabase
+        .from('usage_logs')
+        .select('*')
+        .gte('timestamp', daysAgo.toISOString())
+        .limit(5);
+      
+      diagnosticResults.queries.filtered.success = !error;
+      diagnosticResults.queries.filtered.rows = data?.length || 0;
+      diagnosticResults.queries.filtered.result = data;
+      
+      if (error) {
+        diagnosticResults.queries.filtered.error = error.message;
+      }
+    } catch (error) {
+      diagnosticResults.queries.filtered.error = error.message;
+    }
+
+    // 5. Verificar RLS
+    try {
+      const { data: policies, error: policiesError } = await supabase
+        .from('information_schema.policies')
+        .select('*')
+        .eq('tablename', 'usage_logs');
+      
+      if (!policiesError && policies) {
+        diagnosticResults.troubleshooting.rls_policies = policies;
+      }
+    } catch (error) {
+      diagnosticResults.troubleshooting.rls_error = error.message;
+    }
+
+    res.json({
+      success: true,
+      diagnostic: diagnosticResults,
+      recommendations: [
+        diagnosticResults.tables.usage_logs.row_count === 0 ? 
+          "No hay registros en la tabla usage_logs. Revisa si se están guardando correctamente los logs." : 
+          "La tabla usage_logs tiene registros, pero puede que las políticas RLS estén impidiendo verlos.",
+        "Verifica las políticas RLS para la tabla usage_logs.",
+        "Asegúrate de que el usuario tiene rol 'admin' en la tabla profiles."
+      ]
+    });
+
+  } catch (error) {
+    console.error('❌ Error en diagnóstico de logs:', error);
+    res.status(500).json({
+      error: 'Error interno',
+      message: error.message
+    });
+  }
+});
+
+// Modificación al endpoint /api/admin/logs
+app.get('/api/admin/logs', verifyUserAccess, async (req, res) => {
+  try {
+    const user = req.user;
+    
+    // Verificar que el usuario sea admin
+    if (user.profile.role !== 'admin') {
+      return res.status(403).json({
+        error: 'Acceso denegado',
+        message: 'Solo los administradores pueden acceder a este endpoint'
+      });
+    }
+
+    console.log(`👑 Admin ${user.profile.email} consultando logs con filtros`);
+
+    // Procesar parámetros de consulta
+    const { 
+      user_email,
+      operation,
+      log_type = 'user', // Default a 'user'
+      success,
+      days = 7,
+      limit = 50,
+      offset = 0
+    } = req.query;
+    
+    console.log({
+      log_type,
+      success,
+      user_email,
+      operation,
+      days
+    });
+
+    if (!supabase) {
+      return res.status(503).json({
+        error: 'Base de datos no configurada',
+        message: 'Supabase no está disponible'
+      });
+    }
+
+    // Determinar tipo de log a consultar
+    console.log(`🔒 Filtro específico: SOLO logs de usuario (usage_logs)`);
+
+    // Ejecutar query de prueba antes para diagnosticar problemas
+    console.log('🧪 Ejecutando query de prueba...');
+    const { data: testData, count: testCount, error: testError } = await supabase
+      .from('usage_logs')
+      .select('*', { count: 'exact' })
+      .limit(1);
+
+    if (testError) {
+      console.error('❌ Error en query de prueba:', testError);
+      return res.status(500).json({
+        error: 'Error consultando logs',
+        message: testError.message,
+        details: testError
+      });
+    }
+
+    console.log(`✅ Query de prueba exitosa. Total registros: ${testCount || 0}`);
+
+    // Calcular fecha de hace N días
+    const daysAgo = new Date();
+    daysAgo.setDate(daysAgo.getDate() - parseInt(days));
+
+    // Array para guardar todos los logs
+    let allLogs = [];
+
+    // Consultar logs de usuario si se requiere
+    if (log_type === 'user' || log_type === 'all') {
+      console.log('📊 Consultando usage_logs...');
+      console.log('🔑 Usuario:', user.profile.email);
+      console.log('🎭 Rol:', user.profile.role);
+      
+      let userQuery = supabase
+        .from('usage_logs')
+        .select('*')
+        .order('timestamp', { ascending: false });
+
+      // Solo agregar filtros si es necesario
+      if (days && days !== '0') {
+        userQuery = userQuery.gte('timestamp', daysAgo.toISOString());
+        console.log('📅 Filtro de fecha:', daysAgo.toISOString());
+      }
+
+      if (user_email && user_email !== 'all') {
+        userQuery = userQuery.ilike('user_email', `%${user_email}%`);
+        console.log('👤 Filtro de email:', user_email);
+      }
+      
+      if (operation && operation !== 'all') {
+        userQuery = userQuery.eq('operation', operation);
+        console.log('🔧 Filtro de operación:', operation);
+      }
+
+      console.log('🔍 Query final:', userQuery);
+
+      const { data: userLogs, error: userError } = await userQuery;
+
+      if (userError) {
+        console.error('❌ Error obteniendo logs de usuario:', userError);
+        console.error('Detalles del error:', JSON.stringify(userError, null, 2));
+        return res.status(500).json({
+          error: 'Error obteniendo logs',
+          message: userError.message,
+          details: userError
+        });
+      }
+
+      if (userLogs && userLogs.length > 0) {
+        console.log(`✅ Logs encontrados: ${userLogs.length}`);
+        allLogs = userLogs.map(log => {
+          // Parsear request_params si es string
+          let requestParams = {};
+          let isSuccess = true;
+          
+          try {
+            if (typeof log.request_params === 'string') {
+              requestParams = JSON.parse(log.request_params);
+            } else if (typeof log.request_params === 'object') {
+              requestParams = log.request_params;
+            }
+            
+            // Determinar si es éxito o error basado en request_params.success
+            if (requestParams && requestParams.success === false) {
+              isSuccess = false;
+            }
+          } catch (e) {
+            console.warn('⚠️ Error parseando request_params:', e);
+          }
+          
+          return {
+            ...log,
+            log_type: 'user',
+            source_table: 'usage_logs',
+            is_success: isSuccess,
+            formatted_time: new Date(log.timestamp || log.created_at).toLocaleString('es-ES', {
+              timeZone: 'America/Guatemala'
+            })
+          };
+        });
+      } else {
+        console.log('⚠️ No se encontraron logs');
+        console.log('Query params:', {
+          days,
+          user_email,
+          operation,
+          limit
+        });
+      }
+    }
+
+    // Devolver resultados con la estructura esperada por el frontend
+    res.json({
+      logs: allLogs,
+      total: allLogs.length,
+      timestamp: new Date().toISOString(),
+      sources: {
+        usage_logs: allLogs.length,
+        system_execution_logs: 0
+      },
+      filters_applied: {
+        user_email: user_email || 'all',
+        operation: operation || 'all',
+        log_type: log_type || 'all',
+        days: days
+      },
+      statistics: {
+        total_operations: allLogs.length,
+        unique_users: allLogs.length > 0 ? [...new Set(allLogs.map(log => log.user_email))].length : 0,
+        operation_types: allLogs.length > 0 ? [...new Set(allLogs.map(log => log.operation))].length : 0
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error generando estadísticas de logs:', error);
+    res.status(500).json({
+      error: 'Error interno',
+      message: error.message
+    });
+  }
+});
 
