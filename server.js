@@ -313,8 +313,8 @@ if (SUPABASE_URL && SUPABASE_ANON_KEY) {
 const CREDIT_COSTS = {
   '/api/processTrends': 3,
   'processTrends': 3, // Añadido para manejar ambas versiones del path
-  '/api/sondeo': 1,
-  'sondeo': 1, // Añadido para manejar ambas versiones del path
+  '/api/sondeo': { min: 15, max: 25 }, // Actualizado: 15-25 créditos según tamaño del contexto
+  'sondeo': { min: 15, max: 25 }, // Actualizado: 15-25 créditos según tamaño del contexto
   '/api/create-document': { min: 2, max: 5 }, // Será calculado dinámicamente
   'create-document': { min: 2, max: 5 }, // Añadido para manejar ambas versiones del path
   '/api/send-email': 0, // Gratis
@@ -493,10 +493,26 @@ async function handleCreditDebit(data, req, responseType) {
       const user = req.user;
       const operationCost = req.operationCost;
       
-      // Para create-document, calcular costo real basado en la respuesta
+      // Calcular costo real basado en la respuesta según el endpoint
       let finalCost = operationCost;
+      let tokensEstimados = 0;
+      
       if (req.path === '/api/create-document' && typeof data === 'object') {
         finalCost = calculateDocumentCost(data);
+      }
+      // Para sondeo, calcular costo basado en el tamaño del contexto
+      else if ((req.path === '/api/sondeo' || req.path.includes('sondeo')) && req.body && req.body.contexto) {
+        finalCost = calculateSondeoCost(req.body.contexto);
+        
+        // Estimar tokens usados (aproximación)
+        const contextoSize = JSON.stringify(req.body.contexto).length;
+        const promptSize = contextoSize + (req.body.pregunta?.length || 0);
+        tokensEstimados = Math.ceil(promptSize / 4); // ~4 caracteres por token
+        
+        console.log(`📊 Sondeo: Contexto de ${contextoSize} caracteres, aprox. ${tokensEstimados} tokens`);
+        
+        // Guardar info de tokens en request para logs
+        req.tokens_estimados = tokensEstimados;
       }
       
       // SIEMPRE registrar log de uso (tanto para admin como usuarios normales)
@@ -583,6 +599,41 @@ function calculateDocumentCost(responseData) {
 }
 
 /**
+ * Calcula el costo en créditos para el endpoint de sondeo
+ * El costo se basa en la cantidad de contexto proporcionado
+ */
+function calculateSondeoCost(contexto) {
+  try {
+    const costs = CREDIT_COSTS['/api/sondeo'];
+    
+    // Si no hay contexto, usar el mínimo
+    if (!contexto) {
+      return costs.min;
+    }
+    
+    // Calcular tamaño aproximado del contexto
+    const contextoJSON = JSON.stringify(contexto);
+    const contextoSize = contextoJSON.length;
+    
+    console.log(`📏 Tamaño del contexto para sondeo: ${contextoSize} caracteres`);
+    
+    // Escala de costos basada en tamaño:
+    if (contextoSize < 2000) {
+      return costs.min; // Contexto pequeño -> costo mínimo
+    } else if (contextoSize < 10000) {
+      // Contexto mediano -> costo proporcional entre min y max
+      const ratio = (contextoSize - 2000) / 8000; // 0 a 1 dependiendo de dónde cae en el rango
+      return Math.floor(costs.min + ratio * (costs.max - costs.min));
+    } else {
+      return costs.max; // Contexto grande -> costo máximo
+    }
+  } catch (error) {
+    console.error('Error calculando costo de sondeo:', error);
+    return CREDIT_COSTS['/api/sondeo'].min; // Fallback al mínimo
+  }
+}
+
+/**
  * Registra el uso de operaciones en logs detallados
  */
 async function logUsage(user, operation, credits, req) {
@@ -598,6 +649,13 @@ async function logUsage(user, operation, credits, req) {
     
     console.log(`📊 Logging uso: ${operation}, créditos original: ${credits} (tipo: ${typeof credits}), créditos sanitizado: ${creditsConsumed}`);
     
+    // Preparar la información de tokens estimados y modelo de IA si aplica
+    const tokensInfo = req.tokens_estimados ? {
+      tokens_estimados: req.tokens_estimados,
+      modelo_ia: req.modelo_ia || 'gpt-4o', // Modelo por defecto para sondeos
+      costo_estimado_usd: (req.tokens_estimados / 1000 * 0.01).toFixed(4) // $0.01 por 1K tokens (aprox)
+    } : {};
+    
     const logEntry = {
       user_id: user.id,
       user_email: user.profile.email,
@@ -611,8 +669,9 @@ async function logUsage(user, operation, credits, req) {
         params: req.params,
         query: req.query,
         body_keys: req.body ? Object.keys(req.body) : [],
-        user_role: user.profile.role || 'user', // Mover role a request_params
-        success: true // Mover success a request_params
+        user_role: user.profile.role || 'user',
+        success: true,
+        ...tokensInfo // Incluir info de tokens si está disponible
       }),
       response_time: req.startTime ? Date.now() - req.startTime : null
       // Removido error_details que no existe en el esquema
@@ -3154,8 +3213,18 @@ Es CRÍTICO que mantengas la estructura exacta de las claves JSON y que los dato
     const data = await response.json();
     let llm_response = '';
     
+    // Extraer la respuesta y la información de tokens
     if (data.choices && data.choices[0] && data.choices[0].message) {
       llm_response = data.choices[0].message.content;
+      
+      // Extraer y guardar información de tokens para logs
+      if (data.usage) {
+        console.log(`🔢 Tokens utilizados: ${data.usage.total_tokens} (prompt: ${data.usage.prompt_tokens}, completion: ${data.usage.completion_tokens})`);
+        req.tokens_estimados = data.usage.total_tokens;
+        req.modelo_ia = data.model || 'gpt-4o';
+        req.tokens_prompt = data.usage.prompt_tokens;
+        req.tokens_completion = data.usage.completion_tokens;
+      }
     } else {
       llm_response = 'No se obtuvo respuesta del modelo.';
     }
@@ -3236,14 +3305,19 @@ Es CRÍTICO que mantengas la estructura exacta de las claves JSON y que los dato
     
     // 5. Registrar el uso (ya manejado por el middleware debitCredits)
     
-    // 6. Devolver la respuesta con los datos de visualización
+    // 6. Devolver la respuesta con los datos de visualización y métricas de tokens
     res.json({
       status: 'success',
       llm_response,
       datos_analisis,
-      modelo_usado: 'gpt-4o',
+      modelo_usado: req.modelo_ia || 'gpt-4o',
       tipo_contexto: contexto.tipo_contexto,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      metricas: req.tokens_estimados ? {
+        tokens_totales: req.tokens_estimados,
+        tokens_prompt: req.tokens_prompt || 0,
+        tokens_completion: req.tokens_completion || 0
+      } : undefined
     });
     
   } catch (error) {
