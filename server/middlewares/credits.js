@@ -44,8 +44,7 @@ const debitCredits = async (req, res, next) => {
     const { data, error } = await supabase
       .from('profiles')
       .update({ 
-        credits: user.profile.credits - credits,
-        last_operation: new Date().toISOString()
+        credits: user.profile.credits - credits
       })
       .eq('id', user.id)
       .select()
