@@ -4,11 +4,12 @@
   "description": "Backend API for ExtractorW",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node server/index.js",
     "dev": "node start-dev.js",
     "process-historical": "node process_historical.js",
     "create-env": "node create-env.js",
-    "debug": "node debug-data.js"
+    "debug": "node debug-data.js",
+    "start:original": "node server.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.7",

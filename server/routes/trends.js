@@ -1,0 +1,202 @@
+const { verifyUserAccess, debitCredits } = require('../middlewares');
+const { processWithPerplexityIndividual, generateStatistics } = require('../services/perplexity');
+const { detectarCategoria } = require('../services/categorization');
+const { logError } = require('../services/logs');
+
+/**
+ * Configura las rutas relacionadas con tendencias
+ * @param {Express} app - La aplicación Express
+ */
+function setupTrendsRoutes(app) {
+  
+  // Endpoint para procesar tendencias
+  app.post('/api/processTrends', verifyUserAccess, debitCredits, async (req, res) => {
+    console.time('procesamiento-total');
+    try {
+      const startTime = Date.now();
+      console.log(`\n📊 SOLICITUD DE PROCESAMIENTO: /api/processTrends`);
+      console.log(`Usuario: ${req.user.email}`);
+      
+      // Validar datos de entrada
+      const { rawData, location = 'Guatemala', year = 2025, background = false } = req.body;
+      
+      if (!rawData) {
+        console.log('❌ Error: No se proporcionaron datos');
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'No se proporcionaron datos para procesar'
+        });
+      }
+      
+      console.log(`📌 Ubicación: ${location}`);
+      console.log(`📅 Año: ${year}`);
+      console.log(`🔄 Procesamiento en background: ${background ? 'Sí' : 'No'}`);
+      
+      console.time('obtencion-datos');
+      // Extraer tendencias del formato que envíe el cliente
+      let trends = [];
+      
+      // Verificar si es el formato de ExtractorT
+      if (rawData.twitter_trends) {
+        console.log('Detectado formato de ExtractorT con prefijos numéricos');
+        
+        // Extraer solo la parte numérica y el texto
+        trends = Object.keys(rawData.twitter_trends)
+          .filter(key => /^\d+_/.test(key))
+          .map(key => {
+            const trendName = key.split('_').slice(1).join('_');
+            return {
+              name: trendName,
+              volume: parseInt(key.split('_')[0]) || 1
+            };
+          });
+      } 
+      // Si es array de objetos con structure { name, count/volume }
+      else if (Array.isArray(rawData) && rawData.length > 0 && (rawData[0].name || rawData[0].text)) {
+        console.log('Detectado formato de array de objetos');
+        trends = rawData.map(item => ({
+          name: item.name || item.text || item.keyword,
+          volume: item.volume || item.count || 1
+        }));
+      }
+      // Si es un objeto con keys siendo las tendencias
+      else if (typeof rawData === 'object' && !Array.isArray(rawData)) {
+        console.log('Detectado formato de objeto con keys');
+        trends = Object.keys(rawData).map(key => ({
+          name: key,
+          volume: rawData[key] || 1
+        }));
+      } 
+      // Si es solo un array de strings
+      else if (Array.isArray(rawData) && typeof rawData[0] === 'string') {
+        console.log('Detectado formato de array de strings');
+        trends = rawData.map((name, index) => ({
+          name,
+          volume: (rawData.length - index) // Asignar volumen descendente
+        }));
+      }
+      
+      console.timeEnd('obtencion-datos');
+      
+      if (trends.length === 0) {
+        console.log('❌ Error: No se pudieron extraer tendencias del formato proporcionado');
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'Formato de datos no reconocido'
+        });
+      }
+      
+      console.log(`Se encontraron ${trends.length} tendencias para procesar`);
+      
+      // Si se solicita procesamiento en background
+      if (background) {
+        console.log('🔄 Iniciando procesamiento en background');
+        
+        // Enviar respuesta inmediata
+        res.json({
+          message: 'Procesamiento iniciado en background',
+          trends_count: trends.length,
+          processing_id: `bg_${Date.now()}`,
+          estimated_time: `${Math.ceil(trends.length * 0.5)} segundos`,
+          timestamp: new Date().toISOString()
+        });
+        
+        // Continuar procesamiento
+        processInBackground();
+        return;
+      }
+      
+      // Procesamiento normal (síncrono)
+      console.time('procesamiento-datos');
+      console.log('Iniciando procesamiento de datos básicos (sin about)');
+      
+      // Procesar datos básicos primero
+      const basicProcessedTrends = trends.map(trend => {
+        // Obtener nombre de la tendencia
+        const trendName = trend.name || trend.keyword || trend.text || 'Tendencia sin nombre';
+        
+        // Categorizar usando el método simple
+        const category = detectarCategoria(trendName);
+        
+        return {
+          name: trendName,
+          volume: trend.volume || trend.count || 1,
+          category: category,
+          original: trend
+        };
+      });
+      
+      console.timeEnd('procesamiento-datos');
+      
+      // Iniciar procesamiento detallado con Perplexity
+      const processedTrends = await processWithPerplexityIndividual(
+        trends.slice(0, Math.min(15, trends.length)), // Limitar a 15 tendencias
+        location
+      );
+      
+      // Generar estadísticas
+      const statistics = generateStatistics(processedTrends);
+      
+      // Calcular tiempo total
+      const totalTime = (Date.now() - startTime) / 1000;
+      console.log(`⏱️ Tiempo total de procesamiento: ${totalTime.toFixed(2)}s`);
+      
+      // Enviar respuesta
+      res.json({
+        trends: processedTrends,
+        statistics: statistics,
+        metadata: {
+          processing_time_seconds: totalTime,
+          timestamp: new Date().toISOString(),
+          count: processedTrends.length,
+          location: location,
+          year: year,
+          processing_type: 'perplexity-individual'
+        }
+      });
+      
+      console.timeEnd('procesamiento-total');
+      
+      // Función para procesamiento en background
+      async function processInBackground() {
+        try {
+          // Procesar con Perplexity en background
+          const processedTrends = await processWithPerplexityIndividual(
+            trends.slice(0, Math.min(20, trends.length)), // Limitar a 20 tendencias en background
+            location
+          );
+          
+          // Generar estadísticas
+          const statistics = generateStatistics(processedTrends);
+          
+          // Aquí se podría guardar el resultado en base de datos o enviar por webhook
+          console.log('✅ Procesamiento en background completado');
+          console.log(`   📊 ${processedTrends.length} tendencias procesadas`);
+          
+        } catch (error) {
+          console.error('❌ Error en procesamiento en background:', error);
+          await logError('processTrends_background', error, req.user, req);
+        }
+      }
+      
+    } catch (error) {
+      console.error('Error en /api/processTrends:', error);
+      await logError('processTrends', error, req.user, req);
+      res.status(500).json({
+        error: 'Internal Server Error',
+        message: error.message
+      });
+    }
+  });
+  
+  // Endpoint para sondeos
+  app.post('/api/sondeo', verifyUserAccess, debitCredits, async (req, res) => {
+    // Implementación del endpoint de sondeo
+    res.json({
+      message: 'Sondeo completado',
+      timestamp: new Date().toISOString()
+    });
+  });
+}
+
+module.exports = setupTrendsRoutes; 
