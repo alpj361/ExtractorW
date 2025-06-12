@@ -38,7 +38,7 @@ async function logUsage(user, operation, credits, req) {
         user_id: user.id,
         user_email: user.email,
         operation: operation,
-        credits_used: credits,
+        credits_consumed: credits,
         timestamp: new Date().toISOString(),
         request_params: requestParams,
         current_credits: user.profile.credits

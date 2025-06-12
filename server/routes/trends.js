@@ -101,6 +101,17 @@ function setupTrendsRoutes(app) {
       console.log(`🔄 Procesamiento en background: ${background ? 'Sí' : 'No'}`);
       console.log(`🔢 Tipo de datos recibidos: ${Array.isArray(rawData) ? 'Array' : typeof rawData}`);
       
+      // Añadir un log detallado para ver mejor la estructura
+      console.log('📝 Estructura de datos:', JSON.stringify({
+        isArray: Array.isArray(rawData),
+        hasTwitterTrends: !!rawData.twitter_trends,
+        twitterTrendsType: rawData.twitter_trends ? (Array.isArray(rawData.twitter_trends) ? 'array' : typeof rawData.twitter_trends) : 'undefined',
+        twitterTrendsLength: rawData.twitter_trends && Array.isArray(rawData.twitter_trends) ? rawData.twitter_trends.length : 'N/A',
+        firstItem: rawData.twitter_trends && Array.isArray(rawData.twitter_trends) && rawData.twitter_trends.length > 0 ? 
+          rawData.twitter_trends[0] : 'N/A',
+        keys: Object.keys(rawData).slice(0, 5)
+      }, null, 2));
+      
       console.time('obtencion-datos');
       // Extraer tendencias del formato que envíe el cliente
       let trends = [];
@@ -110,16 +121,55 @@ function setupTrendsRoutes(app) {
         if (rawData.twitter_trends) {
           console.log('Detectado formato de ExtractorT con prefijos numéricos');
           
-          // Extraer solo la parte numérica y el texto
-          trends = Object.keys(rawData.twitter_trends)
-            .filter(key => /^\d+_/.test(key))
-            .map(key => {
-              const trendName = key.split('_').slice(1).join('_');
+          // Verificar si twitter_trends es un array de strings
+          if (Array.isArray(rawData.twitter_trends) && typeof rawData.twitter_trends[0] === 'string') {
+            console.log('Procesando formato de array de strings con prefijos numéricos');
+            
+            trends = rawData.twitter_trends.map(trendString => {
+              // Extraer número de tendencia y volumen si está presente
+              const match = trendString.match(/^(\d+)\.\s*([^0-9]*)(\d+[kK])?/);
+              
+              if (match) {
+                const position = parseInt(match[1]) || 0;
+                const name = match[2].trim();
+                let volume = 1000 - (position * 10); // Valor por defecto basado en la posición
+                
+                // Si hay un número con K al final, usarlo como volumen
+                if (match[3]) {
+                  const volStr = match[3].replace(/[kK]$/, '');
+                  volume = parseInt(volStr) * 1000;
+                }
+                
+                return {
+                  name: name,
+                  volume: volume,
+                  position: position
+                };
+              }
+              
+              // Si no coincide con el patrón esperado, devolver con valores predeterminados
               return {
-                name: trendName,
-                volume: parseInt(key.split('_')[0]) || 1
+                name: trendString.replace(/^\d+\.\s*/, '').trim(),
+                volume: 1,
+                position: 0
               };
             });
+          } 
+          // Si twitter_trends es un objeto con claves numéricas
+          else if (typeof rawData.twitter_trends === 'object' && !Array.isArray(rawData.twitter_trends)) {
+            console.log('Procesando formato de objeto con claves numéricas');
+            
+            // Extraer solo la parte numérica y el texto
+            trends = Object.keys(rawData.twitter_trends)
+              .filter(key => /^\d+_/.test(key))
+              .map(key => {
+                const trendName = key.split('_').slice(1).join('_');
+                return {
+                  name: trendName,
+                  volume: parseInt(key.split('_')[0]) || 1
+                };
+              });
+          }
         } 
         // Si es array de objetos con structure { name, count/volume }
         else if (Array.isArray(rawData) && rawData.length > 0 && (rawData[0].name || rawData[0].text)) {
