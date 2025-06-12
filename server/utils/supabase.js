@@ -9,8 +9,21 @@ let supabase = null;
 
 if (SUPABASE_URL && SUPABASE_ANON_KEY) {
   try {
-    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    // Asegurarse de que la URL tenga el formato correcto
+    const formattedUrl = SUPABASE_URL.endsWith('/') ? SUPABASE_URL.slice(0, -1) : SUPABASE_URL;
+    
+    // Crear el cliente con opciones adicionales
+    supabase = createClient(formattedUrl, SUPABASE_ANON_KEY, {
+      auth: {
+        persistSession: false // No persistir la sesión en el servidor
+      },
+      db: {
+        schema: 'public' // Especificar el schema explícitamente
+      }
+    });
+    
     console.log('✅ Cliente Supabase inicializado correctamente');
+    console.log(`   📍 URL: ${formattedUrl}`);
   } catch (error) {
     console.error('❌ Error inicializando cliente Supabase:', error);
   }

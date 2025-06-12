@@ -71,9 +71,20 @@ const verifyUserAccess = async (req, res, next) => {
       
       console.log(`✅ Token decodificado: Usuario ID=${userId}, Email=${userEmail}`);
       
-      // Obtener información del perfil del usuario
+      // Crear un cliente temporal con el token del usuario
+      const SUPABASE_URL = process.env.SUPABASE_URL;
+      const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+      
+      if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+        throw new Error('Variables de entorno de Supabase no configuradas');
+      }
+      
+      const tempClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      tempClient.auth.setAuth(token);
+      
+      // Obtener información del perfil del usuario usando el cliente temporal
       console.log(`🔍 Buscando perfil para usuario ID: ${userId}`);
-      const { data: profile, error: profileError } = await supabase
+      const { data: profile, error: profileError } = await tempClient
         .from('profiles')
         .select('*')
         .eq('id', userId)
@@ -81,10 +92,40 @@ const verifyUserAccess = async (req, res, next) => {
       
       if (profileError) {
         console.log(`❌ Error obteniendo perfil: ${profileError.message}`);
-        return res.status(401).json({
-          error: 'Unauthorized',
-          message: profileError.message
-        });
+        
+        // Si el error es de proyecto no especificado, intentar con el cliente global
+        if (profileError.message.includes('Project not specified')) {
+          console.log('🔄 Intentando con cliente global...');
+          const { data: globalProfile, error: globalError } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', userId)
+            .single();
+            
+          if (globalError) {
+            console.log(`❌ Error con cliente global: ${globalError.message}`);
+            return res.status(401).json({
+              error: 'Unauthorized',
+              message: globalError.message
+            });
+          }
+          
+          if (!globalProfile) {
+            console.log(`❌ No se encontró perfil para usuario ID: ${userId}`);
+            return res.status(401).json({
+              error: 'Unauthorized',
+              message: 'Perfil de usuario no encontrado'
+            });
+          }
+          
+          // Usar el perfil encontrado con el cliente global
+          profile = globalProfile;
+        } else {
+          return res.status(401).json({
+            error: 'Unauthorized',
+            message: profileError.message
+          });
+        }
       }
       
       if (!profile) {
@@ -138,9 +179,9 @@ const verifyUserAccess = async (req, res, next) => {
         
         console.log(`✅ Token válido para usuario: ${user.email}`);
         
-        // Obtener información del perfil del usuario
+        // Obtener información del perfil del usuario usando el cliente temporal
         console.log(`🔍 Buscando perfil para usuario ID: ${user.id}`);
-        const { data: profile, error: profileError } = await supabase
+        const { data: profile, error: profileError } = await tempClient
           .from('profiles')
           .select('*')
           .eq('id', user.id)
@@ -148,10 +189,40 @@ const verifyUserAccess = async (req, res, next) => {
         
         if (profileError) {
           console.log(`❌ Error obteniendo perfil: ${profileError.message}`);
-          return res.status(401).json({
-            error: 'Unauthorized',
-            message: profileError.message
-          });
+          
+          // Si el error es de proyecto no especificado, intentar con el cliente global
+          if (profileError.message.includes('Project not specified')) {
+            console.log('🔄 Intentando con cliente global...');
+            const { data: globalProfile, error: globalError } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', user.id)
+              .single();
+              
+            if (globalError) {
+              console.log(`❌ Error con cliente global: ${globalError.message}`);
+              return res.status(401).json({
+                error: 'Unauthorized',
+                message: globalError.message
+              });
+            }
+            
+            if (!globalProfile) {
+              console.log(`❌ No se encontró perfil para usuario ID: ${user.id}`);
+              return res.status(401).json({
+                error: 'Unauthorized',
+                message: 'Perfil de usuario no encontrado'
+              });
+            }
+            
+            // Usar el perfil encontrado con el cliente global
+            profile = globalProfile;
+          } else {
+            return res.status(401).json({
+              error: 'Unauthorized',
+              message: profileError.message
+            });
+          }
         }
         
         if (!profile) {
