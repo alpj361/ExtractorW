@@ -628,8 +628,8 @@ function setupTrendsRoutes(app) {
           // Guardar en base de datos
           if (supabase) {
             try {
-              console.log('💾 Actualizando resultados procesados en la tabla trends...');
-              // Usar el timestamp como identificador
+              console.log('💾 Actualizando resultados procesados en la tabla trends usando idtimestamp...');
+              // Usar el idtimestamp como identificador
               const { error } = await supabase
                 .from('trends')
                 .update({
@@ -645,12 +645,12 @@ function setupTrendsRoutes(app) {
                     user_id: req.user ? req.user.id : null
                   }
                 })
-                .eq('timestamp', currentTimestamp);
+                .eq('idtimestamp', currentTimestamp);
               if (error) {
                 console.error('❌ Error actualizando resultados en trends:', error);
               } else {
                 console.log('✅ Resultados actualizados en trends correctamente, disponibles en /api/latestTrends');
-                console.log(`   🔍 ID de procesamiento: ${currentTimestamp}`);
+                console.log(`   🔍 ID de procesamiento (idtimestamp): ${currentTimestamp}`);
               }
             } catch (dbError) {
               console.error('❌ Error actualizando en base de datos:', dbError);
