@@ -282,7 +282,16 @@ function setupTrendsRoutes(app) {
             keyword: trend.name,
             volume: trend.volume || 1,
             category: trend.category,
-            about: { summary: 'Procesando información detallada...' }
+            mentions: trend.volume || 1, // Añadido para formatMentions
+            engagement: trend.volume || 1, // Añadido para formatNumbers
+            growth: 0, // Valor por defecto
+            sentimentScore: 0, // Valor por defecto
+            about: { 
+              summary: 'Procesando información detallada...',
+              tipo: 'trend',
+              relevancia: 'media',
+              contexto_local: true
+            }
           }));
         
         // Asegurar que siempre haya 10 keywords
@@ -291,7 +300,16 @@ function setupTrendsRoutes(app) {
             keyword: `Keyword ${topKeywords.length + 1}`,
             volume: 1,
             category: 'Otros',
-            about: { summary: 'Sin información adicional' }
+            mentions: 1, // Añadido para formatMentions
+            engagement: 1, // Añadido para formatNumbers
+            growth: 0, // Valor por defecto
+            sentimentScore: 0, // Valor por defecto
+            about: { 
+              summary: 'Sin información adicional',
+              tipo: 'trend',
+              relevancia: 'baja',
+              contexto_local: true
+            }
           });
         }
         
@@ -344,7 +362,16 @@ function setupTrendsRoutes(app) {
           keyword: trend.name,
           volume: trend.volume || 1,
           category: trend.category,
-          about: trend.about
+          mentions: trend.volume || 1, // Añadido para formatMentions
+          engagement: trend.volume || 1, // Añadido para formatNumbers
+          growth: 0, // Valor por defecto
+          sentimentScore: 0, // Valor por defecto
+          about: trend.about || {
+            summary: 'Información no disponible',
+            tipo: 'trend',
+            relevancia: 'media',
+            contexto_local: true
+          }
         }));
       
       // Asegurar que siempre haya 10 keywords
@@ -353,7 +380,16 @@ function setupTrendsRoutes(app) {
           keyword: `Keyword ${topKeywords.length + 1}`,
           volume: 1,
           category: 'Otros',
-          about: { summary: 'Sin información adicional' }
+          mentions: 1, // Añadido para formatMentions
+          engagement: 1, // Añadido para formatNumbers
+          growth: 0, // Valor por defecto
+          sentimentScore: 0, // Valor por defecto
+          about: { 
+            summary: 'Sin información adicional',
+            tipo: 'trend',
+            relevancia: 'baja',
+            contexto_local: true
+          }
         });
       }
       
@@ -442,7 +478,16 @@ function setupTrendsRoutes(app) {
               keyword: trend.name,
               volume: trend.volume || 1,
               category: trend.category,
-              about: trend.about
+              mentions: trend.volume || 1, // Añadido para formatMentions
+              engagement: trend.volume || 1, // Añadido para formatNumbers
+              growth: 0, // Valor por defecto
+              sentimentScore: 0, // Valor por defecto
+              about: trend.about || {
+                summary: 'Información no disponible',
+                tipo: 'trend',
+                relevancia: 'media',
+                contexto_local: true
+              }
             }));
           
           // Asegurar que siempre haya 10 keywords
@@ -451,7 +496,16 @@ function setupTrendsRoutes(app) {
               keyword: `Keyword ${topKeywords.length + 1}`,
               volume: 1,
               category: 'Otros',
-              about: { summary: 'Sin información adicional' }
+              mentions: 1, // Añadido para formatMentions
+              engagement: 1, // Añadido para formatNumbers
+              growth: 0, // Valor por defecto
+              sentimentScore: 0, // Valor por defecto
+              about: { 
+                summary: 'Sin información adicional',
+                tipo: 'trend',
+                relevancia: 'baja',
+                contexto_local: true
+              }
             });
           }
           
