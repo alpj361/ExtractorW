@@ -24,13 +24,13 @@ function setupTrendsRoutes(app) {
         });
       }
       
-      console.log('🔍 Consultando últimas tendencias en base de datos...');
+      console.log('🔍 Consultando últimas tendencias en tabla trends...');
       
-      // Obtener las últimas tendencias de la tabla public.trends
+      // Obtener las últimas tendencias de la tabla trends según su estructura correcta
       const { data, error } = await supabase
         .from('trends')
         .select('*')
-        .order('created_at', { ascending: false })
+        .order('timestamp', { ascending: false })
         .limit(1);
       
       if (error) {
@@ -46,24 +46,24 @@ function setupTrendsRoutes(app) {
       if (!data || data.length === 0) {
         console.log('⚠️ No se encontraron tendencias');
         return res.json({
-          trends: [],
+          wordCloudData: [],
+          topKeywords: [],
+          categoryData: [],
           message: 'No hay tendencias disponibles',
           timestamp: new Date().toISOString()
         });
       }
       
-      console.log(`✅ Se encontraron tendencias del ${new Date(data[0].created_at).toLocaleString()}`);
-      console.log(`📊 Tendencias encontradas: ${data[0].trends ? data[0].trends.length : 0}`);
+      console.log(`✅ Se encontraron tendencias del ${new Date(data[0].timestamp).toLocaleString()}`);
+      console.log(`📊 Keywords encontrados: ${data[0].top_keywords ? data[0].top_keywords.length : 0}`);
       
-      // Devolver las tendencias
+      // Devolver las tendencias con la estructura esperada por el dashboard
       res.json({
-        trends: data[0].trends || [],
-        statistics: data[0].statistics || {},
-        metadata: {
-          timestamp: data[0].created_at,
-          count: data[0].trends ? data[0].trends.length : 0,
-          source: 'database'
-        }
+        wordCloudData: data[0].word_cloud_data || [],
+        topKeywords: data[0].top_keywords || [],
+        categoryData: data[0].category_data || [],
+        timestamp: data[0].timestamp,
+        rawData: data[0].raw_data || {}
       });
       
     } catch (error) {
@@ -267,20 +267,49 @@ function setupTrendsRoutes(app) {
       if (shouldProcessInBackground) {
         console.log('🔄 Enviando respuesta rápida y continuando procesamiento en background');
         
-        // Enviar respuesta inmediata con datos básicos
+        // Preparar datos para la nube de palabras y palabras clave (versión básica)
+        const wordCloudData = basicProcessedTrends.map(trend => ({
+          text: trend.name,
+          value: trend.volume || 1,
+          category: trend.category
+        }));
+        
+        // Top keywords (siempre 10) para respuesta rápida
+        let topKeywords = basicProcessedTrends
+          .sort((a, b) => (b.volume || 0) - (a.volume || 0))
+          .slice(0, 10)
+          .map(trend => ({
+            keyword: trend.name,
+            volume: trend.volume || 1,
+            category: trend.category,
+            about: { summary: 'Procesando información detallada...' }
+          }));
+        
+        // Asegurar que siempre haya 10 keywords
+        while (topKeywords.length < 10) {
+          topKeywords.push({
+            keyword: `Keyword ${topKeywords.length + 1}`,
+            volume: 1,
+            category: 'Otros',
+            about: { summary: 'Sin información adicional' }
+          });
+        }
+        
+        // Datos de categorías
+        const categoryData = Object.entries(basicStatistics.categorias || {}).map(([name, count]) => ({
+          name,
+          value: count
+        }));
+        
+        // Enviar respuesta inmediata con datos básicos en el formato esperado por el dashboard
         res.json({
-          trends: basicProcessedTrends,
-          statistics: basicStatistics,
-          metadata: {
-            processing_time_seconds: (Date.now() - startTime) / 1000,
-            timestamp: new Date().toISOString(),
-            count: basicProcessedTrends.length,
-            location: location,
-            year: year,
-            processing_type: 'basic',
-            background_processing: true,
-            note: "Los datos detallados estarán disponibles en el endpoint /api/latestTrends en unos segundos"
-          }
+          wordCloudData: wordCloudData,
+          topKeywords: topKeywords,
+          categoryData: categoryData,
+          timestamp: new Date().toISOString(),
+          processing_time_seconds: (Date.now() - startTime) / 1000,
+          background_processing: true,
+          note: "Los datos detallados estarán disponibles en el endpoint /api/latestTrends en unos segundos"
         });
         
         // Continuar procesamiento detallado en background
@@ -300,22 +329,86 @@ function setupTrendsRoutes(app) {
       // Generar estadísticas
       const statistics = generateStatistics(processedTrends);
       
+      // Preparar datos para la nube de palabras y palabras clave
+      const wordCloudData = processedTrends.map(trend => ({
+        text: trend.name,
+        value: trend.volume || 1,
+        category: trend.category
+      }));
+      
+      // Top keywords (siempre 10)
+      let topKeywords = processedTrends
+        .sort((a, b) => (b.volume || 0) - (a.volume || 0))
+        .slice(0, 10)
+        .map(trend => ({
+          keyword: trend.name,
+          volume: trend.volume || 1,
+          category: trend.category,
+          about: trend.about
+        }));
+      
+      // Asegurar que siempre haya 10 keywords
+      while (topKeywords.length < 10) {
+        topKeywords.push({
+          keyword: `Keyword ${topKeywords.length + 1}`,
+          volume: 1,
+          category: 'Otros',
+          about: { summary: 'Sin información adicional' }
+        });
+      }
+      
+      // Datos de categorías
+      const categoryData = Object.entries(statistics.categorias || {}).map(([name, count]) => ({
+        name,
+        value: count
+      }));
+      
       // Calcular tiempo total
       const totalTime = (Date.now() - startTime) / 1000;
       console.log(`⏱️ Tiempo total de procesamiento: ${totalTime.toFixed(2)}s`);
       
-      // Enviar respuesta
-      res.json({
-        trends: processedTrends,
-        statistics: statistics,
-        metadata: {
-          processing_time_seconds: totalTime,
-          timestamp: new Date().toISOString(),
-          count: processedTrends.length,
-          location: location,
-          year: year,
-          processing_type: 'perplexity-individual'
+      // Guardar en base de datos
+      if (supabase) {
+        try {
+          console.log('💾 Guardando resultados procesados en tabla trends...');
+          
+          const timestamp = new Date();
+          
+          // Insertar con la estructura correcta
+          const { error } = await supabase
+            .from('trends')
+            .insert([{
+              timestamp: timestamp,
+              word_cloud_data: wordCloudData,
+              top_keywords: topKeywords,
+              category_data: categoryData,
+              raw_data: {
+                trends: processedTrends,
+                statistics: statistics,
+                location: location.toLowerCase(),
+                processing_time: totalTime,
+                source: 'api-sync',
+                user_id: req.user ? req.user.id : null
+              }
+            }]);
+            
+          if (error) {
+            console.error('❌ Error guardando resultados en trends:', error);
+          } else {
+            console.log('✅ Resultados guardados en trends correctamente');
+          }
+        } catch (dbError) {
+          console.error('❌ Error guardando en base de datos:', dbError);
         }
+      }
+      
+      // Enviar respuesta en el formato esperado por el dashboard
+      res.json({
+        wordCloudData: wordCloudData,
+        topKeywords: topKeywords,
+        categoryData: categoryData,
+        timestamp: new Date().toISOString(),
+        processing_time_seconds: totalTime
       });
       
       console.timeEnd('procesamiento-total');
@@ -334,28 +427,69 @@ function setupTrendsRoutes(app) {
           // Generar estadísticas
           const statistics = generateStatistics(processedTrends);
           
+          // Preparar datos para la nube de palabras y palabras clave
+          const wordCloudData = processedTrends.map(trend => ({
+            text: trend.name,
+            value: trend.volume || 1,
+            category: trend.category
+          }));
+          
+          // Top keywords (siempre 10)
+          let topKeywords = processedTrends
+            .sort((a, b) => (b.volume || 0) - (a.volume || 0))
+            .slice(0, 10)
+            .map(trend => ({
+              keyword: trend.name,
+              volume: trend.volume || 1,
+              category: trend.category,
+              about: trend.about
+            }));
+          
+          // Asegurar que siempre haya 10 keywords
+          while (topKeywords.length < 10) {
+            topKeywords.push({
+              keyword: `Keyword ${topKeywords.length + 1}`,
+              volume: 1,
+              category: 'Otros',
+              about: { summary: 'Sin información adicional' }
+            });
+          }
+          
+          // Datos de categorías
+          const categoryData = Object.entries(statistics.categorias || {}).map(([name, count]) => ({
+            name,
+            value: count
+          }));
+          
           // Guardar en base de datos si está disponible
           if (supabase) {
             try {
-              console.log('💾 Guardando resultados procesados en la tabla public.trends...');
+              console.log('💾 Guardando resultados procesados en la tabla trends...');
               
-              // Usar la tabla public.trends para almacenar los resultados
+              const timestamp = new Date();
+              
+              // Usar la estructura correcta para la tabla trends
               const { error } = await supabase
                 .from('trends')
                 .insert([{
-                  location: location.toLowerCase(),
-                  trends: processedTrends,
-                  statistics: statistics,
-                  processing_time: (Date.now() - startTime) / 1000,
-                  created_at: new Date().toISOString(),
-                  source: 'api-background',
-                  user_id: req.user ? req.user.id : null
+                  timestamp: timestamp,
+                  word_cloud_data: wordCloudData,
+                  top_keywords: topKeywords,
+                  category_data: categoryData,
+                  raw_data: {
+                    trends: processedTrends,
+                    statistics: statistics,
+                    location: location.toLowerCase(),
+                    processing_time: (Date.now() - startTime) / 1000,
+                    source: 'api-background',
+                    user_id: req.user ? req.user.id : null
+                  }
                 }]);
                 
               if (error) {
-                console.error('❌ Error guardando resultados en public.trends:', error);
+                console.error('❌ Error guardando resultados en trends:', error);
               } else {
-                console.log('✅ Resultados guardados en public.trends correctamente, disponibles en /api/latestTrends');
+                console.log('✅ Resultados guardados en trends correctamente, disponibles en /api/latestTrends');
               }
             } catch (dbError) {
               console.error('❌ Error guardando en base de datos:', dbError);
