@@ -284,6 +284,7 @@ function setupTrendsRoutes(app) {
             category: trend.category,
             mentions: trend.volume || 1, // Añadido para formatMentions
             engagement: trend.volume || 1, // Añadido para formatNumbers
+            count: trend.volume || 1, // Añadido para KeywordCount en el frontend
             growth: 0, // Valor por defecto
             sentimentScore: 0, // Valor por defecto
             about: { 
@@ -302,6 +303,7 @@ function setupTrendsRoutes(app) {
             category: 'Otros',
             mentions: 1, // Añadido para formatMentions
             engagement: 1, // Añadido para formatNumbers
+            count: 1, // Añadido para KeywordCount en el frontend
             growth: 0, // Valor por defecto
             sentimentScore: 0, // Valor por defecto
             about: { 
@@ -364,6 +366,7 @@ function setupTrendsRoutes(app) {
           category: trend.category,
           mentions: trend.volume || 1, // Añadido para formatMentions
           engagement: trend.volume || 1, // Añadido para formatNumbers
+          count: trend.volume || 1, // Añadido para KeywordCount en el frontend
           growth: 0, // Valor por defecto
           sentimentScore: 0, // Valor por defecto
           about: trend.about || {
@@ -382,6 +385,7 @@ function setupTrendsRoutes(app) {
           category: 'Otros',
           mentions: 1, // Añadido para formatMentions
           engagement: 1, // Añadido para formatNumbers
+          count: 1, // Añadido para KeywordCount en el frontend
           growth: 0, // Valor por defecto
           sentimentScore: 0, // Valor por defecto
           about: { 
@@ -480,6 +484,7 @@ function setupTrendsRoutes(app) {
               category: trend.category,
               mentions: trend.volume || 1, // Añadido para formatMentions
               engagement: trend.volume || 1, // Añadido para formatNumbers
+              count: trend.volume || 1, // Añadido para KeywordCount en el frontend
               growth: 0, // Valor por defecto
               sentimentScore: 0, // Valor por defecto
               about: trend.about || {
@@ -498,6 +503,7 @@ function setupTrendsRoutes(app) {
               category: 'Otros',
               mentions: 1, // Añadido para formatMentions
               engagement: 1, // Añadido para formatNumbers
+              count: 1, // Añadido para KeywordCount en el frontend
               growth: 0, // Valor por defecto
               sentimentScore: 0, // Valor por defecto
               about: { 
