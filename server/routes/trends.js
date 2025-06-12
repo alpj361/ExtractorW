@@ -10,7 +10,7 @@ const supabase = require('../utils/supabase');
  */
 function setupTrendsRoutes(app) {
   
-  // Endpoint para obtener las últimas tendencias
+  // Endpoint para obtener las últimas tendencias (público, sin autenticación)
   app.get('/api/latestTrends', async (req, res) => {
     try {
       console.log('📊 Solicitud de últimas tendencias recibida');
@@ -26,9 +26,9 @@ function setupTrendsRoutes(app) {
       
       console.log('🔍 Consultando últimas tendencias en base de datos...');
       
-      // Obtener las últimas tendencias de la base de datos
+      // Obtener las últimas tendencias de la tabla public.trends
       const { data, error } = await supabase
-        .from('trending_tweets')
+        .from('trends')
         .select('*')
         .order('created_at', { ascending: false })
         .limit(1);
@@ -226,24 +226,6 @@ function setupTrendsRoutes(app) {
       
       console.log(`✅ Se encontraron ${trends.length} tendencias para procesar`);
       
-      // Si se solicita procesamiento en background
-      if (background) {
-        console.log('🔄 Iniciando procesamiento en background');
-        
-        // Enviar respuesta inmediata
-        res.json({
-          message: 'Procesamiento iniciado en background',
-          trends_count: trends.length,
-          processing_id: `bg_${Date.now()}`,
-          estimated_time: `${Math.ceil(trends.length * 0.5)} segundos`,
-          timestamp: new Date().toISOString()
-        });
-        
-        // Continuar procesamiento
-        processInBackground();
-        return;
-      }
-      
       // Procesamiento normal (síncrono)
       console.time('procesamiento-datos');
       console.log('Iniciando procesamiento de datos básicos (sin about)');
@@ -265,6 +247,49 @@ function setupTrendsRoutes(app) {
       });
       
       console.timeEnd('procesamiento-datos');
+      
+      // Generar estadísticas básicas
+      const basicStatistics = {
+        total: basicProcessedTrends.length,
+        categorias: {},
+        timestamp: new Date().toISOString()
+      };
+      
+      // Contar categorías
+      basicProcessedTrends.forEach(trend => {
+        const category = trend.category || 'Otros';
+        basicStatistics.categorias[category] = (basicStatistics.categorias[category] || 0) + 1;
+      });
+      
+      // Si está en modo background o si se solicita explícitamente solo procesamiento básico
+      const shouldProcessInBackground = background || req.query.fastResponse === 'true';
+      
+      if (shouldProcessInBackground) {
+        console.log('🔄 Enviando respuesta rápida y continuando procesamiento en background');
+        
+        // Enviar respuesta inmediata con datos básicos
+        res.json({
+          trends: basicProcessedTrends,
+          statistics: basicStatistics,
+          metadata: {
+            processing_time_seconds: (Date.now() - startTime) / 1000,
+            timestamp: new Date().toISOString(),
+            count: basicProcessedTrends.length,
+            location: location,
+            year: year,
+            processing_type: 'basic',
+            background_processing: true,
+            note: "Los datos detallados estarán disponibles en el endpoint /api/latestTrends en unos segundos"
+          }
+        });
+        
+        // Continuar procesamiento detallado en background
+        processDetailedInBackground();
+        return;
+      }
+      
+      // Procesamiento detallado síncrono (esperar la respuesta)
+      console.log('🔍 Iniciando procesamiento detallado con Perplexity...');
       
       // Iniciar procesamiento detallado con Perplexity
       const processedTrends = await processWithPerplexityIndividual(
@@ -295,9 +320,11 @@ function setupTrendsRoutes(app) {
       
       console.timeEnd('procesamiento-total');
       
-      // Función para procesamiento en background
-      async function processInBackground() {
+      // Función para procesamiento detallado en background
+      async function processDetailedInBackground() {
         try {
+          console.log('🔄 Procesando detalles en background...');
+          
           // Procesar con Perplexity en background
           const processedTrends = await processWithPerplexityIndividual(
             trends.slice(0, Math.min(20, trends.length)), // Limitar a 20 tendencias en background
@@ -307,14 +334,46 @@ function setupTrendsRoutes(app) {
           // Generar estadísticas
           const statistics = generateStatistics(processedTrends);
           
-          // Aquí se podría guardar el resultado en base de datos o enviar por webhook
+          // Guardar en base de datos si está disponible
+          if (supabase) {
+            try {
+              console.log('💾 Guardando resultados procesados en la tabla public.trends...');
+              
+              // Usar la tabla public.trends para almacenar los resultados
+              const { error } = await supabase
+                .from('trends')
+                .insert([{
+                  location: location.toLowerCase(),
+                  trends: processedTrends,
+                  statistics: statistics,
+                  processing_time: (Date.now() - startTime) / 1000,
+                  created_at: new Date().toISOString(),
+                  source: 'api-background',
+                  user_id: req.user ? req.user.id : null
+                }]);
+                
+              if (error) {
+                console.error('❌ Error guardando resultados en public.trends:', error);
+              } else {
+                console.log('✅ Resultados guardados en public.trends correctamente, disponibles en /api/latestTrends');
+              }
+            } catch (dbError) {
+              console.error('❌ Error guardando en base de datos:', dbError);
+            }
+          }
+          
           console.log('✅ Procesamiento en background completado');
-          console.log(`   📊 ${processedTrends.length} tendencias procesadas`);
+          console.log(`   📊 ${processedTrends.length} tendencias procesadas detalladamente`);
           
         } catch (error) {
-          console.error('❌ Error en procesamiento en background:', error);
+          console.error('❌ Error en procesamiento detallado en background:', error);
           await logError('processTrends_background', error, req.user, req);
         }
+      }
+      
+      // Función para procesamiento en background (versión legacy)
+      async function processInBackground() {
+        processDetailedInBackground();
       }
       
     } catch (error) {
