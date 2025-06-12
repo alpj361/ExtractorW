@@ -10,6 +10,74 @@ const supabase = require('../utils/supabase');
  */
 function setupTrendsRoutes(app) {
   
+  // Registro de procesamiento en curso (guardamos timestamps como claves)
+  const backgroundProcessingStatus = {};
+  
+  // Endpoint para verificar estado de procesamiento
+  app.get('/api/processingStatus/:timestamp', async (req, res) => {
+    try {
+      const { timestamp } = req.params;
+      console.log(`🔍 Verificando estado de procesamiento para timestamp: ${timestamp}`);
+      
+      if (!timestamp) {
+        return res.status(400).json({
+          error: 'Parámetro incorrecto',
+          message: 'Se requiere un timestamp válido'
+        });
+      }
+      
+      // Verificar si existe en nuestro registro local
+      if (backgroundProcessingStatus[timestamp]) {
+        return res.json(backgroundProcessingStatus[timestamp]);
+      }
+      
+      // Si no está en el registro local, verificar en la base de datos
+      if (supabase) {
+        console.log('🔍 Buscando procesamiento en base de datos...');
+        
+        const { data, error } = await supabase
+          .from('trends')
+          .select('*')
+          .eq('timestamp', timestamp)
+          .limit(1);
+        
+        if (error) {
+          console.error('❌ Error consultando estado de procesamiento:', error);
+          return res.status(500).json({
+            error: 'Error interno',
+            message: 'No se pudo verificar el estado del procesamiento',
+            details: error.message
+          });
+        }
+        
+        if (data && data.length > 0) {
+          console.log('✅ Procesamiento encontrado en base de datos');
+          // Si encontramos el registro en la base de datos, el procesamiento está completo
+          return res.json({
+            timestamp: timestamp,
+            status: 'completed',
+            has_about: true,
+            has_statistics: true,
+            completion_time: new Date().toISOString()
+          });
+        }
+      }
+      
+      // Si no se encontró ni en memoria ni en base de datos
+      return res.json({
+        timestamp: timestamp,
+        status: 'unknown',
+        message: 'No se encontró información sobre este procesamiento'
+      });
+    } catch (error) {
+      console.error('❌ Error en /api/processingStatus:', error);
+      res.status(500).json({
+        error: 'Error interno',
+        message: error.message
+      });
+    }
+  });
+  
   // Endpoint para obtener las últimas tendencias (público, sin autenticación)
   app.get('/api/latestTrends', async (req, res) => {
     try {
@@ -267,6 +335,18 @@ function setupTrendsRoutes(app) {
       if (shouldProcessInBackground) {
         console.log('🔄 Enviando respuesta rápida y continuando procesamiento en background');
         
+        // Generar un timestamp único para este procesamiento
+        const processingTimestamp = new Date().toISOString();
+        
+        // Registrar que inició el procesamiento
+        backgroundProcessingStatus[processingTimestamp] = {
+          timestamp: processingTimestamp,
+          status: 'processing',
+          has_about: false,
+          has_statistics: false,
+          start_time: processingTimestamp
+        };
+        
         // Preparar datos para la nube de palabras y palabras clave (versión básica)
         const wordCloudData = basicProcessedTrends.map(trend => ({
           text: trend.name,
@@ -326,14 +406,15 @@ function setupTrendsRoutes(app) {
           wordCloudData: wordCloudData,
           topKeywords: topKeywords,
           categoryData: categoryData,
-          timestamp: new Date().toISOString(),
+          timestamp: processingTimestamp,
           processing_time_seconds: (Date.now() - startTime) / 1000,
           background_processing: true,
+          status: 'processing',
           note: "Los datos detallados estarán disponibles en el endpoint /api/latestTrends en unos segundos"
         });
         
-        // Continuar procesamiento detallado en background
-        processDetailedInBackground();
+        // Continuar procesamiento detallado en background con el timestamp generado
+        processDetailedInBackground(processingTimestamp);
         return;
       }
       
@@ -454,9 +535,22 @@ function setupTrendsRoutes(app) {
       console.timeEnd('procesamiento-total');
       
       // Función para procesamiento detallado en background
-      async function processDetailedInBackground() {
+      async function processDetailedInBackground(processingTimestamp) {
         try {
-          console.log('🔄 Procesando detalles en background...');
+          // Si no se proporcionó un timestamp, generar uno nuevo
+          const currentTimestamp = processingTimestamp || new Date().toISOString();
+          console.log(`🔄 Procesando detalles en background (ID: ${currentTimestamp})...`);
+          
+          // Si no existe un registro previo, crearlo
+          if (!backgroundProcessingStatus[currentTimestamp]) {
+            backgroundProcessingStatus[currentTimestamp] = {
+              timestamp: currentTimestamp,
+              status: 'processing',
+              has_about: false,
+              has_statistics: false,
+              start_time: new Date().toISOString()
+            };
+          }
           
           // Procesar con Perplexity en background
           const processedTrends = await processWithPerplexityIndividual(
@@ -464,8 +558,14 @@ function setupTrendsRoutes(app) {
             location
           );
           
+          // Actualizar estado - ya tenemos info de about
+          backgroundProcessingStatus[currentTimestamp].has_about = true;
+          
           // Generar estadísticas
           const statistics = generateStatistics(processedTrends);
+          
+          // Actualizar estado - ya tenemos estadísticas
+          backgroundProcessingStatus[currentTimestamp].has_statistics = true;
           
           // Preparar datos para la nube de palabras y palabras clave
           const wordCloudData = processedTrends.map(trend => ({
@@ -521,12 +621,16 @@ function setupTrendsRoutes(app) {
             value: count
           }));
           
-          // Guardar en base de datos si está disponible
+          // Calcular tiempo total
+          const totalTime = (Date.now() - startTime) / 1000;
+          console.log(`⏱️ Tiempo total de procesamiento: ${totalTime.toFixed(2)}s`);
+          
+          // Guardar en base de datos
           if (supabase) {
             try {
               console.log('💾 Guardando resultados procesados en la tabla trends...');
               
-              const timestamp = new Date();
+              const timestamp = new Date(currentTimestamp);
               
               // Usar la estructura correcta para la tabla trends
               const { error } = await supabase
@@ -550,6 +654,7 @@ function setupTrendsRoutes(app) {
                 console.error('❌ Error guardando resultados en trends:', error);
               } else {
                 console.log('✅ Resultados guardados en trends correctamente, disponibles en /api/latestTrends');
+                console.log(`   🔍 ID de procesamiento: ${currentTimestamp}`);
               }
             } catch (dbError) {
               console.error('❌ Error guardando en base de datos:', dbError);
@@ -559,9 +664,29 @@ function setupTrendsRoutes(app) {
           console.log('✅ Procesamiento en background completado');
           console.log(`   📊 ${processedTrends.length} tendencias procesadas detalladamente`);
           
+          // Actualizar estado - procesamiento completado
+          backgroundProcessingStatus[currentTimestamp] = {
+            timestamp: currentTimestamp,
+            status: 'completed',
+            has_about: true,
+            has_statistics: true,
+            completion_time: new Date().toISOString()
+          };
+          
+          // Mantener el registro por un tiempo limitado (30 minutos)
+          setTimeout(() => {
+            delete backgroundProcessingStatus[currentTimestamp];
+          }, 30 * 60 * 1000);
+          
         } catch (error) {
           console.error('❌ Error en procesamiento detallado en background:', error);
           await logError('processTrends_background', error, req.user, req);
+          
+          // Registrar el error en el estado
+          if (backgroundProcessingStatus[currentTimestamp]) {
+            backgroundProcessingStatus[currentTimestamp].status = 'error';
+            backgroundProcessingStatus[currentTimestamp].error = error.message;
+          }
         }
       }
       
