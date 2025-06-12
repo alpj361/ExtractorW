@@ -2,12 +2,71 @@ const { verifyUserAccess, debitCredits } = require('../middlewares');
 const { processWithPerplexityIndividual, generateStatistics } = require('../services/perplexity');
 const { detectarCategoria } = require('../services/categorization');
 const { logError } = require('../services/logs');
+const supabase = require('../utils/supabase');
 
 /**
  * Configura las rutas relacionadas con tendencias
  * @param {Express} app - La aplicación Express
  */
 function setupTrendsRoutes(app) {
+  
+  // Endpoint para obtener las últimas tendencias
+  app.get('/api/latestTrends', async (req, res) => {
+    try {
+      console.log('📊 Solicitud de últimas tendencias recibida');
+      
+      if (!supabase) {
+        return res.status(503).json({
+          error: 'Servicio no disponible',
+          message: 'Base de datos no configurada'
+        });
+      }
+      
+      // Obtener las últimas tendencias de la base de datos
+      const { data, error } = await supabase
+        .from('trending_tweets')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(1);
+      
+      if (error) {
+        console.error('❌ Error obteniendo tendencias:', error);
+        return res.status(500).json({
+          error: 'Error interno',
+          message: 'No se pudieron obtener las tendencias'
+        });
+      }
+      
+      if (!data || data.length === 0) {
+        console.log('⚠️ No se encontraron tendencias');
+        return res.json({
+          trends: [],
+          message: 'No hay tendencias disponibles',
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      console.log(`✅ Se encontraron tendencias del ${new Date(data[0].created_at).toLocaleString()}`);
+      
+      // Devolver las tendencias
+      res.json({
+        trends: data[0].trends || [],
+        statistics: data[0].statistics || {},
+        metadata: {
+          timestamp: data[0].created_at,
+          count: data[0].trends ? data[0].trends.length : 0,
+          source: 'database'
+        }
+      });
+      
+    } catch (error) {
+      console.error('❌ Error en /api/latestTrends:', error);
+      res.status(500).json({
+        error: 'Error interno',
+        message: error.message
+      });
+    }
+  });
   
   // Endpoint para procesar tendencias
   app.post('/api/processTrends', verifyUserAccess, debitCredits, async (req, res) => {

@@ -352,6 +352,156 @@ function setupAdminRoutes(app) {
       });
     }
   });
+  
+  // Endpoint para estadísticas de logs
+  app.get('/api/admin/logs/stats', verifyUserAccess, async (req, res) => {
+    try {
+      const user = req.user;
+      
+      // Verificar que el usuario sea admin
+      if (user.profile.role !== 'admin') {
+        return res.status(403).json({
+          error: 'Acceso denegado',
+          message: 'Solo los administradores pueden acceder a este endpoint'
+        });
+      }
+      
+      console.log(`👑 Admin ${user.profile.email} consultando estadísticas de logs`);
+      
+      // Procesar parámetros
+      const { days = 7, log_type = 'user' } = req.query;
+      
+      if (!supabase) {
+        return res.status(503).json({
+          error: 'Base de datos no configurada',
+          message: 'Supabase no está disponible'
+        });
+      }
+      
+      // Calcular fecha de hace N días
+      const daysAgo = new Date();
+      daysAgo.setDate(daysAgo.getDate() - parseInt(days));
+      
+      // Consultar logs de usuario para estadísticas
+      const { data: usageLogs, error: usageError } = await supabase
+        .from('usage_logs')
+        .select('*')
+        .gte('timestamp', daysAgo.toISOString());
+      
+      if (usageError) {
+        console.error('❌ Error obteniendo logs para estadísticas:', usageError);
+        return res.status(500).json({
+          error: 'Error consultando logs',
+          message: usageError.message
+        });
+      }
+      
+      // Generar estadísticas
+      const uniqueUsers = [...new Set(usageLogs.map(log => log.user_email))];
+      const operationCounts = {};
+      
+      usageLogs.forEach(log => {
+        if (log.operation) {
+          operationCounts[log.operation] = (operationCounts[log.operation] || 0) + 1;
+        }
+      });
+      
+      // Calcular tendencias diarias
+      const dailyActivity = {};
+      const now = new Date();
+      
+      // Inicializar los últimos N días
+      for (let i = 0; i < parseInt(days); i++) {
+        const date = new Date();
+        date.setDate(now.getDate() - i);
+        const dateStr = date.toISOString().split('T')[0];
+        dailyActivity[dateStr] = 0;
+      }
+      
+      // Contar actividad por día
+      usageLogs.forEach(log => {
+        const dateStr = new Date(log.timestamp).toISOString().split('T')[0];
+        if (dailyActivity[dateStr] !== undefined) {
+          dailyActivity[dateStr] += 1;
+        }
+      });
+      
+      res.json({
+        total_logs: usageLogs.length,
+        unique_users: uniqueUsers.length,
+        operations: operationCounts,
+        top_operations: Object.entries(operationCounts)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 5)
+          .map(([name, count]) => ({ name, count })),
+        daily_activity: Object.entries(dailyActivity)
+          .map(([date, count]) => ({ date, count }))
+          .sort((a, b) => a.date.localeCompare(b.date)),
+        timestamp: new Date().toISOString()
+      });
+      
+    } catch (error) {
+      console.error('❌ Error generando estadísticas de logs:', error);
+      res.status(500).json({
+        error: 'Error interno',
+        message: error.message
+      });
+    }
+  });
+  
+  // Endpoint para listar usuarios
+  app.get('/api/admin/users', verifyUserAccess, async (req, res) => {
+    try {
+      const user = req.user;
+      
+      // Verificar que el usuario sea admin
+      if (user.profile.role !== 'admin') {
+        return res.status(403).json({
+          error: 'Acceso denegado',
+          message: 'Solo los administradores pueden acceder a este endpoint'
+        });
+      }
+      
+      console.log(`👑 Admin ${user.profile.email} consultando lista de usuarios`);
+      
+      const { limit = 200 } = req.query;
+      
+      if (!supabase) {
+        return res.status(503).json({
+          error: 'Base de datos no configurada',
+          message: 'Supabase no está disponible'
+        });
+      }
+      
+      // Consultar perfiles de usuario
+      const { data: profiles, error: profilesError } = await supabase
+        .from('profiles')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(parseInt(limit));
+      
+      if (profilesError) {
+        console.error('❌ Error obteniendo perfiles de usuario:', profilesError);
+        return res.status(500).json({
+          error: 'Error consultando usuarios',
+          message: profilesError.message
+        });
+      }
+      
+      res.json({
+        users: profiles,
+        total: profiles.length,
+        timestamp: new Date().toISOString()
+      });
+      
+    } catch (error) {
+      console.error('❌ Error obteniendo usuarios:', error);
+      res.status(500).json({
+        error: 'Error interno',
+        message: error.message
+      });
+    }
+  });
 }
 
 module.exports = setupAdminRoutes; 
