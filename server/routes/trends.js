@@ -628,15 +628,11 @@ function setupTrendsRoutes(app) {
           // Guardar en base de datos
           if (supabase) {
             try {
-              console.log('💾 Guardando resultados procesados en la tabla trends...');
-              
-              const timestamp = new Date(currentTimestamp);
-              
-              // Usar la estructura correcta para la tabla trends
+              console.log('💾 Actualizando resultados procesados en la tabla trends...');
+              // Usar el timestamp como identificador
               const { error } = await supabase
                 .from('trends')
-                .insert([{
-                  timestamp: timestamp,
+                .update({
                   word_cloud_data: wordCloudData,
                   top_keywords: topKeywords,
                   category_data: categoryData,
@@ -648,16 +644,16 @@ function setupTrendsRoutes(app) {
                     source: 'api-background',
                     user_id: req.user ? req.user.id : null
                   }
-                }]);
-                
+                })
+                .eq('timestamp', currentTimestamp);
               if (error) {
-                console.error('❌ Error guardando resultados en trends:', error);
+                console.error('❌ Error actualizando resultados en trends:', error);
               } else {
-                console.log('✅ Resultados guardados en trends correctamente, disponibles en /api/latestTrends');
+                console.log('✅ Resultados actualizados en trends correctamente, disponibles en /api/latestTrends');
                 console.log(`   🔍 ID de procesamiento: ${currentTimestamp}`);
               }
             } catch (dbError) {
-              console.error('❌ Error guardando en base de datos:', dbError);
+              console.error('❌ Error actualizando en base de datos:', dbError);
             }
           }
           
