@@ -9,13 +9,15 @@ const app = express();
 
 // Configuración básica
 app.use(cors({
-  origin: '*', // O pon tu frontend, ej: 'http://localhost:3000'
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  origin: ['http://localhost:5173', 'http://localhost:3000', 'https://qqshdccpmypelhmyqnut.supabase.co'],
+  methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-client-info', 'apikey'],
+  credentials: true,
+  maxAge: 86400 // 24 horas
 }));
-app.use(express.json({limit: '10mb'}));
 
-// Aplicar middlewares globales
+// Configurar middlewares
+app.use(express.json());
 setupMiddlewares(app);
 
 // Configurar rutas
@@ -32,7 +34,7 @@ process.on('unhandledRejection', (reason, promise) => {
   // No terminar el proceso para mantener el servidor en ejecución
 });
 
-// Imprimir variables de entorno disponibles (sin valores sensibles)
+// Mostrar variables de entorno disponibles
 console.log('Variables de entorno disponibles:');
 console.log('PORT:', process.env.PORT || '8080 (default)');
 console.log('NODE_ENV:', process.env.NODE_ENV || 'no configurado');

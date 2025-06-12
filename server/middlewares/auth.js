@@ -55,11 +55,20 @@ const verifyUserAccess = async (req, res, next) => {
     // 4. Obtener información del usuario usando el token
     const { data: { user }, error: userError } = await supabase.auth.getUser(token);
     
-    if (userError || !user) {
+    if (userError) {
       console.log('❌ Error validando token:', userError?.message || 'Usuario no encontrado');
       return res.status(401).json({
         error: 'Unauthorized',
-        message: userError?.message || 'Token inválido o expirado'
+        message: 'Token inválido o expirado',
+        details: userError?.message
+      });
+    }
+
+    if (!user) {
+      console.log('❌ No se encontró usuario para el token proporcionado');
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Usuario no encontrado'
       });
     }
     
@@ -77,7 +86,8 @@ const verifyUserAccess = async (req, res, next) => {
       console.log(`❌ Error obteniendo perfil: ${profileError.message}`);
       return res.status(401).json({
         error: 'Unauthorized',
-        message: 'Error al obtener perfil de usuario'
+        message: 'Error al obtener perfil de usuario',
+        details: profileError.message
       });
     }
     
