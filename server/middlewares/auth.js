@@ -24,8 +24,16 @@ const verifyUserAccess = async (req, res, next) => {
     
     console.log(`📝 Auth header recibido: ${authHeader.substring(0, 15)}...`);
     
-    // 2. Extraer el token
-    const token = authHeader.replace('Bearer ', '');
+    // 2. Extraer el token y validar formato
+    if (!authHeader.startsWith('Bearer ')) {
+      console.log('❌ Formato de token inválido - debe comenzar con "Bearer "');
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Formato de token inválido'
+      });
+    }
+
+    const token = authHeader.split(' ')[1];
     
     if (!token) {
       console.log('❌ Token de acceso mal formado o vacío');
@@ -98,8 +106,8 @@ const verifyUserAccess = async (req, res, next) => {
     console.error('❌ Error en verificación de acceso:', error);
     res.status(500).json({
       error: 'Internal Server Error',
-      message: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      message: 'Error interno del servidor al validar acceso',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
