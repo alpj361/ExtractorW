@@ -15,12 +15,16 @@ function setupTrendsRoutes(app) {
     try {
       console.log('📊 Solicitud de últimas tendencias recibida');
       
+      // Verificar conexión a Supabase
       if (!supabase) {
+        console.log('❌ Error: Cliente Supabase no disponible');
         return res.status(503).json({
           error: 'Servicio no disponible',
           message: 'Base de datos no configurada'
         });
       }
+      
+      console.log('🔍 Consultando últimas tendencias en base de datos...');
       
       // Obtener las últimas tendencias de la base de datos
       const { data, error } = await supabase
@@ -31,9 +35,11 @@ function setupTrendsRoutes(app) {
       
       if (error) {
         console.error('❌ Error obteniendo tendencias:', error);
+        console.error('Detalles del error:', JSON.stringify(error, null, 2));
         return res.status(500).json({
           error: 'Error interno',
-          message: 'No se pudieron obtener las tendencias'
+          message: 'No se pudieron obtener las tendencias',
+          details: error.message
         });
       }
       
@@ -47,6 +53,7 @@ function setupTrendsRoutes(app) {
       }
       
       console.log(`✅ Se encontraron tendencias del ${new Date(data[0].created_at).toLocaleString()}`);
+      console.log(`📊 Tendencias encontradas: ${data[0].trends ? data[0].trends.length : 0}`);
       
       // Devolver las tendencias
       res.json({
@@ -61,9 +68,11 @@ function setupTrendsRoutes(app) {
       
     } catch (error) {
       console.error('❌ Error en /api/latestTrends:', error);
+      console.error('Stack:', error.stack);
       res.status(500).json({
         error: 'Error interno',
-        message: error.message
+        message: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
       });
     }
   });
@@ -74,7 +83,7 @@ function setupTrendsRoutes(app) {
     try {
       const startTime = Date.now();
       console.log(`\n📊 SOLICITUD DE PROCESAMIENTO: /api/processTrends`);
-      console.log(`Usuario: ${req.user.email}`);
+      console.log(`👤 Usuario: ${req.user ? req.user.email : 'Anónimo'}`);
       
       // Validar datos de entrada
       const { rawData, location = 'Guatemala', year = 2025, background = false } = req.body;
@@ -90,62 +99,82 @@ function setupTrendsRoutes(app) {
       console.log(`📌 Ubicación: ${location}`);
       console.log(`📅 Año: ${year}`);
       console.log(`🔄 Procesamiento en background: ${background ? 'Sí' : 'No'}`);
+      console.log(`🔢 Tipo de datos recibidos: ${Array.isArray(rawData) ? 'Array' : typeof rawData}`);
       
       console.time('obtencion-datos');
       // Extraer tendencias del formato que envíe el cliente
       let trends = [];
       
-      // Verificar si es el formato de ExtractorT
-      if (rawData.twitter_trends) {
-        console.log('Detectado formato de ExtractorT con prefijos numéricos');
-        
-        // Extraer solo la parte numérica y el texto
-        trends = Object.keys(rawData.twitter_trends)
-          .filter(key => /^\d+_/.test(key))
-          .map(key => {
-            const trendName = key.split('_').slice(1).join('_');
-            return {
-              name: trendName,
-              volume: parseInt(key.split('_')[0]) || 1
-            };
-          });
-      } 
-      // Si es array de objetos con structure { name, count/volume }
-      else if (Array.isArray(rawData) && rawData.length > 0 && (rawData[0].name || rawData[0].text)) {
-        console.log('Detectado formato de array de objetos');
-        trends = rawData.map(item => ({
-          name: item.name || item.text || item.keyword,
-          volume: item.volume || item.count || 1
-        }));
-      }
-      // Si es un objeto con keys siendo las tendencias
-      else if (typeof rawData === 'object' && !Array.isArray(rawData)) {
-        console.log('Detectado formato de objeto con keys');
-        trends = Object.keys(rawData).map(key => ({
-          name: key,
-          volume: rawData[key] || 1
-        }));
-      } 
-      // Si es solo un array de strings
-      else if (Array.isArray(rawData) && typeof rawData[0] === 'string') {
-        console.log('Detectado formato de array de strings');
-        trends = rawData.map((name, index) => ({
-          name,
-          volume: (rawData.length - index) // Asignar volumen descendente
-        }));
+      try {
+        // Verificar si es el formato de ExtractorT
+        if (rawData.twitter_trends) {
+          console.log('Detectado formato de ExtractorT con prefijos numéricos');
+          
+          // Extraer solo la parte numérica y el texto
+          trends = Object.keys(rawData.twitter_trends)
+            .filter(key => /^\d+_/.test(key))
+            .map(key => {
+              const trendName = key.split('_').slice(1).join('_');
+              return {
+                name: trendName,
+                volume: parseInt(key.split('_')[0]) || 1
+              };
+            });
+        } 
+        // Si es array de objetos con structure { name, count/volume }
+        else if (Array.isArray(rawData) && rawData.length > 0 && (rawData[0].name || rawData[0].text)) {
+          console.log('Detectado formato de array de objetos');
+          trends = rawData.map(item => ({
+            name: item.name || item.text || item.keyword,
+            volume: item.volume || item.count || 1
+          }));
+        }
+        // Si es un objeto con keys siendo las tendencias
+        else if (typeof rawData === 'object' && !Array.isArray(rawData)) {
+          console.log('Detectado formato de objeto con keys');
+          trends = Object.keys(rawData).map(key => ({
+            name: key,
+            volume: rawData[key] || 1
+          }));
+        } 
+        // Si es solo un array de strings
+        else if (Array.isArray(rawData) && typeof rawData[0] === 'string') {
+          console.log('Detectado formato de array de strings');
+          trends = rawData.map((name, index) => ({
+            name,
+            volume: (rawData.length - index) // Asignar volumen descendente
+          }));
+        }
+        // Caso para trends24_trends (array numérico)
+        else if (rawData.trends24_trends && Array.isArray(rawData.trends24_trends)) {
+          console.log('Detectado formato trends24_trends');
+          trends = rawData.trends24_trends.map((trend, index) => ({
+            name: trend,
+            volume: (rawData.trends24_trends.length - index)
+          }));
+        }
+      } catch (parseError) {
+        console.error('❌ Error parseando datos:', parseError);
+        console.log('📝 Datos recibidos:', JSON.stringify(rawData).substring(0, 200) + '...');
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'Error al procesar el formato de datos',
+          details: parseError.message
+        });
       }
       
       console.timeEnd('obtencion-datos');
       
       if (trends.length === 0) {
         console.log('❌ Error: No se pudieron extraer tendencias del formato proporcionado');
+        console.log('📝 Datos recibidos:', JSON.stringify(rawData).substring(0, 200) + '...');
         return res.status(400).json({
           error: 'Bad Request',
-          message: 'Formato de datos no reconocido'
+          message: 'Formato de datos no reconocido o sin tendencias'
         });
       }
       
-      console.log(`Se encontraron ${trends.length} tendencias para procesar`);
+      console.log(`✅ Se encontraron ${trends.length} tendencias para procesar`);
       
       // Si se solicita procesamiento en background
       if (background) {
@@ -239,11 +268,13 @@ function setupTrendsRoutes(app) {
       }
       
     } catch (error) {
-      console.error('Error en /api/processTrends:', error);
+      console.error('❌ Error en /api/processTrends:', error);
+      console.error('Stack:', error.stack);
       await logError('processTrends', error, req.user, req);
       res.status(500).json({
         error: 'Internal Server Error',
-        message: error.message
+        message: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
       });
     }
   });

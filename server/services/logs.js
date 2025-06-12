@@ -15,6 +15,12 @@ async function logUsage(user, operation, credits, req) {
   }
 
   try {
+    // Verificar si ya se ha registrado un log para esta solicitud
+    if (req && req.usage_logged) {
+      console.log(`ℹ️ No se registra uso duplicado para ${operation}, ya existe un log`);
+      return;
+    }
+
     // Extraer información relevante de la solicitud
     const requestParams = {
       path: req.path,
@@ -43,6 +49,11 @@ async function logUsage(user, operation, credits, req) {
       console.error(error);
     } else {
       console.log(`✅ Uso registrado: ${user.email} - ${operation} - ${credits} créditos`);
+      
+      // Marcar que ya se ha registrado un log para esta solicitud
+      if (req) {
+        req.usage_logged = true;
+      }
     }
   } catch (error) {
     console.error('💥 Error de usuario guardado en usage_logs:', operation);
@@ -65,6 +76,12 @@ async function logError(operation, errorDetails, user = null, req = null) {
   }
 
   try {
+    // Verificar si ya se ha registrado un log para esta solicitud
+    if (req && req.usage_logged) {
+      console.log(`ℹ️ No se registra error duplicado para ${operation}, ya existe un log de uso`);
+      return;
+    }
+
     // Crear registro de error
     const logEntry = {
       operation: operation,
@@ -102,6 +119,11 @@ async function logError(operation, errorDetails, user = null, req = null) {
       console.error('Error al registrar error en logs:', error);
     } else {
       console.log(`❌ Error registrado: ${operation}`);
+      
+      // Marcar que ya se ha registrado un log para esta solicitud
+      if (req) {
+        req.usage_logged = true;
+      }
     }
   } catch (error) {
     console.error('Error al registrar error en logs:', error);

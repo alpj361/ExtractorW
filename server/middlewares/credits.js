@@ -67,6 +67,9 @@ const debitCredits = async (req, res, next) => {
     // Registrar uso
     await logUsage(user, operation, credits, req);
     
+    // Marcar que ya se ha registrado el uso para evitar logs duplicados
+    req.usage_logged = true;
+    
     // Continuar con la solicitud
     next();
   } catch (error) {
