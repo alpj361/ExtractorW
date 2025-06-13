@@ -157,7 +157,10 @@ function setupTrendsRoutes(app) {
       console.log(`👤 Usuario: ${req.user ? req.user.email : 'Anónimo'}`);
       
       // Validar datos de entrada
-      const { rawData, location = 'Guatemala', year = 2025, background = true } = req.body; // Activar background por defecto
+      const { rawData, location = 'Guatemala', year = 2025 } = req.body;
+      
+      // FORZAR background processing SIEMPRE (como en migration.js)
+      const background = true;
       
       if (!rawData) {
         console.log('❌ Error: No se proporcionaron datos');
@@ -169,7 +172,7 @@ function setupTrendsRoutes(app) {
       
       console.log(`📌 Ubicación: ${location}`);
       console.log(`📅 Año: ${year}`);
-      console.log(`🔄 Procesamiento en background: ${background ? 'Sí' : 'No'}`);
+      console.log(`🔄 Procesamiento en background: ${background ? 'Sí' : 'No'} (FORZADO)`);
       
       // Extraer tendencias del formato que envíe el cliente
       let trends = [];
