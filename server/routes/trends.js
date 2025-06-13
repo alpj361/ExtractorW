@@ -78,7 +78,7 @@ function setupTrendsRoutes(app) {
     }
   });
   
-  // Endpoint para obtener las últimas tendencias (público, sin autenticación)
+  // Endpoint para obtener las últimas tendencias con información completa (público, sin autenticación)
   app.get('/api/latestTrends', async (req, res) => {
     try {
       console.log('📊 Solicitud de últimas tendencias recibida');
@@ -125,12 +125,15 @@ function setupTrendsRoutes(app) {
       console.log(`✅ Se encontraron tendencias del ${new Date(data[0].timestamp).toLocaleString()}`);
       console.log(`📊 Keywords encontrados: ${data[0].top_keywords ? data[0].top_keywords.length : 0}`);
       
-      // Devolver las tendencias con la estructura esperada por el dashboard
+      // Devolver las tendencias con la estructura esperada por el dashboard (incluir about y statistics)
       res.json({
         wordCloudData: data[0].word_cloud_data || [],
         topKeywords: data[0].top_keywords || [],
         categoryData: data[0].category_data || [],
+        about: data[0].about || [], // Incluir about como en migration.js
+        statistics: data[0].statistics || {}, // Incluir statistics como en migration.js
         timestamp: data[0].timestamp,
+        processing_status: data[0].processing_status || 'unknown',
         rawData: data[0].raw_data || {}
       });
       
@@ -154,7 +157,7 @@ function setupTrendsRoutes(app) {
       console.log(`👤 Usuario: ${req.user ? req.user.email : 'Anónimo'}`);
       
       // Validar datos de entrada
-      const { rawData, location = 'Guatemala', year = 2025, background = false } = req.body;
+      const { rawData, location = 'Guatemala', year = 2025, background = true } = req.body; // Activar background por defecto
       
       if (!rawData) {
         console.log('❌ Error: No se proporcionaron datos');
@@ -376,6 +379,9 @@ function setupTrendsRoutes(app) {
               word_cloud_data: wordCloudData,
               top_keywords: topKeywords,
               category_data: categoryData,
+              about: [], // Inicializar vacío, se llenará en background
+              statistics: {}, // Inicializar vacío, se llenará en background  
+              processing_status: background ? 'basic_completed' : 'complete', // Estado según si se procesa en background
               raw_data: {
                 trends: basicProcessedTrends,
                 statistics: basicStatistics,
@@ -398,20 +404,29 @@ function setupTrendsRoutes(app) {
       
       console.timeEnd('procesamiento-basico');
       
-      // 3. ENVIAR RESPUESTA CON DATOS BÁSICOS
+      // 3. ENVIAR RESPUESTA CON DATOS BÁSICOS (compatible con frontend)
       res.json({
         wordCloudData,
         topKeywords,
         categoryData,
+        about: [], // Inicialmente vacío, se llenará en background
+        statistics: {}, // Inicialmente vacío, se llenará en background
         timestamp: processingTimestamp,
+        processing_status: background ? 'basic_completed' : 'complete',
         processing_time_seconds: (Date.now() - startTime) / 1000
       });
       
-      // 4. SI SE SOLICITÓ BACKGROUND, INICIAR PROCESAMIENTO DETALLADO
-      if (background) {
-        console.log('🔄 Iniciando procesamiento detallado en background...');
-        processDetailedInBackground(processingTimestamp);
-      }
+              // 4. INICIAR PROCESAMIENTO DETALLADO EN BACKGROUND (como migration.js)
+        if (background) {
+          console.log('🔄 Iniciando procesamiento detallado en background...');
+          // No usar await para que sea verdaderamente en background (no bloquear la respuesta)
+          processDetailedInBackground(processingTimestamp, basicProcessedTrends, location, req.user ? req.user.id : null, startTime)
+            .catch(error => {
+              console.error('❌ Error en procesamiento background:', error);
+            });
+        } else {
+          console.log('⚡ Procesamiento inmediato completado (sin background)');
+        }
       
       console.timeEnd('procesamiento-total');
       
@@ -438,51 +453,50 @@ function setupTrendsRoutes(app) {
 }
 
 // Función para procesamiento detallado en background
-async function processDetailedInBackground(processingTimestamp) {
+async function processDetailedInBackground(processingTimestamp, trends, location, userId, startTime) {
   try {
     console.log(`🔄 Procesando detalles en background (ID: ${processingTimestamp})...`);
+    console.log(`📊 Procesando ${trends.length} tendencias`);
     
-    // Procesar con Perplexity en background
-    const processedTrends = await processWithPerplexityIndividual(
-      trends.slice(0, Math.min(20, trends.length)), // Limitar a 20 tendencias en background
-      location
-    );
+    // Procesar con Perplexity en background (limitar a las top 10 para optimizar)
+    const top10Trends = trends.slice(0, 10).map(trend => ({
+      name: trend.name,
+      volume: trend.volume || 1,
+      category: trend.category
+    }));
+    
+    console.log('🤖 Iniciando procesamiento con Perplexity Individual...');
+    const processedTrends = await processWithPerplexityIndividual(top10Trends, location);
     
     // Generar estadísticas detalladas
     const detailedStatistics = generateStatistics(processedTrends);
     
-    // Preparar datos actualizados
-    const updatedWordCloudData = processedTrends.map(trend => ({
-      text: trend.name,
-      value: trend.volume || 1,
-      category: trend.category
+    // Extraer solo el array about (como en migration.js)
+    const aboutArray = processedTrends.map(item => item.about);
+    
+    // Actualizar top keywords con información detallada
+    const updatedTopKeywords = processedTrends.map((trend, index) => ({
+      keyword: trend.name,
+      volume: trend.volume || 1,
+      category: trend.category,
+      mentions: trend.volume || 1,
+      engagement: trend.volume || 1,
+      count: trend.volume || 1,
+      growth: 0,
+      sentimentScore: 0,
+      about: trend.about || {
+        summary: 'Información no disponible',
+        tipo: 'trend',
+        relevancia: 'media',
+        contexto_local: true
+      }
     }));
     
-    // Top keywords actualizados
-    const updatedTopKeywords = processedTrends
-      .sort((a, b) => (b.volume || 0) - (a.volume || 0))
-      .slice(0, 10)
-      .map(trend => ({
-        keyword: trend.name,
-        volume: trend.volume || 1,
-        category: trend.category,
-        mentions: trend.volume || 1,
-        engagement: trend.volume || 1,
-        count: trend.volume || 1,
-        growth: 0,
-        sentimentScore: 0,
-        about: trend.about || {
-          summary: 'Información no disponible',
-          tipo: 'trend',
-          relevancia: 'media',
-          contexto_local: true
-        }
-      }));
-    
-    // Asegurar que siempre haya 10 keywords
+    // Asegurar que siempre haya 10 keywords (completar con datos básicos si es necesario)
     while (updatedTopKeywords.length < 10) {
+      const missingIndex = updatedTopKeywords.length;
       updatedTopKeywords.push({
-        keyword: `Keyword ${updatedTopKeywords.length + 1}`,
+        keyword: `Keyword ${missingIndex + 1}`,
         volume: 1,
         category: 'Otros',
         mentions: 1,
@@ -499,44 +513,68 @@ async function processDetailedInBackground(processingTimestamp) {
       });
     }
     
-    // Datos de categorías actualizados
-    const updatedCategoryData = Object.entries(detailedStatistics.categorias || {}).map(([name, count]) => ({
-      name,
-      value: count
+    // Preparar datos actualizados para word cloud
+    const updatedWordCloudData = updatedTopKeywords.map(trend => ({
+      text: trend.keyword,
+      value: trend.volume || 1,
+      category: trend.category
     }));
+    
+    // Generar categoryData enriquecido usando las categorías procesadas
+    const enrichedCategoryMap = {};
+    processedTrends.forEach(trend => {
+      const cat = trend.about?.categoria || trend.category || 'Otros';
+      enrichedCategoryMap[cat] = (enrichedCategoryMap[cat] || 0) + 1;
+    });
+    
+    const updatedCategoryData = Object.entries(enrichedCategoryMap).map(([category, count]) => ({
+      category,
+      count
+    })).sort((a, b) => b.count - a.count);
     
     // Actualizar en Supabase usando el timestamp como identificador
     if (supabase) {
       try {
         console.log('💾 Actualizando resultados detallados en la tabla trends...');
+        console.log(`📝 About items a guardar: ${aboutArray.length}`);
+        console.log(`📝 Statistics keys: ${Object.keys(detailedStatistics)}`);
+        
+        const updateData = {
+          about: aboutArray, // Array de about como en migration.js
+          statistics: detailedStatistics,
+          word_cloud_data: updatedWordCloudData,
+          top_keywords: updatedTopKeywords,
+          category_data: updatedCategoryData,
+          processing_status: 'complete', // Marcar como completado
+          raw_data: {
+            trends: processedTrends,
+            statistics: detailedStatistics,
+            location: location.toLowerCase(),
+            processing_time: (Date.now() - startTime) / 1000,
+            source: 'api-background',
+            user_id: userId,
+            background_completed: true,
+            completed_at: new Date().toISOString()
+          }
+        };
+        
         const { error } = await supabase
           .from('trends')
-          .update({
-            word_cloud_data: updatedWordCloudData,
-            top_keywords: updatedTopKeywords,
-            category_data: updatedCategoryData,
-            raw_data: {
-              trends: processedTrends,
-              statistics: detailedStatistics,
-              location: location.toLowerCase(),
-              processing_time: (Date.now() - startTime) / 1000,
-              source: 'api-background',
-              user_id: req.user ? req.user.id : null,
-              background_completed: true
-            }
-          })
+          .update(updateData)
           .eq('timestamp', processingTimestamp);
         
         if (error) {
           console.error('❌ Error actualizando resultados detallados:', error);
-          await logError('processTrends_background_update', error, req.user);
+          await logError('processTrends_background_update', error, { id: userId });
         } else {
           console.log('✅ Resultados detallados actualizados correctamente');
           console.log(`   🔍 ID de procesamiento: ${processingTimestamp}`);
+          console.log(`   📊 About guardado: ${aboutArray.length} items`);
+          console.log(`   📈 Categorías: ${updatedCategoryData.length} categorías`);
         }
       } catch (dbError) {
         console.error('❌ Error en base de datos:', dbError);
-        await logError('processTrends_background_db', dbError, req.user);
+        await logError('processTrends_background_db', dbError, { id: userId });
       }
     }
     
@@ -545,7 +583,22 @@ async function processDetailedInBackground(processingTimestamp) {
     
   } catch (error) {
     console.error('❌ Error en procesamiento detallado en background:', error);
-    await logError('processTrends_background', error, req.user);
+    await logError('processTrends_background', error, { id: userId });
+    
+    // En caso de error, al menos actualizar el estado en Supabase
+    if (supabase) {
+      try {
+        await supabase
+          .from('trends')
+          .update({
+            processing_status: 'error',
+            error_details: error.message
+          })
+          .eq('timestamp', processingTimestamp);
+      } catch (updateErr) {
+        console.error('❌ Error actualizando estado de error:', updateErr);
+      }
+    }
   }
 }
 
