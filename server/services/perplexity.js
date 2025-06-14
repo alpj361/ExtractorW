@@ -326,7 +326,9 @@ async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
         volume: trend.volume || trend.count || 1,
         category: category,
         about: {
-          summary: aboutInfo.resumen,
+          nombre: trendName,
+          resumen: aboutInfo.resumen,
+          categoria: category,
           tipo: aboutInfo.tipo,
           relevancia: aboutInfo.relevancia,
           contexto_local: aboutInfo.contexto_local,
@@ -369,7 +371,12 @@ async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
         volume: trend.volume || trend.count || 1,
         category: detectarCategoria(trendName),
         about: {
-          summary: `Error procesando información sobre ${trendName}`,
+          nombre: trendName,
+          resumen: `Error procesando información sobre ${trendName}`,
+          categoria: detectarCategoria(trendName),
+          tipo: 'hashtag',
+          relevancia: 'baja',
+          contexto_local: false,
           source: 'error',
           model: 'error'
         },
