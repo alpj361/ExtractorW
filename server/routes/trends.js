@@ -700,4 +700,28 @@ function normalizarCategoria(category) {
   return 'Otros';
 }
 
+/**
+ * Sanitiza valores para almacenamiento seguro en JSON/Supabase
+ * @param {any} value - Valor a sanitizar
+ * @param {number} maxLength - Longitud máxima permitida
+ * @returns {string} - Valor sanitizado
+ */
+function sanitizeForJSON(value, maxLength = 500) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  
+  let sanitized = String(value)
+    .replace(/[\x00-\x1F\x7F-\x9F]/g, '') // Remover caracteres de control
+    .replace(/\\/g, '\\\\') // Escapar backslashes
+    .replace(/"/g, '\\"') // Escapar comillas dobles
+    .trim();
+  
+  if (sanitized.length > maxLength) {
+    sanitized = sanitized.substring(0, maxLength - 3) + '...';
+  }
+  
+  return sanitized;
+}
+
 module.exports = setupTrendsRoutes; 
