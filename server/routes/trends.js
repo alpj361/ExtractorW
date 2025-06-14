@@ -290,43 +290,45 @@ function setupTrendsRoutes(app) {
       // Procesar datos básicos
       const basicProcessedTrends = trends.map(trend => {
         const trendName = trend.name || trend.keyword || trend.text || 'Tendencia sin nombre';
-        const category = detectarCategoria(trendName);
+        const rawCategory = detectarCategoria(trendName);
+        const normalizedCategory = normalizarCategoria(rawCategory);
         
         return {
           name: trendName,
           volume: trend.volume || trend.count || 1,
-          category: category,
+          category: normalizedCategory,
           original: trend,
           about: {
             summary: 'Procesando información detallada...',
             tipo: 'trend',
             relevancia: 'media',
-            contexto_local: true
+            contexto_local: true,
+            categoria: normalizedCategory
           }
         };
       });
       
-      // Generar estadísticas básicas
+      // Generar estadísticas básicas con categorías normalizadas
       const basicStatistics = {
         total: basicProcessedTrends.length,
         categorias: {},
         timestamp: new Date().toISOString()
       };
       
-      // Contar categorías
+      // Contar categorías normalizadas
       basicProcessedTrends.forEach(trend => {
         const category = trend.category || 'Otros';
         basicStatistics.categorias[category] = (basicStatistics.categorias[category] || 0) + 1;
       });
       
-      // Preparar datos para la nube de palabras
+      // Preparar datos para la nube de palabras con categorías normalizadas
       const wordCloudData = basicProcessedTrends.map(trend => ({
         text: trend.name,
         value: trend.volume || 1,
         category: trend.category
       }));
       
-      // Datos de categorías (estructura consistente: { name, value })
+      // Datos de categorías normalizadas
       const categoryData = Object.entries(basicStatistics.categorias).map(([name, count]) => ({
         name,
         value: count
@@ -525,21 +527,6 @@ async function processDetailedInBackground(processingTimestamp, trendsData, loca
     console.log(`🧹 AboutArray ultra-simplificado creado con ${ultraSimplifiedAboutArray.length} items`);
     console.log('📋 Ejemplo simplificado:', JSON.stringify(ultraSimplifiedAboutArray[0] || {}, null, 2));
 
-    // --- NUEVO: Generar categoryData enriquecido usando la categoría de about ---
-    const enrichedCategoryMap = {};
-    ultraSimplifiedAboutArray.forEach(about => {
-      const cat = about.categoria || 'Otros';
-      if (enrichedCategoryMap[cat]) {
-        enrichedCategoryMap[cat] += 1;
-      } else {
-        enrichedCategoryMap[cat] = 1;
-      }
-    });
-    const enrichedCategoryData = Object.entries(enrichedCategoryMap).map(([name, count]) => ({
-      name,
-      value: count
-    })).sort((a, b) => b.value - a.value);
-
     // Actualizar topKeywords con la información enriquecida
     const enrichedTopKeywords = topKeywords.map((keyword, index) => {
       const aboutInfo = ultraSimplifiedAboutArray[index];
@@ -550,8 +537,29 @@ async function processDetailedInBackground(processingTimestamp, trendsData, loca
           about: aboutInfo
         };
       }
-      return keyword;
+      return {
+        ...keyword,
+        category: normalizarCategoria(keyword.category),
+        about: {
+          ...keyword.about,
+          categoria: normalizarCategoria(keyword.category)
+        }
+      };
     });
+
+    // Generar categoryData usando las categorías normalizadas
+    const enrichedCategoryMap = {};
+    ultraSimplifiedAboutArray.forEach(about => {
+      const cat = about.categoria || 'Otros';
+      enrichedCategoryMap[cat] = (enrichedCategoryMap[cat] || 0) + 1;
+    });
+    
+    const enrichedCategoryData = Object.entries(enrichedCategoryMap)
+      .map(([name, count]) => ({
+        name,
+        value: count
+      }))
+      .sort((a, b) => b.value - a.value);
 
     console.log('📊 Estadísticas generadas:', JSON.stringify(statistics, null, 2));
     
