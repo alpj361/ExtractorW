@@ -502,71 +502,24 @@ async function processDetailedInBackground(processingTimestamp, trendsData, loca
     };
     console.timeEnd('generacion-estadisticas');
 
-    // Mapear correctamente la estructura de processedAbout al formato que espera el frontend
-    console.log('🔄 Mapeando estructura de processedAbout al formato AboutInfo del frontend...');
-    
-    /**
-     * Función para sanitizar cualquier valor de forma segura para JSON
-     */
-    const sanitizeForJSON = (value, maxLength = 300) => {
-      if (value === null || value === undefined) return '';
-
-      let str = String(value);
-
-      // Remover caracteres de control y caracteres problemáticos
-      str = str.replace(/[\u0000-\u001F\u007F-\u009F\u2000-\u200F\uFEFF]/g, '');
-
-      // Remover caracteres no válidos en JSON
-      str = str.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
-
-      // Escapar comillas dobles y backslashes problemáticos
-      str = str.replace(/"/g, "'").replace(/\\/g, '/');
-
-      // Truncar si es muy largo
-      if (str.length > maxLength) {
-        str = str.substring(0, maxLength);
-      }
-
-      return str.trim();
-    };
-
-    // Mapear correctamente desde processedAbout (que tiene estructura {name, volume, category, about})
-    // al formato AboutInfo que espera el frontend
+    // Mapear correctamente desde processedAbout al formato AboutInfo que espera el frontend
     const ultraSimplifiedAboutArray = processedAbout.map((item, index) => {
-      // item.about contiene: {summary, tipo, relevancia, contexto_local, razon_tendencia, fecha_evento, palabras_clave, source, model}
-      // Pero necesitamos mapear a: {nombre, resumen, categoria, tipo, relevancia, contexto_local, razon_tendencia, fecha_evento, palabras_clave, source, model}
-      
       const about = item.about || {};
       const trendName = item.name || `Tendencia ${index + 1}`;
       
-      const simplified = {
+      return {
         nombre: sanitizeForJSON(trendName, 100),
-        resumen: sanitizeForJSON(about.summary || about.resumen, 300) || `Información sobre ${trendName}`,
+        tipo: sanitizeForJSON(about.tipo || 'hashtag', 30),
+        relevancia: about.relevancia || 'Media',
+        razon_tendencia: sanitizeForJSON(about.razon_tendencia || '', 300),
+        fecha_evento: sanitizeForJSON(about.fecha_evento || '', 50),
+        palabras_clave: Array.isArray(about.palabras_clave) ? 
+          about.palabras_clave.slice(0, 5).map(palabra => sanitizeForJSON(palabra, 30)) : [],
         categoria: normalizarCategoria(item.category || about.categoria || 'Otros'),
-        tipo: sanitizeForJSON(about.tipo, 30) || 'hashtag',
-        relevancia: ['alta', 'media', 'baja'].includes(about.relevancia) ? about.relevancia : 'media',
         contexto_local: Boolean(about.contexto_local),
-        source: sanitizeForJSON(about.source, 20) || 'perplexity-individual',
-        model: sanitizeForJSON(about.model, 20) || 'sonar'
+        source: sanitizeForJSON(about.source || 'perplexity-individual', 20),
+        model: sanitizeForJSON(about.model || 'sonar', 20)
       };
-
-      // Agregar campos opcionales si están disponibles
-      if (about.razon_tendencia && typeof about.razon_tendencia === 'string' && about.razon_tendencia.length > 0) {
-        simplified.razon_tendencia = sanitizeForJSON(about.razon_tendencia, 200);
-      }
-
-      if (about.fecha_evento && typeof about.fecha_evento === 'string' && about.fecha_evento.length > 0) {
-        simplified.fecha_evento = sanitizeForJSON(about.fecha_evento, 50);
-      }
-
-      if (about.palabras_clave && Array.isArray(about.palabras_clave) && about.palabras_clave.length > 0) {
-        simplified.palabras_clave = about.palabras_clave
-          .slice(0, 5) // Máximo 5 palabras clave
-          .map(palabra => sanitizeForJSON(palabra, 30))
-          .filter(palabra => palabra.length > 0);
-      }
-
-      return simplified;
     });
 
     console.log(`🧹 AboutArray ultra-simplificado creado con ${ultraSimplifiedAboutArray.length} items`);

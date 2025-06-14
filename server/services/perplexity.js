@@ -327,17 +327,15 @@ async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
         category: category,
         about: {
           nombre: trendName,
-          resumen: aboutInfo.resumen,
-          categoria: category,
-          tipo: aboutInfo.tipo,
-          relevancia: aboutInfo.relevancia,
-          contexto_local: aboutInfo.contexto_local,
-          razon_tendencia: aboutInfo.razon_tendencia,
-          fecha_evento: aboutInfo.fecha_evento,
-          palabras_clave: aboutInfo.palabras_clave,
+          tipo: aboutInfo.tipo || 'hashtag',
+          relevancia: aboutInfo.relevancia || 'media',
+          razon_tendencia: aboutInfo.razon_tendencia || '',
+          fecha_evento: aboutInfo.fecha_evento || '',
+          palabras_clave: aboutInfo.palabras_clave || [],
           source: 'perplexity-individual',
           model: 'sonar',
-          search_query: aboutInfo.search_query
+          categoria: category,
+          contexto_local: aboutInfo.contexto_local || true
         },
         metadata: {
           timestamp: new Date().toISOString(),
@@ -447,6 +445,43 @@ function generateStatistics(processedTrends) {
   }, null, 2));
   
   return stats;
+}
+
+// Funciones auxiliares para determinar los valores correctos
+function determinarTipo(trendName) {
+  // Lógica para determinar el tipo basado en el nombre y contenido
+  if (trendName.match(/^[A-Z][a-z]+ ?[A-Z][a-z]+$/)) return 'persona';
+  if (trendName.match(/^#/)) return 'hashtag';
+  if (trendName.match(/^[A-Z][a-z]+ ?\d{4}$/)) return 'evento';
+  if (trendName.match(/^[A-Z][a-z]+$/)) return 'lugar';
+  return 'tema';
+}
+
+function determinarRelevancia() {
+  // Por ahora retornamos un valor aleatorio entre Alta, Media, Baja
+  const relevancia = ['Alta', 'Media', 'Baja'];
+  return relevancia[Math.floor(Math.random() * relevancia.length)];
+}
+
+function obtenerRazonTendencia() {
+  // Aquí iría la lógica para extraer la razón de tendencia del análisis de Perplexity
+  return 'Análisis en proceso...';
+}
+
+function obtenerFechaEvento() {
+  // Aquí iría la lógica para extraer la fecha del evento si existe
+  const now = new Date();
+  return now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+function obtenerPalabrasClave() {
+  // Aquí iría la lógica para extraer palabras clave relevantes
+  return [];
+}
+
+function determinarContextoLocal(location) {
+  // Por defecto asumimos que es contexto local
+  return true;
 }
 
 module.exports = {
