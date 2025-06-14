@@ -461,104 +461,155 @@ async function processDetailedInBackground(processingTimestamp, trendsData, loca
     console.log(`🔄 Procesando detalles en background (ID: ${processingTimestamp})...`);
     console.log(`📊 Procesando ${trendsData.length} tendencias`);
     
-    // Procesar con Perplexity en background (limitar a las top 10 para optimizar)
-    const top10Trends = trendsData.slice(0, 10).map(trend => ({
-      name: trend.name,
-      volume: trend.volume || 1,
-      category: trend.category
+    // Convertir trendsData al formato que espera processWithPerplexityIndividual (igual que migration.js)
+    const top10 = trendsData.slice(0, 10).map(trend => ({
+      name: trend.name || trend.keyword,
+      volume: trend.volume || trend.count || 1,
+      category: trend.category || 'General'
     }));
     
     console.log('🤖 Iniciando procesamiento con Perplexity Individual...');
-    const processedTrends = await processWithPerplexityIndividual(top10Trends, location);
+    console.log('📋 Top 10 trends para procesar:', JSON.stringify(top10.slice(0, 2), null, 2));
     
-    // Generar estadísticas detalladas
-    const detailedStatistics = generateStatistics(processedTrends);
+    // Usar la misma llamada que migration.js
+    const processedAbout = await processWithPerplexityIndividual(top10, location);
     
-    // Extraer solo el array about (como en migration.js)
-    const aboutArray = processedTrends.map(item => item.about);
-    
-    // Actualizar top keywords con información detallada
-    const updatedTopKeywords = processedTrends.map((trend, index) => ({
-      keyword: trend.name,
-      volume: trend.volume || 1,
-      category: trend.category,
-      mentions: trend.volume || 1,
-      engagement: trend.volume || 1,
-      count: trend.volume || 1,
-      growth: 0,
-      sentimentScore: 0,
-      about: trend.about || {
-        summary: 'Información no disponible',
-        tipo: 'trend',
-        relevancia: 'media',
-        contexto_local: true
-      }
-    }));
-    
-    // Asegurar que siempre haya 10 keywords (completar con datos básicos si es necesario)
-    while (updatedTopKeywords.length < 10) {
-      const missingIndex = updatedTopKeywords.length;
-      updatedTopKeywords.push({
-        keyword: `Keyword ${missingIndex + 1}`,
-        volume: 1,
-        category: 'Otros',
-        mentions: 1,
-        engagement: 1,
-        count: 1,
-        growth: 0,
-        sentimentScore: 0,
-        about: {
-          summary: 'Sin información adicional',
-          tipo: 'trend',
-          relevancia: 'baja',
-          contexto_local: true
-        }
-      });
+    console.log(`✅ processWithPerplexityIndividual completado. Items procesados: ${processedAbout?.length || 0}`);
+    if (processedAbout?.length > 0) {
+      console.log('📋 Primer item como ejemplo:', JSON.stringify(processedAbout[0], null, 2));
     }
     
-    // Preparar datos actualizados para word cloud
-    const updatedWordCloudData = updatedTopKeywords.map(trend => ({
-      text: trend.keyword,
-      value: trend.volume || 1,
-      category: trend.category
-    }));
-    
-    // Generar categoryData enriquecido usando las categorías procesadas
-    const enrichedCategoryMap = {};
-    processedTrends.forEach(trend => {
-      const cat = trend.about?.categoria || trend.category || 'Otros';
-      enrichedCategoryMap[cat] = (enrichedCategoryMap[cat] || 0) + 1;
+    // Generar estadísticas (igual que migration.js)
+    console.time('generacion-estadisticas');
+    const rawStatistics = generateStatistics(processedAbout);
+
+    // Sanitizar estadísticas para evitar problemas de serialización
+    const statistics = {
+      relevancia: {
+        alta: Number(rawStatistics.relevancia?.alta) || 0,
+        media: Number(rawStatistics.relevancia?.media) || 0,
+        baja: Number(rawStatistics.relevancia?.baja) || 0
+      },
+      contexto: {
+        local: Number(rawStatistics.contexto?.local) || 0,
+        global: Number(rawStatistics.contexto?.global) || 0
+      },
+      timestamp: new Date().toISOString(),
+      total_procesados: processedAbout.length
+    };
+    console.timeEnd('generacion-estadisticas');
+
+    // Formato about para compatibilidad con frontend (igual que migration.js)
+    const aboutArray = processedAbout.map(item => item.about);
+    console.log(`📊 aboutArray generado con ${aboutArray.length} items`);
+
+    // --- SANITIZAR aboutArray para Supabase (VERSION ULTRA-ROBUSTA) ---
+    console.log('🧹 Creando versión ultra-simplificada de aboutArray para Supabase...');
+
+    /**
+     * Función para sanitizar cualquier valor de forma segura para JSON
+     */
+    const sanitizeForJSON = (value, maxLength = 300) => {
+      if (value === null || value === undefined) return '';
+
+      let str = String(value);
+
+      // Remover caracteres de control y caracteres problemáticos
+      str = str.replace(/[\u0000-\u001F\u007F-\u009F\u2000-\u200F\uFEFF]/g, '');
+
+      // Remover caracteres no válidos en JSON
+      str = str.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
+
+      // Escapar comillas dobles y backslashes problemáticos
+      str = str.replace(/"/g, "'").replace(/\\/g, '/');
+
+      // Truncar si es muy largo
+      if (str.length > maxLength) {
+        str = str.substring(0, maxLength);
+      }
+
+      return str.trim();
+    };
+
+    const ultraSimplifiedAboutArray = aboutArray.map((about, index) => {
+      // Crear objeto ultra-simple, solo campos básicos y strings seguros
+      const simplified = {
+        nombre: sanitizeForJSON(about.nombre, 100) || `Tendencia ${index + 1}`,
+        categoria: ['Deportes', 'Política', 'Entretenimiento', 'Música', 'Tecnología', 'Economía', 'Sociedad', 'Otros']
+          .includes(about.categoria) ? about.categoria : 'Otros',
+        resumen: sanitizeForJSON(about.resumen, 300) || `Información sobre ${about.nombre || 'tendencia'}`,
+        relevancia: ['alta', 'media', 'baja'].includes(about.relevancia) ? about.relevancia : 'baja',
+        contexto_local: Boolean(about.contexto_local),
+        source: sanitizeForJSON(about.source, 20) || 'default',
+        tweets_usados: (typeof about.tweets_used === 'number' && !isNaN(about.tweets_used)) ? about.tweets_used : 0,
+        index_orden: index
+      };
+
+      // Solo agregar campos opcionales si son válidos y seguros
+      if (about.tipo && typeof about.tipo === 'string' && about.tipo.length > 0) {
+        const tipoSanitized = sanitizeForJSON(about.tipo, 30);
+        if (tipoSanitized.length > 0) {
+          simplified.tipo = tipoSanitized;
+        }
+      }
+
+      if (about.razon_tendencia && typeof about.razon_tendencia === 'string' && about.razon_tendencia.length > 0) {
+        const razonSanitized = sanitizeForJSON(about.razon_tendencia, 200);
+        if (razonSanitized.length > 0) {
+          simplified.razon_tendencia = razonSanitized;
+        }
+      }
+
+      if (about.sentimiento_tweets && typeof about.sentimiento_tweets === 'string') {
+        const sentimientoSanitized = sanitizeForJSON(about.sentimiento_tweets, 20);
+        if (['positivo', 'negativo', 'neutral', 'mixto'].includes(sentimientoSanitized)) {
+          simplified.sentimiento_tweets = sentimientoSanitized;
+        }
+      }
+
+      return simplified;
     });
-    
-    const updatedCategoryData = Object.entries(enrichedCategoryMap).map(([category, count]) => ({
+
+    console.log(`🧹 AboutArray ultra-simplificado creado con ${ultraSimplifiedAboutArray.length} items`);
+    console.log('📋 Ejemplo simplificado:', JSON.stringify(ultraSimplifiedAboutArray[0] || {}, null, 2));
+
+    // --- NUEVO: Generar categoryData enriquecido usando la categoría de about ---
+    const enrichedCategoryMap = {};
+    ultraSimplifiedAboutArray.forEach(about => {
+      const cat = about.categoria || 'Otros';
+      if (enrichedCategoryMap[cat]) {
+        enrichedCategoryMap[cat] += 1;
+      } else {
+        enrichedCategoryMap[cat] = 1;
+      }
+    });
+    const enrichedCategoryData = Object.entries(enrichedCategoryMap).map(([category, count]) => ({
       category,
       count
     })).sort((a, b) => b.count - a.count);
+    console.log(`📈 categoryData enriquecido:`, enrichedCategoryData);
+    // --- FIN NUEVO ---
+
+    console.log('📊 Estadísticas generadas:', JSON.stringify(statistics, null, 2));
+    
+    // Los datos ya están procesados y listos para guardar
     
     // Actualizar en Supabase usando el timestamp como identificador
     if (supabase) {
       try {
-        console.log('💾 Actualizando resultados detallados en la tabla trends...');
-        console.log(`📝 About items a guardar: ${aboutArray.length}`);
-        console.log(`📝 Statistics keys: ${Object.keys(detailedStatistics)}`);
+        console.log('🔄 Actualizando registro en Supabase con about, estadísticas y categoryData enriquecido...');
+        console.log(`📝 Datos a actualizar:`, {
+          aboutCount: ultraSimplifiedAboutArray.length,
+          statisticsKeys: Object.keys(statistics),
+          categoryDataCount: enrichedCategoryData.length,
+          recordId: processingTimestamp
+        });
         
         const updateData = {
-          about: aboutArray, // Array de about como en migration.js
-          statistics: detailedStatistics,
-          word_cloud_data: updatedWordCloudData,
-          top_keywords: updatedTopKeywords,
-          category_data: updatedCategoryData,
-          processing_status: 'complete', // Marcar como completado
-          raw_data: {
-            trends: processedTrends,
-            statistics: detailedStatistics,
-            location: location.toLowerCase(),
-            processing_time: (Date.now() - startTime) / 1000,
-            source: 'api-background',
-            user_id: userId,
-            background_completed: true,
-            completed_at: new Date().toISOString()
-          }
+          about: ultraSimplifiedAboutArray, // Array de about sanitizado como en migration.js
+          statistics: statistics,
+          category_data: enrichedCategoryData,
+          processing_status: 'complete' // Marcar como completado
         };
         
         const { error } = await supabase
@@ -567,13 +618,27 @@ async function processDetailedInBackground(processingTimestamp, trendsData, loca
           .eq('timestamp', processingTimestamp);
         
         if (error) {
-          console.error('❌ Error actualizando resultados detallados:', error);
-          await logError('processTrends_background_update', error, { id: userId });
+          console.error('❌ Error actualizando registro completo:', error, JSON.stringify(error, null, 2));
         } else {
-          console.log('✅ Resultados detallados actualizados correctamente');
-          console.log(`   🔍 ID de procesamiento: ${processingTimestamp}`);
-          console.log(`   📊 About guardado: ${aboutArray.length} items`);
-          console.log(`   📈 Categorías: ${updatedCategoryData.length} categorías`);
+          console.log('✅ Registro actualizado exitosamente con about, estadísticas y categoryData enriquecido');
+          
+          // Verificación adicional: consultar el registro para confirmar que se guardó
+          const { data: verifyData, error: verifyError } = await supabase
+            .from('trends')
+            .select('about, statistics, category_data, processing_status')
+            .eq('timestamp', processingTimestamp)
+            .single();
+
+          if (verifyError) {
+            console.error('❌ Error verificando actualización:', verifyError);
+          } else {
+            console.log('✅ Verificación exitosa:', {
+              aboutSaved: verifyData.about?.length || 0,
+              statisticsSaved: Object.keys(verifyData.statistics || {}).length,
+              categoriesSaved: verifyData.category_data?.length || 0,
+              status: verifyData.processing_status
+            });
+          }
         }
       } catch (dbError) {
         console.error('❌ Error en base de datos:', dbError);
@@ -581,8 +646,7 @@ async function processDetailedInBackground(processingTimestamp, trendsData, loca
       }
     }
     
-    console.log('✅ Procesamiento en background completado');
-    console.log(`   📊 ${processedTrends.length} tendencias procesadas detalladamente`);
+    console.log('✅ PROCESAMIENTO EN BACKGROUND COMPLETADO');
     
   } catch (error) {
     console.error('❌ Error en procesamiento detallado en background:', error);
@@ -603,6 +667,116 @@ async function processDetailedInBackground(processingTimestamp, trendsData, loca
       }
     }
   }
+}
+
+/**
+ * Normaliza categorías específicas de Perplexity a categorías estándar
+ * @param {string} category - Categoría original de Perplexity
+ * @returns {string} - Categoría normalizada
+ */
+function normalizarCategoria(category) {
+  if (!category || typeof category !== 'string') {
+    return 'Otros';
+  }
+  
+  const categoryLower = category.toLowerCase();
+  
+  // Mapeo de categorías específicas a categorías estándar
+  const categoryMap = {
+    // Música y entretenimiento
+    'música': 'Música',
+    'music': 'Música',
+    'música k-pop': 'Música',
+    'k-pop': 'Música',
+    'kpop': 'Música',
+    'música|entretenimiento': 'Música',
+    'entretenimiento': 'Entretenimiento',
+    'entertainment': 'Entretenimiento',
+    'cultural/social': 'Social',
+    'cultural': 'Social',
+    'social': 'Social',
+    
+    // Política y conflictos
+    'política': 'Política',
+    'politics': 'Política',
+    'política/economía': 'Política',
+    'política y conflicto': 'Política',
+    'político': 'Política',
+    'geopolítica': 'Internacional',
+    'geopolítica / conflicto internacional': 'Internacional',
+    'conflicto internacional': 'Internacional',
+    'noticias internacionales': 'Internacional',
+    'internacional': 'Internacional',
+    'international': 'Internacional',
+    
+    // Deportes
+    'deportes': 'Deportes',
+    'sports': 'Deportes',
+    'fútbol': 'Deportes',
+    'football': 'Deportes',
+    'soccer': 'Deportes',
+    
+    // Economía
+    'economía': 'Economía',
+    'economy': 'Economía',
+    'económico': 'Economía',
+    'finanzas': 'Economía',
+    
+    // Tecnología
+    'tecnología': 'Tecnología',
+    'technology': 'Tecnología',
+    'tech': 'Tecnología',
+    
+    // Países y lugares (contextualizar)
+    'actualidad/país': 'Internacional',
+    'país': 'Internacional',
+    'country': 'Internacional',
+    
+    // Otros
+    'otros': 'Otros',
+    'other': 'Otros',
+    'general': 'Otros'
+  };
+  
+  // Buscar coincidencia exacta primero
+  if (categoryMap[categoryLower]) {
+    return categoryMap[categoryLower];
+  }
+  
+  // Buscar coincidencias parciales
+  for (const [key, value] of Object.entries(categoryMap)) {
+    if (categoryLower.includes(key) || key.includes(categoryLower)) {
+      return value;
+    }
+  }
+  
+  // Si contiene palabras clave específicas
+  if (categoryLower.includes('música') || categoryLower.includes('music') || categoryLower.includes('kpop') || categoryLower.includes('k-pop')) {
+    return 'Música';
+  }
+  
+  if (categoryLower.includes('política') || categoryLower.includes('politic') || categoryLower.includes('gobierno')) {
+    return 'Política';
+  }
+  
+  if (categoryLower.includes('deporte') || categoryLower.includes('sport') || categoryLower.includes('fútbol') || categoryLower.includes('football')) {
+    return 'Deportes';
+  }
+  
+  if (categoryLower.includes('internacional') || categoryLower.includes('international') || categoryLower.includes('global') || categoryLower.includes('mundial')) {
+    return 'Internacional';
+  }
+  
+  if (categoryLower.includes('social') || categoryLower.includes('cultural') || categoryLower.includes('sociedad')) {
+    return 'Social';
+  }
+  
+  if (categoryLower.includes('entretenimiento') || categoryLower.includes('entertainment') || categoryLower.includes('cine') || categoryLower.includes('tv')) {
+    return 'Entretenimiento';
+  }
+  
+  // Si no encuentra coincidencia, capitalizar la primera letra y devolver
+  return category.charAt(0).toUpperCase() + category.slice(1).toLowerCase();
 }
 
 module.exports = setupTrendsRoutes; 
