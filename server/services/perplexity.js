@@ -6,24 +6,28 @@ const { detectarCategoria } = require('./categorization');
  * @returns {string} - Categoría normalizada
  */
 function normalizarCategoria(category) {
+  console.log(`   🔧 normalizarCategoria llamada con: "${category}"`);
+  
   if (!category || typeof category !== 'string') {
+    console.log(`   🔧 Categoría inválida, devolviendo 'Otros'`);
     return 'Otros';
   }
   
   const categoryLower = category.toLowerCase().trim();
+  console.log(`   🔧 Categoría en minúsculas: "${categoryLower}"`);
   
   // Mapeo estricto de palabras clave a categorías principales
   const CATEGORIA_PRINCIPAL = {
     // Política e Internacional (prioridad a Internacional si contiene ambas)
     'internacional': ['internacional', 'global', 'mundial', 'geopolítica', 'foreign', 'world'],
-    'política': ['política', 'politica', 'político', 'politico', 'politics', 'government', 'gobierno'],
+    'política': ['política', 'politica', 'político', 'politico', 'politics', 'government', 'gobierno', 'noticias/política'],
     
     // Deportes
     'deportes': ['deporte', 'deportes', 'sports', 'fútbol', 'futbol', 'football', 'soccer', 'basketball', 'béisbol', 'beisbol'],
     
     // Entretenimiento y Música (prioridad a Música si contiene ambas)
     'música': ['música', 'musica', 'music', 'k-pop', 'kpop', 'cantante', 'artista', 'concierto'],
-    'entretenimiento': ['entretenimiento', 'entertainment', 'cine', 'película', 'pelicula', 'series', 'tv', 'television', 'show'],
+    'entretenimiento': ['entretenimiento', 'entertainment', 'cine', 'película', 'pelicula', 'series', 'tv', 'television', 'show', 'noticias y eventos'],
     
     // Economía
     'economía': ['economía', 'economia', 'economy', 'finanzas', 'finance', 'mercado', 'market', 'negocios', 'business'],
@@ -32,13 +36,15 @@ function normalizarCategoria(category) {
     'tecnología': ['tecnología', 'tecnologia', 'technology', 'tech', 'software', 'hardware', 'digital', 'internet', 'app'],
     
     // Social
-    'social': ['social', 'sociedad', 'society', 'cultural', 'community', 'trending', 'redes sociales']
+    'social': ['social', 'sociedad', 'society', 'cultural', 'community', 'trending', 'redes sociales', 'cultura popular', 'superstición']
   };
 
   // Primero intentar encontrar una coincidencia exacta
   for (const [categoria, keywords] of Object.entries(CATEGORIA_PRINCIPAL)) {
     if (keywords.includes(categoryLower)) {
-      return categoria.charAt(0).toUpperCase() + categoria.slice(1);
+      const result = categoria.charAt(0).toUpperCase() + categoria.slice(1);
+      console.log(`   🔧 Coincidencia exacta encontrada: "${categoryLower}" → "${result}"`);
+      return result;
     }
   }
 
@@ -46,37 +52,51 @@ function normalizarCategoria(category) {
   for (const [categoria, keywords] of Object.entries(CATEGORIA_PRINCIPAL)) {
     for (const keyword of keywords) {
       if (categoryLower.includes(keyword)) {
-        return categoria.charAt(0).toUpperCase() + categoria.slice(1);
+        const result = categoria.charAt(0).toUpperCase() + categoria.slice(1);
+        console.log(`   🔧 Coincidencia parcial encontrada: "${categoryLower}" contiene "${keyword}" → "${result}"`);
+        return result;
       }
     }
   }
 
   // Manejar casos especiales de categorías compuestas
   if (categoryLower.includes('internacional') || categoryLower.includes('global')) {
+    console.log(`   🔧 Caso especial: internacional/global → "Internacional"`);
     return 'Internacional';
   }
   
   if (categoryLower.includes('música') || categoryLower.includes('musica')) {
+    console.log(`   🔧 Caso especial: música → "Música"`);
     return 'Música';
   }
 
   if (categoryLower.includes('política') || categoryLower.includes('politic')) {
+    console.log(`   🔧 Caso especial: política → "Política"`);
     return 'Política';
   }
 
   if (categoryLower.includes('deporte') || categoryLower.includes('sport')) {
+    console.log(`   🔧 Caso especial: deporte → "Deportes"`);
     return 'Deportes';
   }
 
   if (categoryLower.includes('entretenimiento') || categoryLower.includes('entertainment')) {
+    console.log(`   🔧 Caso especial: entretenimiento → "Entretenimiento"`);
     return 'Entretenimiento';
   }
 
   if (categoryLower.includes('social') || categoryLower.includes('redes')) {
+    console.log(`   🔧 Caso especial: social → "Social"`);
+    return 'Social';
+  }
+
+  if (categoryLower.includes('cultura') || categoryLower.includes('cultural')) {
+    console.log(`   🔧 Caso especial: cultura → "Social"`);
     return 'Social';
   }
 
   // Si no hay coincidencia, devolver 'Otros'
+  console.log(`   🔧 Sin coincidencias, devolviendo 'Otros'`);
   return 'Otros';
 }
 
@@ -235,12 +255,14 @@ IMPORTANTE: Si "${trendName}" parece ser un apodo, busca tanto el apodo como el 
           // Intentar extraer JSON de la respuesta
           const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
           if (jsonMatch) {
+            console.log(`   🔍 JSON encontrado, parseando...`);
             const parsed = JSON.parse(jsonMatch[0]);
             
             // Forzar la normalización de la categoría aquí, justo después de recibir la respuesta
             const originalCategory = parsed.categoria || 'Otros';
-            parsed.categoria = normalizarCategoria(originalCategory);
+            console.log(`   📝 Categoría original de Perplexity: "${originalCategory}"`);
             
+            parsed.categoria = normalizarCategoria(originalCategory);
             console.log(`   🔄 Normalización: "${originalCategory}" → "${parsed.categoria}"`);
             
             // Determinar si es contexto local basado en el contenido
@@ -263,9 +285,11 @@ IMPORTANTE: Si "${trendName}" parece ser un apodo, busca tanto el apodo como el 
             
             console.log(`   📊 ${trendName}: Categoría FINAL=${enriched.categoria}, Relevancia=${enriched.relevancia}`);
             return enriched;
+          } else {
+            console.log(`   ⚠️ No se encontró JSON en la respuesta`);
           }
         } catch (parseError) {
-          console.error(`   ⚠️  Error parseando JSON para ${trendName}, usando respuesta raw`);
+          console.error(`   ⚠️  Error parseando JSON para ${trendName}:`, parseError.message);
         }
         
         // Si no se puede parsear JSON, crear estructura manual
