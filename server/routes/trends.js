@@ -527,8 +527,45 @@ async function processDetailedInBackground(processingTimestamp, trendsData, loca
     console.log(`🧹 AboutArray ultra-simplificado creado con ${ultraSimplifiedAboutArray.length} items`);
     console.log('📋 Ejemplo simplificado:', JSON.stringify(ultraSimplifiedAboutArray[0] || {}, null, 2));
 
+    // Obtener los topKeywords originales del registro en Supabase
+    let originalTopKeywords = [];
+    try {
+      const { data: originalData, error: fetchError } = await supabase
+        .from('trends')
+        .select('top_keywords')
+        .eq('timestamp', processingTimestamp)
+        .single();
+      
+      if (!fetchError && originalData && originalData.top_keywords) {
+        originalTopKeywords = originalData.top_keywords;
+      }
+    } catch (fetchErr) {
+      console.error('⚠️ Error obteniendo topKeywords originales:', fetchErr);
+    }
+
+    // Si no hay topKeywords originales, generarlos a partir de los datos procesados
+    if (originalTopKeywords.length === 0) {
+      originalTopKeywords = processedAbout
+        .slice(0, 10)
+        .map((trend, index) => ({
+          keyword: trend.name,
+          count: trend.volume || (1000 - index * 10),
+          category: 'Otros',
+          about: {
+            nombre: trend.name,
+            resumen: 'Procesando información detallada...',
+            categoria: 'Otros',
+            tipo: 'trend',
+            relevancia: 'media',
+            contexto_local: true,
+            source: 'basic-processing',
+            model: 'basic'
+          }
+        }));
+    }
+
     // Actualizar topKeywords con la información enriquecida
-    const enrichedTopKeywords = topKeywords.map((keyword, index) => {
+    const enrichedTopKeywords = originalTopKeywords.map((keyword, index) => {
       const aboutInfo = ultraSimplifiedAboutArray[index];
       if (aboutInfo) {
         return {
@@ -539,10 +576,10 @@ async function processDetailedInBackground(processingTimestamp, trendsData, loca
       }
       return {
         ...keyword,
-        category: normalizarCategoria(keyword.category),
+        category: normalizarCategoria(keyword.category || 'Otros'),
         about: {
           ...keyword.about,
-          categoria: normalizarCategoria(keyword.category)
+          categoria: normalizarCategoria(keyword.category || 'Otros')
         }
       };
     });
