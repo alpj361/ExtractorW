@@ -550,13 +550,14 @@ async function processDetailedInBackground(processingTimestamp, trendsData, loca
     // Generar categoryData usando las categorías normalizadas
     const enrichedCategoryMap = {};
     ultraSimplifiedAboutArray.forEach(about => {
-      const cat = about.categoria || 'Otros';
+      // Asegurarnos de que siempre usamos la categoría normalizada
+      const cat = normalizarCategoria(about.categoria || 'Otros');
       enrichedCategoryMap[cat] = (enrichedCategoryMap[cat] || 0) + 1;
     });
     
     const enrichedCategoryData = Object.entries(enrichedCategoryMap)
       .map(([name, count]) => ({
-        name,
+        name: normalizarCategoria(name), // Normalizar una vez más por seguridad
         value: count
       }))
       .sort((a, b) => b.value - a.value);

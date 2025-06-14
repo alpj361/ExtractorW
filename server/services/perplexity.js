@@ -329,13 +329,13 @@ async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
       // 1. Obtener información completa
       const aboutInfo = await getAboutFromPerplexityIndividual(trendName, location, currentYear);
       
-      // 2. Categorizar (usar la categoría del about si está disponible)
-      const category = aboutInfo.categoria || await categorizeTrendWithPerplexityIndividual(trendName, location);
+      // 2. Normalizar la categoría que viene de Perplexity
+      const normalizedCategory = normalizarCategoria(aboutInfo.categoria || trend.category || 'Otros');
       
       const processedTrend = {
         name: trendName,
         volume: trend.volume || trend.count || 1,
-        category: category,
+        category: normalizedCategory,
         about: {
           nombre: aboutInfo.nombre || trendName,
           tipo: aboutInfo.tipo || 'hashtag',
@@ -343,7 +343,7 @@ async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
           razon_tendencia: aboutInfo.razon_tendencia || `Tendencia relacionada con ${trendName}`,
           fecha_evento: aboutInfo.fecha_evento || now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }),
           palabras_clave: aboutInfo.palabras_clave || [trendName],
-          categoria: category,
+          categoria: normalizedCategory,
           contexto_local: aboutInfo.contexto_local === undefined ? 
             aboutInfo.resumen?.toLowerCase().includes(location.toLowerCase()) || 
             trendName.toLowerCase().includes(location.toLowerCase()) : 
@@ -362,7 +362,7 @@ async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
       
       processedTrends.push(processedTrend);
       
-      console.log(`   ✅ Categoría: ${category}`);
+      console.log(`   ✅ Categoría normalizada: ${normalizedCategory}`);
       console.log(`   🎯 Relevancia: ${aboutInfo.relevancia}`);
       console.log(`   🌍 Contexto local: ${aboutInfo.contexto_local ? 'Sí' : 'No'}`);
       console.log(`   💥 Razón: ${aboutInfo.razon_tendencia || 'No especificada'}`);
@@ -377,10 +377,11 @@ async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
       console.error(`   ❌ Error procesando "${trendName}":`, error.message);
       
       // Agregar con valores por defecto manteniendo la estructura correcta
+      const defaultCategory = normalizarCategoria(detectarCategoria(trendName));
       processedTrends.push({
         name: trendName,
         volume: trend.volume || trend.count || 1,
-        category: detectarCategoria(trendName),
+        category: defaultCategory,
         about: {
           nombre: trendName,
           tipo: 'hashtag',
@@ -388,7 +389,7 @@ async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
           razon_tendencia: `Error procesando información sobre ${trendName}`,
           fecha_evento: now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }),
           palabras_clave: [trendName],
-          categoria: detectarCategoria(trendName),
+          categoria: defaultCategory,
           contexto_local: true,
           source: 'error',
           model: 'error'
