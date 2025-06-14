@@ -106,6 +106,136 @@ function detectarCategoria(trendName, context = '') {
   return 'Otros';
 }
 
+/**
+ * Normaliza una categoría a una categoría estándar
+ * @param {string} categoria - Categoría a normalizar
+ * @returns {string} - Categoría normalizada
+ */
+function normalizarCategoria(categoria) {
+  if (!categoria) return 'Otros';
+  
+  const categoriaLower = categoria.toLowerCase();
+
+  // Mapa de prioridades para categorías compuestas
+  const prioridadCategorias = {
+    'política': 1,
+    'internacional': 2,
+    'deportes': 3,
+    'economía': 4,
+    'música': 5,
+    'entretenimiento': 6,
+    'tecnología': 7,
+    'social': 8,
+    'salud': 9,
+    'educación': 10
+  };
+
+  // Si la categoría contiene múltiples categorías (separadas por /, y, o comas)
+  if (categoriaLower.includes('/') || categoriaLower.includes(',') || categoriaLower.includes(' y ')) {
+    const categorias = categoriaLower
+      .replace(/ y /g, '/')
+      .replace(/,/g, '/')
+      .split('/')
+      .map(c => c.trim());
+
+    // Encontrar la categoría con mayor prioridad
+    let categoriaPrioritaria = 'Otros';
+    let maxPrioridad = Infinity;
+
+    for (const cat of categorias) {
+      const prioridad = Object.entries(prioridadCategorias)
+        .find(([key]) => cat.includes(key))?.[1] || Infinity;
+      
+      if (prioridad < maxPrioridad) {
+        maxPrioridad = prioridad;
+        categoriaPrioritaria = cat;
+      }
+    }
+
+    // Mapear la categoría prioritaria
+    return mapearCategoriaSimple(categoriaPrioritaria);
+  }
+
+  return mapearCategoriaSimple(categoriaLower);
+}
+
+/**
+ * Mapea una categoría simple a una categoría estándar
+ * @param {string} categoria - Categoría a mapear
+ * @returns {string} - Categoría mapeada
+ */
+function mapearCategoriaSimple(categoria) {
+  const mapeo = {
+    // Política y gobierno
+    'política': 'Política',
+    'gobierno': 'Política',
+    'elecciones': 'Política',
+    'geográfica/política': 'Política',
+    'noticias políticas': 'Política',
+
+    // Internacional
+    'internacional': 'Internacional',
+    'noticias internacionales': 'Internacional',
+    'geográfica': 'Internacional',
+    'global': 'Internacional',
+
+    // Deportes
+    'deportes': 'Deportes',
+    'deporte': 'Deportes',
+    'fútbol': 'Deportes',
+    'automovilismo': 'Deportes',
+
+    // Entretenimiento
+    'entretenimiento': 'Entretenimiento',
+    'espectáculos': 'Entretenimiento',
+    'celebridades': 'Entretenimiento',
+    'entretenimiento y noticias': 'Entretenimiento',
+
+    // Música
+    'música': 'Música',
+    'musical': 'Música',
+    'k-pop': 'Música',
+
+    // Tecnología
+    'tecnología': 'Tecnología',
+    'tech': 'Tecnología',
+    'redes sociales': 'Tecnología',
+    'digital': 'Tecnología',
+
+    // Economía
+    'economía': 'Economía',
+    'finanzas': 'Economía',
+    'negocios': 'Economía',
+    'comercio': 'Economía',
+
+    // Social
+    'social': 'Social',
+    'sociedad': 'Social',
+    'comunidad': 'Social',
+
+    // Noticias generales
+    'noticias': 'Otros',
+    'noticias generales': 'Otros',
+    'actualidad': 'Otros',
+    'noticias y eventos': 'Otros'
+  };
+
+  // Buscar coincidencia exacta primero
+  if (mapeo[categoria]) {
+    return mapeo[categoria];
+  }
+
+  // Si no hay coincidencia exacta, buscar coincidencia parcial
+  for (const [key, value] of Object.entries(mapeo)) {
+    if (categoria.includes(key)) {
+      return value;
+    }
+  }
+
+  return 'Otros';
+}
+
 module.exports = {
-  detectarCategoria
+  detectarCategoria,
+  normalizarCategoria
 }; 
