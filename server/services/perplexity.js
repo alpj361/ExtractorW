@@ -157,6 +157,13 @@ IMPORTANTE: Si "${trendName}" parece ser un apodo, busca tanto el apodo como el 
           if (jsonMatch) {
             const parsed = JSON.parse(jsonMatch[0]);
             
+            // Determinar si es contexto local basado en el contenido
+            const isLocalContext = 
+              parsed.resumen?.toLowerCase().includes(location.toLowerCase()) ||
+              parsed.razon_tendencia?.toLowerCase().includes(location.toLowerCase()) ||
+              trendName.toLowerCase().includes(location.toLowerCase()) ||
+              (typeof parsed.contexto_local === 'boolean' ? parsed.contexto_local : undefined);
+            
             // Enriquecer con metadata
             const enriched = {
               ...parsed,
@@ -164,10 +171,11 @@ IMPORTANTE: Si "${trendName}" parece ser un apodo, busca tanto el apodo como el 
               model: 'sonar',
               search_query: searchQuery,
               timestamp: new Date().toISOString(),
-              raw_response: rawResponse
+              raw_response: rawResponse,
+              contexto_local: isLocalContext
             };
             
-            console.log(`   📊 ${trendName}: Categoría=${enriched.categoria}, Relevancia=${enriched.relevancia}`);
+            console.log(`   📊 ${trendName}: Categoría=${enriched.categoria}, Relevancia=${enriched.relevancia}, Contexto=${isLocalContext ? 'Local' : 'Global'}`);
             return enriched;
           }
         } catch (parseError) {
@@ -336,7 +344,10 @@ async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
           fecha_evento: aboutInfo.fecha_evento || now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }),
           palabras_clave: aboutInfo.palabras_clave || [trendName],
           categoria: category,
-          contexto_local: aboutInfo.contexto_local !== undefined ? aboutInfo.contexto_local : true,
+          contexto_local: aboutInfo.contexto_local === undefined ? 
+            aboutInfo.resumen?.toLowerCase().includes(location.toLowerCase()) || 
+            trendName.toLowerCase().includes(location.toLowerCase()) : 
+            aboutInfo.contexto_local,
           source: aboutInfo.source || 'perplexity-individual',
           model: aboutInfo.model || 'sonar'
         },
