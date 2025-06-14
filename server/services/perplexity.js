@@ -1,6 +1,86 @@
 const { detectarCategoria } = require('./categorization');
 
 /**
+ * Normaliza categorías a un conjunto fijo de categorías principales
+ * @param {string} category - Categoría original
+ * @returns {string} - Categoría normalizada
+ */
+function normalizarCategoria(category) {
+  if (!category || typeof category !== 'string') {
+    return 'Otros';
+  }
+  
+  const categoryLower = category.toLowerCase().trim();
+  
+  // Mapeo estricto de palabras clave a categorías principales
+  const CATEGORIA_PRINCIPAL = {
+    // Política e Internacional (prioridad a Internacional si contiene ambas)
+    'internacional': ['internacional', 'global', 'mundial', 'geopolítica', 'foreign', 'world'],
+    'política': ['política', 'politica', 'político', 'politico', 'politics', 'government', 'gobierno'],
+    
+    // Deportes
+    'deportes': ['deporte', 'deportes', 'sports', 'fútbol', 'futbol', 'football', 'soccer', 'basketball', 'béisbol', 'beisbol'],
+    
+    // Entretenimiento y Música (prioridad a Música si contiene ambas)
+    'música': ['música', 'musica', 'music', 'k-pop', 'kpop', 'cantante', 'artista', 'concierto'],
+    'entretenimiento': ['entretenimiento', 'entertainment', 'cine', 'película', 'pelicula', 'series', 'tv', 'television', 'show'],
+    
+    // Economía
+    'economía': ['economía', 'economia', 'economy', 'finanzas', 'finance', 'mercado', 'market', 'negocios', 'business'],
+    
+    // Tecnología
+    'tecnología': ['tecnología', 'tecnologia', 'technology', 'tech', 'software', 'hardware', 'digital', 'internet', 'app'],
+    
+    // Social
+    'social': ['social', 'sociedad', 'society', 'cultural', 'community', 'trending', 'redes sociales']
+  };
+
+  // Primero intentar encontrar una coincidencia exacta
+  for (const [categoria, keywords] of Object.entries(CATEGORIA_PRINCIPAL)) {
+    if (keywords.includes(categoryLower)) {
+      return categoria.charAt(0).toUpperCase() + categoria.slice(1);
+    }
+  }
+
+  // Si no hay coincidencia exacta, buscar coincidencias parciales
+  for (const [categoria, keywords] of Object.entries(CATEGORIA_PRINCIPAL)) {
+    for (const keyword of keywords) {
+      if (categoryLower.includes(keyword)) {
+        return categoria.charAt(0).toUpperCase() + categoria.slice(1);
+      }
+    }
+  }
+
+  // Manejar casos especiales de categorías compuestas
+  if (categoryLower.includes('internacional') || categoryLower.includes('global')) {
+    return 'Internacional';
+  }
+  
+  if (categoryLower.includes('música') || categoryLower.includes('musica')) {
+    return 'Música';
+  }
+
+  if (categoryLower.includes('política') || categoryLower.includes('politic')) {
+    return 'Política';
+  }
+
+  if (categoryLower.includes('deporte') || categoryLower.includes('sport')) {
+    return 'Deportes';
+  }
+
+  if (categoryLower.includes('entretenimiento') || categoryLower.includes('entertainment')) {
+    return 'Entretenimiento';
+  }
+
+  if (categoryLower.includes('social') || categoryLower.includes('redes')) {
+    return 'Social';
+  }
+
+  // Si no hay coincidencia, devolver 'Otros'
+  return 'Otros';
+}
+
+/**
  * Obtiene información contextualizada individual para una tendencia usando Perplexity
  * @param {string} trendName - Nombre de la tendencia
  * @param {string} location - Ubicación para contexto (Guatemala)
@@ -158,7 +238,10 @@ IMPORTANTE: Si "${trendName}" parece ser un apodo, busca tanto el apodo como el 
             const parsed = JSON.parse(jsonMatch[0]);
             
             // Forzar la normalización de la categoría aquí, justo después de recibir la respuesta
-            parsed.categoria = normalizarCategoria(parsed.categoria || 'Otros');
+            const originalCategory = parsed.categoria || 'Otros';
+            parsed.categoria = normalizarCategoria(originalCategory);
+            
+            console.log(`   🔄 Normalización: "${originalCategory}" → "${parsed.categoria}"`);
             
             // Determinar si es contexto local basado en el contenido
             const isLocalContext = 
@@ -178,7 +261,7 @@ IMPORTANTE: Si "${trendName}" parece ser un apodo, busca tanto el apodo como el 
               contexto_local: isLocalContext
             };
             
-            console.log(`   📊 ${trendName}: Categoría=${enriched.categoria}, Relevancia=${enriched.relevancia}, Contexto=${isLocalContext ? 'Local' : 'Global'}`);
+            console.log(`   📊 ${trendName}: Categoría FINAL=${enriched.categoria}, Relevancia=${enriched.relevancia}`);
             return enriched;
           }
         } catch (parseError) {
@@ -332,13 +415,13 @@ async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
       // 1. Obtener información completa
       const aboutInfo = await getAboutFromPerplexityIndividual(trendName, location, currentYear);
       
-      // 2. Normalizar la categoría que viene de Perplexity
-      const normalizedCategory = normalizarCategoria(aboutInfo.categoria || trend.category || 'Otros');
+      // 2. La categoría ya viene normalizada de getAboutFromPerplexityIndividual
+      const normalizedCategory = aboutInfo.categoria || 'Otros';
       
       const processedTrend = {
         name: trendName,
         volume: trend.volume || trend.count || 1,
-        category: normalizedCategory,
+        category: normalizedCategory, // Usar la categoría ya normalizada
         about: {
           nombre: aboutInfo.nombre || trendName,
           tipo: aboutInfo.tipo || 'hashtag',
@@ -346,7 +429,7 @@ async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
           razon_tendencia: aboutInfo.razon_tendencia || `Tendencia relacionada con ${trendName}`,
           fecha_evento: aboutInfo.fecha_evento || now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }),
           palabras_clave: aboutInfo.palabras_clave || [trendName],
-          categoria: normalizedCategory,
+          categoria: normalizedCategory, // Usar la categoría ya normalizada
           contexto_local: aboutInfo.contexto_local === undefined ? 
             aboutInfo.resumen?.toLowerCase().includes(location.toLowerCase()) || 
             trendName.toLowerCase().includes(location.toLowerCase()) : 
@@ -365,7 +448,7 @@ async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
       
       processedTrends.push(processedTrend);
       
-      console.log(`   ✅ Categoría normalizada: ${normalizedCategory}`);
+      console.log(`   ✅ Categoría FINAL: ${normalizedCategory}`);
       console.log(`   🎯 Relevancia: ${aboutInfo.relevancia}`);
       console.log(`   🌍 Contexto local: ${aboutInfo.contexto_local ? 'Sí' : 'No'}`);
       console.log(`   💥 Razón: ${aboutInfo.razon_tendencia || 'No especificada'}`);
