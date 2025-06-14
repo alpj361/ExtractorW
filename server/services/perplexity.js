@@ -12,13 +12,16 @@ async function getAboutFromPerplexityIndividual(trendName, location = 'Guatemala
   
   if (!PERPLEXITY_API_KEY) {
     console.log(`⚠️  PERPLEXITY_API_KEY no configurada para ${trendName}`);
+    const now = new Date();
     return {
       nombre: trendName,
-      resumen: `Tendencia relacionada con ${trendName}`,
-      categoria: 'Otros',
       tipo: 'hashtag',
       relevancia: 'baja',
-      contexto_local: false,
+      razon_tendencia: `Tendencia relacionada con ${trendName}`,
+      fecha_evento: now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }),
+      palabras_clave: [trendName],
+      categoria: 'Otros',
+      contexto_local: true,
       source: 'default',
       model: 'default'
     };
@@ -326,16 +329,16 @@ async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
         volume: trend.volume || trend.count || 1,
         category: category,
         about: {
-          nombre: trendName,
+          nombre: aboutInfo.nombre || trendName,
           tipo: aboutInfo.tipo || 'hashtag',
-          relevancia: aboutInfo.relevancia || 'media',
-          razon_tendencia: aboutInfo.razon_tendencia || '',
-          fecha_evento: aboutInfo.fecha_evento || '',
-          palabras_clave: aboutInfo.palabras_clave || [],
-          source: 'perplexity-individual',
-          model: 'sonar',
+          relevancia: aboutInfo.relevancia?.toLowerCase() || 'media',
+          razon_tendencia: aboutInfo.razon_tendencia || `Tendencia relacionada con ${trendName}`,
+          fecha_evento: aboutInfo.fecha_evento || now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }),
+          palabras_clave: aboutInfo.palabras_clave || [trendName],
           categoria: category,
-          contexto_local: aboutInfo.contexto_local || true
+          contexto_local: aboutInfo.contexto_local !== undefined ? aboutInfo.contexto_local : true,
+          source: aboutInfo.source || 'perplexity-individual',
+          model: aboutInfo.model || 'sonar'
         },
         metadata: {
           timestamp: new Date().toISOString(),
@@ -352,7 +355,6 @@ async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
       console.log(`   🎯 Relevancia: ${aboutInfo.relevancia}`);
       console.log(`   🌍 Contexto local: ${aboutInfo.contexto_local ? 'Sí' : 'No'}`);
       console.log(`   💥 Razón: ${aboutInfo.razon_tendencia || 'No especificada'}`);
-      console.log(`   📝 Resumen: ${aboutInfo.resumen.substring(0, 100)}...`);
       
       // Pausa entre llamadas para ser respetuoso con la API
       if (i < trends.length - 1) {
@@ -363,18 +365,20 @@ async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
     } catch (error) {
       console.error(`   ❌ Error procesando "${trendName}":`, error.message);
       
-      // Agregar con valores por defecto
+      // Agregar con valores por defecto manteniendo la estructura correcta
       processedTrends.push({
         name: trendName,
         volume: trend.volume || trend.count || 1,
         category: detectarCategoria(trendName),
         about: {
           nombre: trendName,
-          resumen: `Error procesando información sobre ${trendName}`,
-          categoria: detectarCategoria(trendName),
           tipo: 'hashtag',
           relevancia: 'baja',
-          contexto_local: false,
+          razon_tendencia: `Error procesando información sobre ${trendName}`,
+          fecha_evento: now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }),
+          palabras_clave: [trendName],
+          categoria: detectarCategoria(trendName),
+          contexto_local: true,
           source: 'error',
           model: 'error'
         },
