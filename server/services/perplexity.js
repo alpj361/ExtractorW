@@ -157,6 +157,9 @@ IMPORTANTE: Si "${trendName}" parece ser un apodo, busca tanto el apodo como el 
           if (jsonMatch) {
             const parsed = JSON.parse(jsonMatch[0]);
             
+            // Forzar la normalización de la categoría aquí, justo después de recibir la respuesta
+            parsed.categoria = normalizarCategoria(parsed.categoria || 'Otros');
+            
             // Determinar si es contexto local basado en el contenido
             const isLocalContext = 
               parsed.resumen?.toLowerCase().includes(location.toLowerCase()) ||
@@ -179,14 +182,14 @@ IMPORTANTE: Si "${trendName}" parece ser un apodo, busca tanto el apodo como el 
             return enriched;
           }
         } catch (parseError) {
-          console.log(`   ⚠️  Error parseando JSON para ${trendName}, usando respuesta raw`);
+          console.error(`   ⚠️  Error parseando JSON para ${trendName}, usando respuesta raw`);
         }
         
         // Si no se puede parsear JSON, crear estructura manual
         return {
           nombre: trendName,
           tipo: 'hashtag',
-          categoria: detectarCategoria(trendName, rawResponse),
+          categoria: parsed.categoria,
           resumen: rawResponse.substring(0, 300),
           relevancia: 'media',
           contexto_local: rawResponse.toLowerCase().includes('guatemala'),
@@ -205,7 +208,7 @@ IMPORTANTE: Si "${trendName}" parece ser un apodo, busca tanto el apodo como el 
     return {
       nombre: trendName,
       resumen: `Tendencia relacionada con ${trendName}`,
-      categoria: detectarCategoria(trendName),
+      categoria: normalizarCategoria('Otros'),
       tipo: 'hashtag',
       relevancia: 'baja',
       contexto_local: false,
@@ -218,7 +221,7 @@ IMPORTANTE: Si "${trendName}" parece ser un apodo, busca tanto el apodo como el 
     return {
       nombre: trendName,
       resumen: `Error procesando información sobre ${trendName}`,
-      categoria: detectarCategoria(trendName),
+      categoria: normalizarCategoria('Otros'),
       tipo: 'hashtag',
       relevancia: 'baja',
       contexto_local: false,
