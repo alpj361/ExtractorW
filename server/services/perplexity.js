@@ -101,6 +101,132 @@ function normalizarCategoria(category) {
 }
 
 /**
+ * Obtiene contexto de tweets reales de Supabase para una tendencia específica
+ * @param {string} trendName - Nombre de la tendencia
+ * @param {number} limite - Número máximo de tweets a obtener (default: 3)
+ * @returns {string} - Contexto formateado de tweets o string vacío
+ */
+async function obtenerContextoTweets(trendName, limite = 3) {
+  try {
+    console.log(`🐦 Obteniendo contexto de tweets para: "${trendName}"`);
+    
+    // Importar supabase si no está disponible
+    const { createClient } = require('@supabase/supabase-js');
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_ANON_KEY;
+    
+    if (!supabaseUrl || !supabaseKey) {
+      console.log('⚠️  Supabase no configurado, saltando contexto de tweets');
+      return '';
+    }
+    
+    const supabase = createClient(supabaseUrl, supabaseKey);
+    
+    // Buscar tweets relacionados con la tendencia
+    // Buscar por trend_clean (término limpio) y trend_original
+    const { data: tweets, error } = await supabase
+      .from('trending_tweets')
+      .select(`
+        texto,
+        likes,
+        retweets,
+        replies,
+        usuario,
+        verified,
+        fecha_tweet,
+        sentimiento,
+        score_sentimiento
+      `)
+      .or(`trend_clean.ilike.%${trendName}%,trend_original.ilike.%${trendName}%`)
+      .gte('fecha_captura', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()) // Últimos 7 días
+      .order('fecha_captura', { ascending: false })
+      .limit(20); // Obtener más para poder filtrar mejor
+    
+    if (error) {
+      console.error('❌ Error obteniendo tweets:', error);
+      return '';
+    }
+    
+    if (!tweets || tweets.length === 0) {
+      console.log(`📭 No se encontraron tweets para "${trendName}"`);
+      return '';
+    }
+    
+    console.log(`📊 Encontrados ${tweets.length} tweets, aplicando filtros...`);
+    
+    // Algoritmo de selección inteligente
+    const tweetsConPuntuacion = tweets.map(tweet => {
+      let puntuacion = 0;
+      const engagement = (tweet.likes || 0) + (tweet.retweets || 0) + (tweet.replies || 0);
+      
+      // Puntuación por engagement
+      if (engagement >= 1000) puntuacion += 10;
+      else if (engagement >= 500) puntuacion += 8;
+      else if (engagement >= 100) puntuacion += 6;
+      else if (engagement >= 50) puntuacion += 4;
+      else if (engagement >= 10) puntuacion += 2;
+      
+      // Puntuación por usuario verificado
+      if (tweet.verified) puntuacion += 5;
+      
+      // Puntuación por longitud del texto (ni muy corto ni muy largo)
+      const textoLength = tweet.texto?.length || 0;
+      if (textoLength >= 50 && textoLength <= 200) puntuacion += 3;
+      else if (textoLength >= 30 && textoLength <= 280) puntuacion += 1;
+      
+      // Puntuación por recencia (últimas 24 horas)
+      const fechaTweet = new Date(tweet.fecha_tweet);
+      const horasDesde = (Date.now() - fechaTweet.getTime()) / (1000 * 60 * 60);
+      if (horasDesde <= 24) puntuacion += 4;
+      else if (horasDesde <= 48) puntuacion += 2;
+      
+      // Penalizar tweets muy negativos o spam
+      if (tweet.score_sentimiento < -0.8) puntuacion -= 2;
+      
+      return {
+        ...tweet,
+        engagement,
+        puntuacion
+      };
+    });
+    
+    // Seleccionar los mejores tweets
+    const mejoresTweets = tweetsConPuntuacion
+      .sort((a, b) => b.puntuacion - a.puntuacion)
+      .slice(0, limite)
+      .filter(tweet => tweet.texto && tweet.texto.length > 20); // Filtrar tweets muy cortos
+    
+    if (mejoresTweets.length === 0) {
+      console.log(`📭 No se encontraron tweets de calidad para "${trendName}"`);
+      return '';
+    }
+    
+    // Formatear contexto compacto
+    const contextoLineas = mejoresTweets.map((tweet, index) => {
+      const engagement = tweet.engagement;
+      const usuario = tweet.verified ? `@${tweet.usuario} ✓` : `@${tweet.usuario}`;
+      const texto = tweet.texto.substring(0, 180).replace(/\n/g, ' ').trim();
+      const engagementText = engagement > 0 ? `[${engagement}❤️]` : '';
+      
+      return `${index + 1}. ${engagementText} ${texto} - ${usuario}`;
+    });
+    
+    const contexto = `
+CONTEXTO DE TWEETS REALES sobre "${trendName}":
+${contextoLineas.join('\n')}
+
+INSTRUCCIÓN: Usa estos tweets reales para entender mejor POR QUÉ "${trendName}" es tendencia AHORA. Los tweets muestran lo que la gente realmente está diciendo.`;
+    
+    console.log(`✅ Contexto de tweets generado: ${mejoresTweets.length} tweets seleccionados`);
+    return contexto;
+    
+  } catch (error) {
+    console.error('❌ Error en obtenerContextoTweets:', error);
+    return '';
+  }
+}
+
+/**
  * Obtiene información contextualizada individual para una tendencia usando Perplexity
  * @param {string} trendName - Nombre de la tendencia
  * @param {string} location - Ubicación para contexto (Guatemala)
@@ -136,6 +262,9 @@ async function getAboutFromPerplexityIndividual(trendName, location = 'Guatemala
     const currentMonth = now.toLocaleString('es-ES', { month: 'long' });
     const currentDate = now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
     
+    // Obtener contexto de tweets reales
+    const contextoTweets = await obtenerContextoTweets(trendName, 3);
+    
     // Construir consulta específica para búsqueda web
     const searchQuery = `${trendName} ${location} ${currentMonth} ${currentYear} noticias actualidad`;
     
@@ -148,10 +277,11 @@ async function getAboutFromPerplexityIndividual(trendName, location = 'Guatemala
       `"${trendName}" trending ${currentMonth} 2025` // Búsqueda exacta
     ];
     
-    // Prompt mejorado con fecha dinámica y mejor enfoque en la razón exacta
+    // Prompt mejorado con fecha dinámica, contexto de tweets y mejor enfoque en la razón exacta
     const prompt = `Analiza la tendencia "${trendName}" y explica POR QUÉ está siendo tendencia ESPECÍFICAMENTE en ${currentMonth} ${currentYear}.
 
 FECHA ACTUAL: ${currentDate}
+${contextoTweets}
 
 INSTRUCCIONES ESPECÍFICAS:
 1. "${trendName}" puede ser:
@@ -179,8 +309,16 @@ INSTRUCCIONES ESPECÍFICAS:
    - TENDENCIA LOCAL: Relacionada directamente con ${location}
    - TENDENCIA GLOBAL: Internacional pero que interesa en ${location}
    
-6. NO digas "no hay información" - busca más profundo
-7. SÉ ESPECÍFICO sobre el evento que causó la tendencia
+6. REQUISITO CRÍTICO: La "razon_tendencia" DEBE ser ESPECÍFICA y DETALLADA:
+   ❌ MAL: "Por su popularidad en redes sociales"
+   ❌ MAL: "Por ser una figura conocida"
+   ❌ MAL: "Por eventos recientes"
+   ✅ BIEN: "Anunció oficialmente su retiro del fútbol profesional el 15 de mayo de 2025 después de 20 años de carrera"
+   ✅ BIEN: "Lanzó su nuevo álbum 'Corazón Latino' el 12 de mayo de 2025 que incluye colaboración con Bad Bunny"
+   ✅ BIEN: "Fue arrestado el 14 de mayo de 2025 por presunta corrupción en contratos gubernamentales"
+   
+7. NO digas "no hay información" - busca más profundo
+8. SÉ ESPECÍFICO sobre el evento que causó la tendencia
 
 EJEMPLOS DE ANÁLISIS PRECISO:
 - Si es deportes: ¿Retiro? ¿Transferencia? ¿Lesión? ¿Partido importante?
@@ -197,7 +335,7 @@ Responde en formato JSON:
   "resumen": "Explicación de 2-3 oraciones sobre QUÉ ES y POR QUÉ es tendencia AHORA en ${currentMonth} ${currentYear}. SÉ ESPECÍFICO sobre el evento exacto.",
   "relevancia": "alta|media|baja",
   "contexto_local": true/false,
-  "razon_tendencia": "Evento específico y exacto que causó que sea tendencia ahora",
+  "razon_tendencia": "DEBE SER MUY ESPECÍFICA: Evento exacto con fecha, acción concreta, anuncio específico, etc. NO generalidades.",
   "fecha_evento": "Fecha aproximada del evento que causó la tendencia",
   "palabras_clave": ["palabra1", "palabra2", "palabra3"]
 }`;
@@ -213,6 +351,7 @@ Responde en formato JSON:
 - Identificar APODOS y nombres reales de personas famosas (especialmente deportistas)
 - Distinguir entre tendencias locales de ${location} vs tendencias globales que interesan en ${location}
 - Identificar el contexto temporal EXACTO (¿qué pasó HOY/ESTA SEMANA/ESTE MES que lo hizo tendencia?)
+- Analizar tweets reales para entender el contexto social y las conversaciones actuales
 - No rendirse fácilmente - buscar información profundamente
 - Ser PRECISO sobre la relevancia real para el público de ${location}
 - Enfocarte en EVENTOS ESPECÍFICOS no generalidades
@@ -220,7 +359,10 @@ Responde en formato JSON:
 FECHA ACTUAL: ${currentDate}
 Enfócate en la ACTUALIDAD y en eventos ESPECÍFICOS Y EXACTOS que explican por qué algo es tendencia AHORA.
 
-IMPORTANTE: Si "${trendName}" parece ser un apodo, busca tanto el apodo como el nombre real de la persona.`
+IMPORTANTE: 
+- Si "${trendName}" parece ser un apodo, busca tanto el apodo como el nombre real de la persona.
+- Si tienes contexto de tweets reales, úsalos para entender mejor la conversación actual y la razón específica de la tendencia.
+- La "razon_tendencia" DEBE ser específica con fechas, eventos concretos, anuncios exactos - NO generalidades.`
         },
         {
           role: 'user',
@@ -614,5 +756,7 @@ module.exports = {
   getAboutFromPerplexityIndividual,
   categorizeTrendWithPerplexityIndividual,
   processWithPerplexityIndividual,
-  generateStatistics
+  generateStatistics,
+  obtenerContextoTweets,
+  normalizarCategoria
 }; 
