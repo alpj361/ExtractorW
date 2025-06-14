@@ -637,8 +637,8 @@ async function processDetailedInBackground(processingTimestamp, trendsData, loca
 }
 
 /**
- * Normaliza categorías específicas de Perplexity a categorías estándar
- * @param {string} category - Categoría original de Perplexity
+ * Normaliza categorías a un conjunto fijo de categorías principales
+ * @param {string} category - Categoría original
  * @returns {string} - Categoría normalizada
  */
 function normalizarCategoria(category) {
@@ -646,104 +646,58 @@ function normalizarCategoria(category) {
     return 'Otros';
   }
   
-  const categoryLower = category.toLowerCase();
+  const categoryLower = category.toLowerCase().trim();
   
-  // Mapeo de categorías específicas a categorías estándar
-  const categoryMap = {
-    // Música y entretenimiento
-    'música': 'Música',
-    'music': 'Música',
-    'música k-pop': 'Música',
-    'k-pop': 'Música',
-    'kpop': 'Música',
-    'música|entretenimiento': 'Música',
-    'entretenimiento': 'Entretenimiento',
-    'entertainment': 'Entretenimiento',
-    'cultural/social': 'Social',
-    'cultural': 'Social',
-    'social': 'Social',
-    
-    // Política y conflictos
-    'política': 'Política',
-    'politics': 'Política',
-    'política/economía': 'Política',
-    'política y conflicto': 'Política',
-    'político': 'Política',
-    'geopolítica': 'Internacional',
-    'geopolítica / conflicto internacional': 'Internacional',
-    'conflicto internacional': 'Internacional',
-    'noticias internacionales': 'Internacional',
-    'internacional': 'Internacional',
-    'international': 'Internacional',
+  // Mapeo estricto de palabras clave a categorías principales
+  const CATEGORIA_PRINCIPAL = {
+    // Política e Internacional (prioridad a Internacional si contiene ambas)
+    'internacional': ['internacional', 'global', 'mundial', 'geopolítica', 'foreign', 'world'],
+    'política': ['política', 'politica', 'político', 'politico', 'politics', 'government', 'gobierno'],
     
     // Deportes
-    'deportes': 'Deportes',
-    'sports': 'Deportes',
-    'fútbol': 'Deportes',
-    'football': 'Deportes',
-    'soccer': 'Deportes',
+    'deportes': ['deporte', 'deportes', 'sports', 'fútbol', 'futbol', 'football', 'soccer', 'basketball', 'béisbol', 'beisbol'],
+    
+    // Entretenimiento y Música (prioridad a Música si contiene ambas)
+    'música': ['música', 'musica', 'music', 'k-pop', 'kpop', 'cantante', 'artista', 'concierto'],
+    'entretenimiento': ['entretenimiento', 'entertainment', 'cine', 'película', 'pelicula', 'series', 'tv', 'television', 'show'],
     
     // Economía
-    'economía': 'Economía',
-    'economy': 'Economía',
-    'económico': 'Economía',
-    'finanzas': 'Economía',
+    'economía': ['economía', 'economia', 'economy', 'finanzas', 'finance', 'mercado', 'market', 'negocios', 'business'],
     
     // Tecnología
-    'tecnología': 'Tecnología',
-    'technology': 'Tecnología',
-    'tech': 'Tecnología',
+    'tecnología': ['tecnología', 'tecnologia', 'technology', 'tech', 'software', 'hardware', 'digital', 'internet', 'app'],
     
-    // Países y lugares (contextualizar)
-    'actualidad/país': 'Internacional',
-    'país': 'Internacional',
-    'country': 'Internacional',
-    
-    // Otros
-    'otros': 'Otros',
-    'other': 'Otros',
-    'general': 'Otros'
+    // Social
+    'social': ['social', 'sociedad', 'society', 'cultural', 'community', 'trending']
   };
-  
-  // Buscar coincidencia exacta primero
-  if (categoryMap[categoryLower]) {
-    return categoryMap[categoryLower];
-  }
-  
-  // Buscar coincidencias parciales
-  for (const [key, value] of Object.entries(categoryMap)) {
-    if (categoryLower.includes(key) || key.includes(categoryLower)) {
-      return value;
+
+  // Primero intentar encontrar una coincidencia exacta
+  for (const [categoria, keywords] of Object.entries(CATEGORIA_PRINCIPAL)) {
+    if (keywords.includes(categoryLower)) {
+      return categoria.charAt(0).toUpperCase() + categoria.slice(1);
     }
   }
-  
-  // Si contiene palabras clave específicas
-  if (categoryLower.includes('música') || categoryLower.includes('music') || categoryLower.includes('kpop') || categoryLower.includes('k-pop')) {
-    return 'Música';
+
+  // Si no hay coincidencia exacta, buscar coincidencias parciales
+  for (const [categoria, keywords] of Object.entries(CATEGORIA_PRINCIPAL)) {
+    for (const keyword of keywords) {
+      if (categoryLower.includes(keyword)) {
+        return categoria.charAt(0).toUpperCase() + categoria.slice(1);
+      }
+    }
   }
-  
-  if (categoryLower.includes('política') || categoryLower.includes('politic') || categoryLower.includes('gobierno')) {
-    return 'Política';
-  }
-  
-  if (categoryLower.includes('deporte') || categoryLower.includes('sport') || categoryLower.includes('fútbol') || categoryLower.includes('football')) {
-    return 'Deportes';
-  }
-  
-  if (categoryLower.includes('internacional') || categoryLower.includes('international') || categoryLower.includes('global') || categoryLower.includes('mundial')) {
+
+  // Manejar casos especiales de categorías compuestas
+  if (categoryLower.includes('internacional') || categoryLower.includes('global')) {
     return 'Internacional';
   }
   
-  if (categoryLower.includes('social') || categoryLower.includes('cultural') || categoryLower.includes('sociedad')) {
-    return 'Social';
+  if (categoryLower.includes('música') || categoryLower.includes('musica')) {
+    return 'Música';
   }
-  
-  if (categoryLower.includes('entretenimiento') || categoryLower.includes('entertainment') || categoryLower.includes('cine') || categoryLower.includes('tv')) {
-    return 'Entretenimiento';
-  }
-  
-  // Si no encuentra coincidencia, capitalizar la primera letra y devolver
-  return category.charAt(0).toUpperCase() + category.slice(1).toLowerCase();
+
+  // Si no hay coincidencia, devolver 'Otros'
+  return 'Otros';
 }
 
 module.exports = setupTrendsRoutes; 
