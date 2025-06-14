@@ -456,13 +456,13 @@ function setupTrendsRoutes(app) {
 }
 
 // Función para procesamiento detallado en background
-async function processDetailedInBackground(processingTimestamp, trends, location, userId, startTime) {
+async function processDetailedInBackground(processingTimestamp, trendsData, location, userId, startTime) {
   try {
     console.log(`🔄 Procesando detalles en background (ID: ${processingTimestamp})...`);
-    console.log(`📊 Procesando ${trends.length} tendencias`);
+    console.log(`📊 Procesando ${trendsData.length} tendencias`);
     
     // Procesar con Perplexity en background (limitar a las top 10 para optimizar)
-    const top10Trends = trends.slice(0, 10).map(trend => ({
+    const top10Trends = trendsData.slice(0, 10).map(trend => ({
       name: trend.name,
       volume: trend.volume || 1,
       category: trend.category
