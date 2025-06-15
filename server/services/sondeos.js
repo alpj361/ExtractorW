@@ -334,11 +334,16 @@ async function obtenerContextoAdicionalPerplexity(pregunta, contextoBase) {
 }
 
 /**
- * Procesa el sondeo con ChatGPT 4o (simulado por ahora)
+ * Procesa el sondeo con ChatGPT 4o (integración real con OpenAI)
  */
 async function procesarSondeoConChatGPT(pregunta, contexto, configuracion = {}) {
   try {
     console.log('🤖 Procesando sondeo con ChatGPT 4o');
+    
+    // Verificar que la API key esté configurada
+    if (!process.env.OPENAI_API_KEY) {
+      throw new Error('OPENAI_API_KEY no configurada');
+    }
     
     // Construir prompt para ChatGPT
     const prompt = construirPromptSondeo(pregunta, contexto, configuracion);
@@ -346,30 +351,128 @@ async function procesarSondeoConChatGPT(pregunta, contexto, configuracion = {}) 
     // Determinar el tipo de contexto principal
     const tipoContextoPrincipal = contexto.fuentes_utilizadas[0] || 'tendencias';
     
-    // Generar datos de visualización estructurados
-    const datosVisualizacion = generarDatosVisualizacion(pregunta, tipoContextoPrincipal);
-    
-    // NOTA: Aquí se integraría con la API de OpenAI ChatGPT 4o
-    // Por ahora simulamos la respuesta
-    const respuestaSimulada = {
-      respuesta: `Análisis de: "${pregunta}"
+    // Preparar payload para OpenAI (optimizado para límites de tokens)
+    const payload = {
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: `Eres un analista experto en datos de Guatemala y Centroamérica. Analiza información y responde preguntas específicas basándote en el contexto proporcionado.
+
+Al final incluye un bloque JSON con datos para visualización:
+
+\`\`\`json
+{
+  "temas_relevantes": [{"tema": "Nombre", "valor": 85}],
+  "distribucion_categorias": [{"categoria": "Política", "valor": 35}],
+  "conclusiones": "Resumen ejecutivo",
+  "metodologia": "Descripción del análisis"
+}
+\`\`\``
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      temperature: 0.7,
+      max_tokens: 1500
+    };
+
+    // Llamar a OpenAI API
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+        'OpenAI-Organization': process.env.OPENAI_ORG_ID || ''
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Error en OpenAI API: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    let respuestaIA = '';
+    let tokensInfo = {};
+
+    // Extraer la respuesta y la información de tokens
+    if (data.choices && data.choices[0] && data.choices[0].message) {
+      respuestaIA = data.choices[0].message.content;
       
-Basado en el contexto proporcionado de ${contexto.fuentes_utilizadas.join(', ')}, se puede observar:
+      // Extraer información de tokens para logs
+      if (data.usage) {
+        console.log(`🔢 Tokens utilizados: ${data.usage.total_tokens} (prompt: ${data.usage.prompt_tokens}, completion: ${data.usage.completion_tokens})`);
+        tokensInfo = {
+          total: data.usage.total_tokens,
+          prompt: data.usage.prompt_tokens,
+          completion: data.usage.completion_tokens
+        };
+      }
+    } else {
+      respuestaIA = 'No se obtuvo respuesta del modelo.';
+    }
 
-1. **Tendencias Principales**: ${contexto.estadisticas.total_items} elementos analizados
-2. **Fuentes Consultadas**: ${contexto.estadisticas.total_fuentes} fuentes de datos
-3. **Análisis Contextual**: Información relevante para Guatemala y región
+    // Extraer datos JSON para visualizaciones
+    let datosVisualizacion = null;
+    const jsonPatterns = [
+      /```json\n([\s\S]*?)\n```/, // Formato estándar ```json
+      /```\n([\s\S]*?)\n```/,     // Formato sin especificar lenguaje
+      /`([\s\S]*?)`/              // Formato de bloque simple
+    ];
 
-**Conclusiones**:
-- El tema muestra relevancia en las fuentes consultadas
-- Se identifican patrones en los datos analizados
-- Recomendaciones basadas en el contexto actual
+    let jsonText = null;
+    for (const pattern of jsonPatterns) {
+      const match = respuestaIA.match(pattern);
+      if (match && match[1]) {
+        jsonText = match[1];
+        break;
+      }
+    }
 
-*Análisis completado exitosamente con datos estructurados para visualización.*`,
+    if (jsonText) {
+      try {
+        // Limpiar el JSON extraído y parsearlo
+        const cleanedJson = jsonText
+          .replace(/\/\/.*$/gm, '') // Eliminar comentarios
+          .replace(/\/\*[\s\S]*?\*\//g, '') // Eliminar comentarios multilinea
+          .replace(/,\s*}/g, '}')   // Eliminar comas finales incorrectas
+          .replace(/,\s*]/g, ']')   // Eliminar comas finales incorrectas
+          .trim();
+
+        datosVisualizacion = JSON.parse(cleanedJson);
+
+        // Limpiar la respuesta eliminando el JSON
+        respuestaIA = respuestaIA.replace(/```json\n[\s\S]*?\n```/, '')
+                                 .replace(/```\n[\s\S]*?\n```/, '')
+                                 .replace(/`[\s\S]*?`/, '')
+                                 .trim();
+
+        console.log('✅ Datos para visualizaciones extraídos correctamente:', Object.keys(datosVisualizacion));
+      } catch (jsonError) {
+        console.error('❌ Error parseando JSON de visualizaciones:', jsonError);
+        datosVisualizacion = null;
+      }
+    }
+
+    // Si no se pudieron extraer datos, generar datos simulados
+    if (!datosVisualizacion) {
+      console.log('⚠️ No se encontraron datos estructurados en la respuesta, generando datos simulados');
+      datosVisualizacion = generarDatosVisualizacion(pregunta, tipoContextoPrincipal);
+    }
+
+    // Construir respuesta estructurada
+    const respuestaEstructurada = {
+      respuesta: respuestaIA,
       
       metadata: {
-        modelo: 'ChatGPT-4o (simulado)',
-        tokens_estimados: Math.ceil(JSON.stringify(contexto).length / 4),
+        modelo: 'gpt-4o',
+        tokens_utilizados: tokensInfo.total || 0,
+        tokens_prompt: tokensInfo.prompt || 0,
+        tokens_completion: tokensInfo.completion || 0,
         fuentes_utilizadas: contexto.fuentes_utilizadas,
         timestamp: new Date().toISOString(),
         configuracion_utilizada: configuracion
@@ -384,12 +487,37 @@ Basado en el contexto proporcionado de ${contexto.fuentes_utilizadas.join(', ')}
       }
     };
 
-    console.log('✅ Sondeo procesado exitosamente con datos de visualización');
-    return respuestaSimulada;
+    console.log('✅ Sondeo procesado exitosamente con ChatGPT 4o');
+    return respuestaEstructurada;
 
   } catch (error) {
-    console.error('❌ Error procesando sondeo:', error);
-    throw error;
+    console.error('❌ Error procesando sondeo con ChatGPT:', error);
+    
+    // En caso de error, devolver respuesta simulada como fallback
+    const tipoContextoPrincipal = contexto.fuentes_utilizadas[0] || 'tendencias';
+    const datosVisualizacion = generarDatosVisualizacion(pregunta, tipoContextoPrincipal);
+    
+    return {
+      respuesta: `Error al procesar la consulta: "${pregunta}". 
+      
+Se produjo un error al conectar con el servicio de IA. Por favor, intenta nuevamente.
+
+Error técnico: ${error.message}`,
+      
+      metadata: {
+        modelo: 'fallback',
+        error: error.message,
+        fuentes_utilizadas: contexto.fuentes_utilizadas,
+        timestamp: new Date().toISOString()
+      },
+      
+      datos_visualizacion: datosVisualizacion,
+      
+      estadisticas: {
+        contexto_procesado: contexto.estadisticas,
+        costo_creditos: 0 // No cobrar en caso de error
+      }
+    };
   }
 }
 
@@ -403,11 +531,11 @@ function generarDatosVisualizacion(consulta, tipo) {
   if (tipo === 'tendencias') {
     return {
       temas_relevantes: [
-        { tema: `${consulta} - Política`, valor: 85, descripcion: "Impacto en políticas públicas nacionales" },
-        { tema: `${consulta} - Economía`, valor: 67, descripcion: "Efectos en el desarrollo económico regional" },
-        { tema: `${consulta} - Internacional`, valor: 54, descripcion: "Relaciones y cooperación internacional" },
-        { tema: `${consulta} - Tecnología`, valor: 42, descripcion: "Innovación y transformación digital" },
-        { tema: `${consulta} - Cultura`, valor: 38, descripcion: "Expresiones culturales y sociales" }
+        { tema: "Política", valor: 85, descripcion: "Impacto en políticas públicas nacionales" },
+        { tema: "Economía", valor: 67, descripcion: "Efectos en el desarrollo económico regional" },
+        { tema: "Internacional", valor: 54, descripcion: "Relaciones y cooperación internacional" },
+        { tema: "Tecnología", valor: 42, descripcion: "Innovación y transformación digital" },
+        { tema: "Cultura", valor: 38, descripcion: "Expresiones culturales y sociales" }
       ],
       distribucion_categorias: [
         { categoria: 'Política', valor: 35 },
@@ -432,10 +560,10 @@ function generarDatosVisualizacion(consulta, tipo) {
       ],
       // Respuestas conclusivas para cada gráfico
       conclusiones: {
-        temas_relevantes: `Los temas relacionados con ${consulta} muestran mayor relevancia en el ámbito político (85%) y económico (67%), indicando que este tema tiene un impacto significativo en las decisiones gubernamentales y el desarrollo económico del país.`,
-        distribucion_categorias: `La distribución por categorías revela que ${consulta} se concentra principalmente en Política (35%) y Economía (28%), representando el 63% de toda la conversación, lo que sugiere una alta prioridad en la agenda nacional.`,
-        mapa_menciones: `Geográficamente, ${consulta} tiene mayor resonancia en Guatemala capital (48%) y la Zona Metropolitana (35%), concentrando el 83% de las menciones en el área central del país.`,
-        subtemas_relacionados: `Los subtemas más relacionados son Financiamiento (85%) y Regulación (72%), indicando que ${consulta} requiere principalmente atención en aspectos económicos y marco normativo.`
+        temas_relevantes: `Los temas analizados muestran mayor relevancia en el ámbito político (85%) y económico (67%), indicando un impacto significativo en las decisiones gubernamentales y el desarrollo económico del país.`,
+        distribucion_categorias: `La distribución por categorías se concentra principalmente en Política (35%) y Economía (28%), representando el 63% de toda la conversación, lo que sugiere una alta prioridad en la agenda nacional.`,
+        mapa_menciones: `Geográficamente, el tema tiene mayor resonancia en Guatemala capital (48%) y la Zona Metropolitana (35%), concentrando el 83% de las menciones en el área central del país.`,
+        subtemas_relacionados: `Los subtemas más relacionados son Financiamiento (85%) y Regulación (72%), indicando que se requiere principalmente atención en aspectos económicos y marco normativo.`
       },
       // Información sobre cómo se obtuvo cada gráfica
       metodologia: {
@@ -450,11 +578,11 @@ function generarDatosVisualizacion(consulta, tipo) {
   else if (tipo === 'noticias') {
     return {
       noticias_relevantes: [
-        { titulo: `${consulta} - Impacto Nacional`, relevancia: 92, descripcion: "Análisis del impacto en desarrollo económico" },
-        { titulo: `${consulta} - Políticas Nuevas`, relevancia: 87, descripcion: "Anuncio de nuevas políticas gubernamentales" },
-        { titulo: `${consulta} - Comunidades`, relevancia: 76, descripcion: "Organización de comunidades rurales" },
-        { titulo: `${consulta} - Perspectiva Internacional`, relevancia: 68, descripcion: "Debate de especialistas internacionales" },
-        { titulo: `${consulta} - Futuro Guatemala`, relevancia: 61, descripcion: "Perspectivas a mediano y largo plazo" }
+        { titulo: "Impacto Nacional", relevancia: 92, descripcion: "Análisis del impacto en desarrollo económico" },
+        { titulo: "Políticas Nuevas", relevancia: 87, descripcion: "Anuncio de nuevas políticas gubernamentales" },
+        { titulo: "Comunidades", relevancia: 76, descripcion: "Organización de comunidades rurales" },
+        { titulo: "Perspectiva Internacional", relevancia: 68, descripcion: "Debate de especialistas internacionales" },
+        { titulo: "Futuro Guatemala", relevancia: 61, descripcion: "Perspectivas a mediano y largo plazo" }
       ],
       fuentes_cobertura: [
         { fuente: 'Prensa Libre', cobertura: 32 },
@@ -478,9 +606,9 @@ function generarDatosVisualizacion(consulta, tipo) {
         { aspecto: 'Tecnológico', cobertura: 35 }
       ],
       conclusiones: {
-        noticias_relevantes: `Las noticias sobre ${consulta} se enfocan principalmente en el impacto nacional (92%) y nuevas políticas (87%), mostrando alta cobertura mediática en temas de política pública.`,
+        noticias_relevantes: `Las noticias analizadas se enfocan principalmente en el impacto nacional (92%) y nuevas políticas (87%), mostrando alta cobertura mediática en temas de política pública.`,
         fuentes_cobertura: `Prensa Libre lidera la cobertura con 32%, seguido por Nuestro Diario (27%), concentrando el 59% de la información en estos dos medios principales.`,
-        evolucion_cobertura: `La cobertura de ${consulta} ha mostrado un crecimiento sostenido, alcanzando su pico en mayo (55 menciones), indicando un interés mediático creciente.`,
+        evolucion_cobertura: `La cobertura ha mostrado un crecimiento sostenido, alcanzando su pico en mayo (55 menciones), indicando un interés mediático creciente.`,
         aspectos_cubiertos: `Los aspectos económicos dominan la cobertura (65%), seguidos por los políticos (58%), representando el enfoque principal de los medios en estos temas.`
       },
       metodologia: {
@@ -494,11 +622,11 @@ function generarDatosVisualizacion(consulta, tipo) {
   else if (tipo === 'codex') {
     return {
       documentos_relevantes: [
-        { titulo: `${consulta} - Análisis Estratégico`, relevancia: 95, descripcion: "Análisis integral para Guatemala" },
-        { titulo: `${consulta} - Estudio Sectorial`, relevancia: 88, descripcion: "Estudio comparativo sectorial" },
-        { titulo: `${consulta} - Marco Legal`, relevancia: 82, descripcion: "Políticas públicas y normativa" },
-        { titulo: `${consulta} - Aspectos Institucionales`, relevancia: 75, descripcion: "Marco institucional guatemalteco" },
-        { titulo: `${consulta} - Impacto Social`, relevancia: 68, descripcion: "Casos de estudio nacionales" }
+        { titulo: "Análisis Estratégico", relevancia: 95, descripcion: "Análisis integral para Guatemala" },
+        { titulo: "Estudio Sectorial", relevancia: 88, descripcion: "Estudio comparativo sectorial" },
+        { titulo: "Marco Legal", relevancia: 82, descripcion: "Políticas públicas y normativa" },
+        { titulo: "Aspectos Institucionales", relevancia: 75, descripcion: "Marco institucional guatemalteco" },
+        { titulo: "Impacto Social", relevancia: 68, descripcion: "Casos de estudio nacionales" }
       ],
       conceptos_relacionados: [
         { concepto: 'Desarrollo Sostenible', relacion: 78 },
@@ -521,7 +649,7 @@ function generarDatosVisualizacion(consulta, tipo) {
         { aspecto: 'Legal', profundidad: 55 }
       ],
       conclusiones: {
-        documentos_relevantes: `Los documentos del codex sobre ${consulta} muestran alta relevancia en análisis estratégicos (95%) y estudios sectoriales (88%), indicando una base sólida de conocimiento especializado.`,
+        documentos_relevantes: `Los documentos del codex muestran alta relevancia en análisis estratégicos (95%) y estudios sectoriales (88%), indicando una base sólida de conocimiento especializado.`,
         conceptos_relacionados: `El concepto más relacionado es Desarrollo Sostenible (78%), seguido por Política Pública (65%), mostrando la orientación hacia sostenibilidad y gobernanza.`,
         evolucion_analisis: `El análisis ha evolucionado positivamente, creciendo de 22 a 55 documentos por trimestre, mostrando un interés académico y técnico creciente.`,
         aspectos_documentados: `Los aspectos conceptuales tienen mayor profundidad (82%), seguidos por casos de estudio (75%), indicando un enfoque teórico-práctico balanceado.`
@@ -546,31 +674,58 @@ function generarDatosVisualizacion(consulta, tipo) {
 }
 
 /**
- * Construye el prompt optimizado para ChatGPT
+ * Construye el prompt optimizado para ChatGPT (reducido para evitar límite de tokens)
  */
 function construirPromptSondeo(pregunta, contexto, configuracion) {
+  // Crear resumen conciso del contexto en lugar de JSON completo
+  let resumenContexto = '';
+  
+  if (contexto.data) {
+    // Resumir tendencias
+    if (contexto.data.tendencias && contexto.data.tendencias.length > 0) {
+      const tendenciasTop = contexto.data.tendencias.slice(0, 5).map(t => t.nombre || t.trend || 'Tendencia').join(', ');
+      resumenContexto += `\nTENDENCIAS ACTUALES: ${tendenciasTop}`;
+    }
+    
+    // Resumir noticias
+    if (contexto.data.noticias && contexto.data.noticias.length > 0) {
+      const noticiasTop = contexto.data.noticias.slice(0, 3).map(n => n.title || n.titulo || 'Noticia').join(', ');
+      resumenContexto += `\nNOTICIAS RELEVANTES: ${noticiasTop}`;
+    }
+    
+    // Resumir tweets
+    if (contexto.data.tweets && contexto.data.tweets.length > 0) {
+      const tweetsTop = contexto.data.tweets.slice(0, 3).map(t => t.text ? t.text.substring(0, 100) + '...' : 'Tweet').join(' | ');
+      resumenContexto += `\nTWEETS DESTACADOS: ${tweetsTop}`;
+    }
+    
+    // Resumir codex
+    if (contexto.data.codex && contexto.data.codex.length > 0) {
+      const codexTop = contexto.data.codex.slice(0, 3).map(c => c.title || c.titulo || 'Documento').join(', ');
+      resumenContexto += `\nDOCUMENTOS CODEX: ${codexTop}`;
+    }
+  }
+  
+  // Estadísticas del contexto
+  const stats = contexto.estadisticas || {};
+  resumenContexto += `\n\nESTADÍSTICAS: ${stats.total_items || 0} elementos de ${stats.total_fuentes || 0} fuentes`;
+  
   const prompt = `
 Eres un analista experto en tendencias y datos de Guatemala y Centroamérica.
 
-PREGUNTA A ANALIZAR: "${pregunta}"
+PREGUNTA: "${pregunta}"
 
-CONTEXTO DISPONIBLE:
-${JSON.stringify(contexto, null, 2)}
+CONTEXTO DISPONIBLE:${resumenContexto}
+
+FUENTES UTILIZADAS: ${contexto.fuentes_utilizadas ? contexto.fuentes_utilizadas.join(', ') : 'No especificadas'}
 
 INSTRUCCIONES:
-1. Analiza la pregunta en el contexto de los datos proporcionados
-2. Identifica patrones y tendencias relevantes
-3. Proporciona insights específicos para Guatemala/Centroamérica
-4. Incluye recomendaciones basadas en evidencia
-5. Mantén un tono profesional pero accesible
+1. Analiza la pregunta basándote en el contexto proporcionado
+2. Identifica patrones relevantes para Guatemala/Centroamérica
+3. Proporciona insights específicos y recomendaciones
+4. Mantén un enfoque práctico y accionable
 
-FORMATO DE RESPUESTA:
-- Análisis principal
-- Tendencias identificadas
-- Conclusiones y recomendaciones
-- Fuentes de datos utilizadas
-
-Responde en español y enfócate en información práctica y accionable.
+Responde en español con análisis detallado pero conciso.
 `;
 
   return prompt;
