@@ -22,7 +22,7 @@ function setupRoutes(app) {
   adminRoutes(app);
   
   // Configurar rutas de sondeos
-  app.use('/api', sondeosRoutes);
+  app.use('/', sondeosRoutes);
 }
 
 module.exports = {

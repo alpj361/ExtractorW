@@ -672,8 +672,6 @@ async function logUsage(user, operation, credits, req) {
         params: req.params,
         query: req.query,
         body_keys: req.body ? Object.keys(req.body) : [],
-        user_role: user.profile.role || 'user', // Mover role a request_params
-        success: true // Mover success a request_params
         user_role: user.profile.role || 'user',
         success: true,
         ...tokensInfo // Incluir info de tokens si está disponible
@@ -1709,8 +1707,9 @@ app.use(addTimestamp);
 // Corregir la aplicación de middleware para asegurar que coincida con la ruta exacta
 app.use('/api/processTrends', verifyUserAccess, debitCredits);
 app.use('/processTrends', verifyUserAccess, debitCredits); // Ruta alternativa
-app.use('/api/sondeo', verifyUserAccess, debitCredits);
-app.use('/sondeo', verifyUserAccess, debitCredits); // Ruta alternativa
+// COMENTADO: Sondeos ahora manejados en server/routes/sondeos.js con middlewares específicos
+// app.use('/api/sondeo', verifyUserAccess, debitCredits);
+// app.use('/sondeo', verifyUserAccess, debitCredits); // Ruta alternativa
 app.use('/api/create-document', verifyUserAccess, debitCredits);
 app.use('/create-document', verifyUserAccess, debitCredits); // Ruta alternativa
 

@@ -450,14 +450,7 @@ function setupTrendsRoutes(app) {
     }
   });
   
-  // Endpoint para sondeos
-  app.post('/api/sondeo', verifyUserAccess, debitCredits, async (req, res) => {
-    // Implementación del endpoint de sondeo
-    res.json({
-      message: 'Sondeo completado',
-      timestamp: new Date().toISOString()
-    });
-  });
+  // NOTA: Endpoint de sondeos movido a server/routes/sondeos.js
 }
 
 // Función para procesamiento detallado en background

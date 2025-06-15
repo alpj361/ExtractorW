@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { verifyUserAccess } = require('../middlewares/auth');
-const { checkCredits, debitCredits } = require('../middlewares/credits');
+const { checkCredits } = require('../middlewares/credits');
 const { 
   construirContextoCompleto,
   obtenerContextoAdicionalPerplexity,
@@ -17,13 +17,16 @@ const {
  * POST /api/sondeo - Endpoint principal para procesar sondeos
  * Requiere autenticación y verificación de créditos
  */
-router.post('/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
+router.post('/api/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
   try {
     console.log('🎯 INICIO: Procesando sondeo');
     console.log('📝 Request body:', JSON.stringify(req.body, null, 2));
     console.log('👤 Usuario:', req.user.profile.email);
     
-    const { pregunta, selectedContexts, configuracion = {} } = req.body;
+    const { pregunta, selectedContexts, contextos, configuracion = {} } = req.body;
+    
+    // Aceptar tanto selectedContexts como contextos para compatibilidad
+    const contextosFinales = selectedContexts || contextos;
 
     // FASE 1: Validación de entrada
     console.log('🎯 FASE 1: Validación de entrada');
@@ -35,7 +38,7 @@ router.post('/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
       });
     }
 
-    if (!selectedContexts || !Array.isArray(selectedContexts) || selectedContexts.length === 0) {
+    if (!contextosFinales || !Array.isArray(contextosFinales) || contextosFinales.length === 0) {
       console.log('❌ FASE 1 falló: Contextos inválidos');
       return res.status(400).json({
         error: 'Contextos requeridos',
@@ -44,7 +47,7 @@ router.post('/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
     }
 
     const contextosValidos = ['tendencias', 'tweets', 'noticias', 'codex'];
-    const contextosInvalidos = selectedContexts.filter(ctx => !contextosValidos.includes(ctx));
+    const contextosInvalidos = contextosFinales.filter(ctx => !contextosValidos.includes(ctx));
     
     if (contextosInvalidos.length > 0) {
       console.log('❌ FASE 1 falló: Contextos no válidos:', contextosInvalidos);
@@ -56,11 +59,11 @@ router.post('/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
     
     console.log('✅ FASE 1 completada: Validación exitosa');
     console.log(`📝 Pregunta: "${pregunta}"`);
-    console.log(`📊 Contextos seleccionados: ${selectedContexts.join(', ')}`);
+    console.log(`📊 Contextos seleccionados: ${contextosFinales.join(', ')}`);
 
     // FASE 2: Construir contexto completo
     console.log('🔨 FASE 2: Construyendo contexto completo...');
-    const contextoCompleto = await construirContextoCompleto(selectedContexts);
+    const contextoCompleto = await construirContextoCompleto(contextosFinales);
     console.log('✅ FASE 2 completada. Estadísticas:', contextoCompleto.estadisticas);
 
     if (contextoCompleto.estadisticas.fuentes_con_datos === 0) {
@@ -68,7 +71,7 @@ router.post('/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
       return res.status(404).json({
         error: 'Sin datos disponibles',
         message: 'No se encontraron datos en las fuentes seleccionadas',
-        contextos_consultados: selectedContexts,
+        contextos_consultados: contextosFinales,
         estadisticas: contextoCompleto.estadisticas
       });
     }
@@ -114,7 +117,7 @@ router.post('/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
       success: true,
       sondeo: {
         pregunta,
-        contextos_utilizados: selectedContexts,
+        contextos_utilizados: contextosFinales,
         timestamp: new Date().toISOString(),
         usuario: req.user.profile.email
       },
@@ -216,7 +219,7 @@ router.post('/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
 /**
  * GET /api/sondeo/contextos - Lista los contextos disponibles
  */
-router.get('/sondeo/contextos', verifyUserAccess, async (req, res) => {
+router.get('/api/sondeo/contextos', verifyUserAccess, async (req, res) => {
   try {
     const contextosDisponibles = [
       {
@@ -266,13 +269,14 @@ router.get('/sondeo/contextos', verifyUserAccess, async (req, res) => {
 });
 
 /**
- * GET /api/sondeo/costo - Calcula el costo estimado de un sondeo
+ * POST /api/sondeo/costo - Calcula el costo estimado de un sondeo
  */
-router.post('/sondeo/costo', verifyUserAccess, async (req, res) => {
+router.post('/api/sondeo/costo', verifyUserAccess, async (req, res) => {
   try {
-    const { selectedContexts } = req.body;
+    const { selectedContexts, contextos } = req.body;
+    const contextosFinales = selectedContexts || contextos;
 
-    if (!selectedContexts || !Array.isArray(selectedContexts)) {
+    if (!contextosFinales || !Array.isArray(contextosFinales)) {
       return res.status(400).json({
         error: 'Contextos requeridos',
         message: 'Debes proporcionar los contextos para calcular el costo'
@@ -280,7 +284,7 @@ router.post('/sondeo/costo', verifyUserAccess, async (req, res) => {
     }
 
     // Construir contexto simulado para calcular costo
-    const contextoSimulado = await construirContextoCompleto(selectedContexts);
+    const contextoSimulado = await construirContextoCompleto(contextosFinales);
     
     const { calculateSondeoCost } = require('../middlewares/credits');
     const costoEstimado = calculateSondeoCost(contextoSimulado);
@@ -288,7 +292,7 @@ router.post('/sondeo/costo', verifyUserAccess, async (req, res) => {
     res.json({
       success: true,
       costo_estimado: costoEstimado,
-      contextos_seleccionados: selectedContexts,
+      contextos_seleccionados: contextosFinales,
       estadisticas_contexto: contextoSimulado.estadisticas,
       creditos_disponibles: req.user.profile.credits,
       puede_procesar: req.user.profile.credits >= costoEstimado,
@@ -307,7 +311,7 @@ router.post('/sondeo/costo', verifyUserAccess, async (req, res) => {
 /**
  * GET /api/sondeo/estadisticas - Estadísticas de uso de sondeos
  */
-router.get('/sondeo/estadisticas', verifyUserAccess, async (req, res) => {
+router.get('/api/sondeo/estadisticas', verifyUserAccess, async (req, res) => {
   try {
     const supabase = require('../utils/supabase');
     
