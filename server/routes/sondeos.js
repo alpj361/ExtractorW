@@ -17,7 +17,7 @@ const {
  * POST /api/sondeo - Endpoint principal para procesar sondeos
  * Requiere autenticación y verificación de créditos
  */
-router.post('/sondeo', verifyUserAccess, checkCredits, debitCredits, async (req, res) => {
+router.post('/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
   try {
     console.log('🎯 INICIO: Procesando sondeo');
     console.log('📝 Request body:', JSON.stringify(req.body, null, 2));
@@ -152,6 +152,49 @@ router.post('/sondeo', verifyUserAccess, checkCredits, debitCredits, async (req,
 
     console.log('✅ Sondeo procesado exitosamente');
     console.log(`💳 Costo total: ${costoCalculado} créditos`);
+
+    // FASE 6: Registrar uso y debitar créditos
+    console.log('💳 FASE 6: Registrando uso y debitando créditos...');
+    try {
+      const { logUsage } = require('../services/logs');
+      
+      // SIEMPRE registrar log de uso (tanto para admin como usuarios normales)
+      await logUsage(req.user, req.path, costoCalculado, req);
+
+      // Solo debitar créditos si NO es admin y la operación tiene costo
+      if (req.user.profile.role !== 'admin' && costoCalculado > 0) {
+        console.log(`💳 Debitando ${costoCalculado} créditos de ${req.user.profile.email}`);
+
+        const supabase = require('../utils/supabase');
+        const { data: updateResult, error } = await supabase
+          .from('profiles')
+          .update({ credits: req.user.profile.credits - costoCalculado })
+          .eq('id', req.user.id)
+          .select('credits')
+          .single();
+
+        if (error) {
+          console.error('❌ Error debitando créditos:', error);
+        } else {
+          console.log(`✅ Créditos debitados. Nuevo saldo: ${updateResult.credits}`);
+          
+          // Actualizar la respuesta con el saldo real
+          respuestaCompleta.creditos.creditos_restantes = updateResult.credits;
+
+          // Verificar si necesita alerta de créditos bajos
+          if (updateResult.credits <= 10 && updateResult.credits > 0) {
+            console.log(`⚠️  Alerta: Usuario ${req.user.profile.email} tiene ${updateResult.credits} créditos restantes`);
+          }
+        }
+      } else if (req.user.profile.role === 'admin') {
+        console.log(`👑 Admin ${req.user.profile.email} ejecutó ${req.path} - Log registrado, sin débito de créditos`);
+      }
+      
+      console.log('✅ FASE 6 completada: Uso registrado y créditos procesados');
+    } catch (logError) {
+      console.error('❌ Error en logging/débito de créditos:', logError);
+      // No fallar el sondeo por errores de logging
+    }
 
     res.json(respuestaCompleta);
 

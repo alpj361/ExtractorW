@@ -12,71 +12,73 @@ Pero no continuaba con las fases de procesamiento.
 
 ## 🔍 Causa Raíz
 
-El problema estaba en el **middleware de créditos** (`ExtractorW/server/middlewares/credits.js`):
+El problema estaba en el **middleware `debitCredits`** (`ExtractorW/server/middlewares/credits.js`):
 
-1. **Error en `handleCreditDebit`**: Intentaba acceder a `req.body.contexto` que no existe (el contexto se construye dentro del endpoint)
-2. **Error en `checkCredits`**: Trataba de calcular el costo basado en un contexto que aún no se había construido
-3. **Flujo interrumpido**: Los errores en el middleware impedían que el endpoint continuara con el procesamiento
+1. **Interceptación de respuestas**: El middleware sobrescribía `res.json()` y se ejecutaba múltiples veces
+2. **Flujo interrumpido**: El middleware interceptaba la respuesta antes de que el endpoint terminara de procesar
+3. **Logging duplicado**: Se ejecutaba el logging cada vez que se intentaba enviar una respuesta
+4. **Bloqueo del endpoint**: El endpoint nunca llegaba a ejecutar su lógica principal porque el middleware interfería
 
 ## ✅ Soluciones Implementadas
 
-### 1. **Arreglo del Middleware `debitCredits`**
-**Archivo**: `ExtractorW/server/middlewares/credits.js`
-
-**Antes**:
-```javascript
-if (operation === 'sondeo' && req.body && req.body.contexto) {
-  finalCost = calculateSondeoCost(req.body.contexto); // ❌ req.body.contexto no existe
-}
-```
-
-**Después**:
-```javascript
-if (operation === 'sondeo') {
-  // Para sondeos, usar el costo que se calculó en el endpoint
-  finalCost = req.calculatedCost || CREDIT_COSTS['sondeo'].min;
-}
-```
-
-### 2. **Arreglo del Middleware `checkCredits`**
-**Archivo**: `ExtractorW/server/middlewares/credits.js`
-
-**Antes**:
-```javascript
-if (operation === 'sondeo' && req.body && req.body.contexto) {
-  estimatedCost = calculateSondeoCost(req.body.contexto); // ❌ contexto no existe aún
-}
-```
-
-**Después**:
-```javascript
-if (operation === 'sondeo') {
-  // Para sondeos, usar el costo mínimo para verificación inicial
-  estimatedCost = CREDIT_COSTS['sondeo'].min;
-}
-```
-
-### 3. **Modificación del Endpoint de Sondeos**
+### 1. **Eliminación del Middleware Problemático**
 **Archivo**: `ExtractorW/server/routes/sondeos.js`
 
-**Agregado**:
+**Antes**:
 ```javascript
-// Guardar el costo calculado en el request para el middleware
-req.calculatedCost = costoCalculado;
+router.post('/sondeo', verifyUserAccess, checkCredits, debitCredits, async (req, res) => {
 ```
 
-Esto permite que el middleware acceda al costo real calculado después de construir el contexto.
+**Después**:
+```javascript
+router.post('/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
+```
 
-## 🧪 Script de Prueba Creado
+### 2. **Implementación de Logging y Débito Directo**
+**Archivo**: `ExtractorW/server/routes/sondeos.js`
 
-**Archivo**: `ExtractorW/test-sondeo-fix.js`
+**Agregado al final del endpoint (FASE 6)**:
+```javascript
+// FASE 6: Registrar uso y debitar créditos
+console.log('💳 FASE 6: Registrando uso y debitando créditos...');
+try {
+  const { logUsage } = require('../services/logs');
+  
+  // SIEMPRE registrar log de uso
+  await logUsage(req.user, req.path, costoCalculado, req);
 
-Script completo para probar el endpoint y verificar:
-- ✅ Procesamiento completo del sondeo
+  // Solo debitar créditos si NO es admin
+  if (req.user.profile.role !== 'admin' && costoCalculado > 0) {
+    // Débito directo en la base de datos
+    const { data: updateResult, error } = await supabase
+      .from('profiles')
+      .update({ credits: req.user.profile.credits - costoCalculado })
+      .eq('id', req.user.id)
+      .select('credits')
+      .single();
+    
+    // Actualizar respuesta con saldo real
+    respuestaCompleta.creditos.creditos_restantes = updateResult.credits;
+  }
+} catch (logError) {
+  // No fallar el sondeo por errores de logging
+}
+```
+
+### 3. **Mantenimiento del Middleware `checkCredits`**
+El middleware `checkCredits` se mantiene para verificación inicial de créditos antes del procesamiento.
+
+## 🧪 Scripts de Prueba Creados
+
+**Archivo**: `ExtractorW/test-sondeo-simple.js` - Prueba básica y rápida
+**Archivo**: `ExtractorW/test-sondeo-fix.js` - Prueba completa y detallada
+
+Scripts para probar el endpoint y verificar:
+- ✅ Procesamiento completo del sondeo (6 fases)
 - ✅ Construcción correcta del contexto
 - ✅ Generación de datos de visualización
 - ✅ Cálculo correcto de créditos
-- ✅ Logging apropiado
+- ✅ Logging apropiado sin duplicación
 
 ## 📊 Flujo Corregido
 
@@ -87,13 +89,14 @@ Script completo para probar el endpoint y verificar:
 
 ### Después (✅ Funciona):
 1. Autenticación ✅
-2. `checkCredits` ✅ (usa costo mínimo para verificación inicial)
-3. Construcción de contexto ✅
-4. Cálculo de costo real ✅
-5. Procesamiento con IA ✅
-6. Generación de datos de visualización ✅
-7. `debitCredits` ✅ (usa costo real calculado)
-8. Respuesta completa ✅
+2. `checkCredits` ✅ (verificación inicial con costo mínimo)
+3. **FASE 1**: Validación de entrada ✅
+4. **FASE 2**: Construcción de contexto ✅
+5. **FASE 3**: Contexto adicional con Perplexity ✅
+6. **FASE 4**: Procesamiento con ChatGPT 4o ✅
+7. **FASE 5**: Preparación de respuesta ✅
+8. **FASE 6**: Logging y débito de créditos ✅
+9. Respuesta completa enviada ✅
 
 ## 🚀 Próximos Pasos
 
