@@ -19,46 +19,52 @@ const {
  */
 router.post('/sondeo', verifyUserAccess, checkCredits, debitCredits, async (req, res) => {
   try {
-    console.log('🎯 Iniciando procesamiento de sondeo');
-    console.log('Usuario:', req.user.profile.email);
-    console.log('Body recibido:', JSON.stringify(req.body, null, 2));
-
-    // Validar datos de entrada
+    console.log('🎯 INICIO: Procesando sondeo');
+    console.log('📝 Request body:', JSON.stringify(req.body, null, 2));
+    console.log('👤 Usuario:', req.user.profile.email);
+    
     const { pregunta, selectedContexts, configuracion = {} } = req.body;
 
-    if (!pregunta || typeof pregunta !== 'string' || pregunta.trim().length === 0) {
+    // FASE 1: Validación de entrada
+    console.log('🎯 FASE 1: Validación de entrada');
+    if (!pregunta || typeof pregunta !== 'string' || pregunta.trim().length < 3) {
+      console.log('❌ FASE 1 falló: Pregunta inválida');
       return res.status(400).json({
         error: 'Pregunta requerida',
-        message: 'Debes proporcionar una pregunta válida para el sondeo'
+        message: 'La pregunta debe tener al menos 3 caracteres'
       });
     }
 
     if (!selectedContexts || !Array.isArray(selectedContexts) || selectedContexts.length === 0) {
+      console.log('❌ FASE 1 falló: Contextos inválidos');
       return res.status(400).json({
         error: 'Contextos requeridos',
-        message: 'Debes seleccionar al menos un contexto (tendencias, tweets, noticias, codex)'
+        message: 'Debes seleccionar al menos un contexto'
       });
     }
 
-    // Validar contextos permitidos
-    const contextosPermitidos = ['tendencias', 'tweets', 'noticias', 'codex'];
-    const contextosInvalidos = selectedContexts.filter(ctx => !contextosPermitidos.includes(ctx));
+    const contextosValidos = ['tendencias', 'tweets', 'noticias', 'codex'];
+    const contextosInvalidos = selectedContexts.filter(ctx => !contextosValidos.includes(ctx));
     
     if (contextosInvalidos.length > 0) {
+      console.log('❌ FASE 1 falló: Contextos no válidos:', contextosInvalidos);
       return res.status(400).json({
         error: 'Contextos inválidos',
-        message: `Contextos no válidos: ${contextosInvalidos.join(', ')}. Permitidos: ${contextosPermitidos.join(', ')}`
+        message: `Contextos no válidos: ${contextosInvalidos.join(', ')}`
       });
     }
-
+    
+    console.log('✅ FASE 1 completada: Validación exitosa');
     console.log(`📝 Pregunta: "${pregunta}"`);
     console.log(`📊 Contextos seleccionados: ${selectedContexts.join(', ')}`);
 
-    // FASE 1: Construir contexto completo
-    console.log('🔨 Fase 1: Construyendo contexto completo...');
+    // FASE 2: Construir contexto completo
+    console.log('🔨 FASE 2: Construyendo contexto completo...');
     const contextoCompleto = await construirContextoCompleto(selectedContexts);
+    console.log('✅ FASE 2 completada. Estadísticas:', contextoCompleto.estadisticas);
 
     if (contextoCompleto.estadisticas.fuentes_con_datos === 0) {
+      console.log('❌ FASE 2 falló: Sin datos disponibles');
       return res.status(404).json({
         error: 'Sin datos disponibles',
         message: 'No se encontraron datos en las fuentes seleccionadas',
@@ -67,16 +73,11 @@ router.post('/sondeo', verifyUserAccess, checkCredits, debitCredits, async (req,
       });
     }
 
-    // FASE 2: Obtener contexto adicional con Perplexity
-    console.log('🔍 Fase 2: Obteniendo contexto adicional con Perplexity...');
-    const contextoAdicional = await obtenerContextoAdicionalPerplexity(pregunta, contextoCompleto);
-
-    // FASE 3: Procesar con ChatGPT 4o
-    console.log('🤖 Fase 3: Procesando con ChatGPT 4o...');
-    
     // Calcular costo basado en el contexto
+    console.log('💰 Calculando costo del sondeo...');
     const { calculateSondeoCost } = require('../middlewares/credits');
     const costoCalculado = calculateSondeoCost(contextoCompleto);
+    console.log('💰 Costo calculado:', costoCalculado, 'créditos');
     
     const configuracionCompleta = {
       ...configuracion,
@@ -85,13 +86,27 @@ router.post('/sondeo', verifyUserAccess, checkCredits, debitCredits, async (req,
       timestamp: new Date().toISOString()
     };
 
+    // FASE 3: Obtener contexto adicional con Perplexity
+    console.log('🔍 FASE 3: Obteniendo contexto adicional con Perplexity...');
+    const contextoAdicional = await obtenerContextoAdicionalPerplexity(pregunta, contextoCompleto);
+    console.log('✅ FASE 3 completada. Contexto adicional obtenido');
+
+    // FASE 4: Procesar con ChatGPT 4o
+    console.log('🤖 FASE 4: Procesando sondeo con ChatGPT 4o');
     const resultadoFinal = await procesarSondeoConChatGPT(
       pregunta, 
       contextoCompleto, 
       configuracionCompleta
     );
+    console.log('✅ FASE 4 completada. Resultado:', {
+      tieneRespuesta: !!resultadoFinal.respuesta,
+      tieneMetadata: !!resultadoFinal.metadata,
+      tieneDatosVisualizacion: !!resultadoFinal.datos_visualizacion,
+      keysResultado: Object.keys(resultadoFinal)
+    });
 
-    // FASE 4: Preparar respuesta final
+    // FASE 5: Preparar respuesta final
+    console.log('🎯 FASE 5: Preparando respuesta final');
     const respuestaCompleta = {
       success: true,
       sondeo: {
@@ -125,13 +140,23 @@ router.post('/sondeo', verifyUserAccess, checkCredits, debitCredits, async (req,
       }
     };
 
+    console.log('✅ FASE 5 completada. Respuesta preparada:', {
+      success: respuestaCompleta.success,
+      tieneResultado: !!respuestaCompleta.resultado,
+      tieneDatosAnalisis: !!respuestaCompleta.resultado.datos_analisis,
+      keysDatosAnalisis: Object.keys(respuestaCompleta.resultado.datos_analisis || {})
+    });
+
     console.log('✅ Sondeo procesado exitosamente');
     console.log(`💳 Costo total: ${costoCalculado} créditos`);
 
     res.json(respuestaCompleta);
 
   } catch (error) {
-    console.error('❌ Error procesando sondeo:', error);
+    console.error('❌ ERROR CRÍTICO en procesamiento de sondeo:', error);
+    console.error('❌ Stack trace:', error.stack);
+    console.error('❌ Error message:', error.message);
+    console.error('❌ Error name:', error.name);
     
     res.status(500).json({
       error: 'Error interno del servidor',
