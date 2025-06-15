@@ -1,5 +1,6 @@
 const trendsRoutes = require('./trends');
 const adminRoutes = require('./admin');
+const sondeosRoutes = require('./sondeos');
 
 /**
  * Configura todas las rutas de la aplicación
@@ -19,6 +20,9 @@ function setupRoutes(app) {
   
   // Configurar rutas de administración
   adminRoutes(app);
+  
+  // Configurar rutas de sondeos
+  app.use('/api', sondeosRoutes);
 }
 
 module.exports = {
