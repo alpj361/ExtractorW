@@ -105,7 +105,15 @@ router.post('/sondeo', verifyUserAccess, checkCredits, debitCredits, async (req,
         fuentes_utilizadas: contextoCompleto.fuentes_utilizadas,
         contexto_adicional: contextoAdicional
       },
-      resultado: resultadoFinal,
+      resultado: {
+        respuesta: resultadoFinal.respuesta,
+        metadata: resultadoFinal.metadata,
+        estadisticas: resultadoFinal.estadisticas,
+        // Incluir datos de visualización en el formato que espera el frontend
+        datos_analisis: resultadoFinal.datos_visualizacion || {},
+        conclusiones: resultadoFinal.datos_visualizacion?.conclusiones || {},
+        metodologia: resultadoFinal.datos_visualizacion?.metodologia || {}
+      },
       creditos: {
         costo_total: costoCalculado,
         creditos_restantes: req.user.profile.credits - costoCalculado

@@ -32,17 +32,26 @@ async function logUsage(user, operation, credits, req) {
     };
 
     // Crear registro de uso
+    const logEntry = {
+      user_id: user.id,
+      user_email: user.email,
+      operation: operation,
+      credits_consumed: credits,
+      timestamp: new Date().toISOString(),
+      request_params: requestParams
+    };
+
+    // Intentar agregar current_credits si la columna existe
+    try {
+      logEntry.current_credits = user.profile.credits;
+    } catch (error) {
+      // Ignorar si no se puede agregar current_credits
+      console.log('ℹ️ No se pudo agregar current_credits al log (columna no existe)');
+    }
+
     const { error } = await supabase
       .from('usage_logs')
-      .insert([{
-        user_id: user.id,
-        user_email: user.email,
-        operation: operation,
-        credits_consumed: credits,
-        timestamp: new Date().toISOString(),
-        request_params: requestParams,
-        current_credits: user.profile.credits
-      }]);
+      .insert([logEntry]);
 
     if (error) {
       console.error('💥 Error de usuario guardado en usage_logs:', operation);
@@ -95,7 +104,13 @@ async function logError(operation, errorDetails, user = null, req = null) {
     if (user) {
       logEntry.user_id = user.id;
       logEntry.user_email = user.email;
-      logEntry.current_credits = user.profile?.credits || 0;
+      // Intentar agregar current_credits si la columna existe
+      try {
+        logEntry.current_credits = user.profile?.credits || 0;
+      } catch (error) {
+        // Ignorar si no se puede agregar current_credits
+        console.log('ℹ️ No se pudo agregar current_credits al log de error (columna no existe)');
+      }
     }
 
     // Agregar información de la solicitud si está disponible
