@@ -79,6 +79,9 @@ router.post('/sondeo', verifyUserAccess, checkCredits, debitCredits, async (req,
     const costoCalculado = calculateSondeoCost(contextoCompleto);
     console.log('💰 Costo calculado:', costoCalculado, 'créditos');
     
+    // Guardar el costo calculado en el request para el middleware
+    req.calculatedCost = costoCalculado;
+    
     const configuracionCompleta = {
       ...configuracion,
       costo_calculado: costoCalculado,

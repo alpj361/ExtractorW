@@ -109,18 +109,21 @@ async function handleCreditDebit(data, req, responseType) {
       let finalCost = 0;
       let tokensEstimados = 0;
       
-      if (operation === 'sondeo' && req.body && req.body.contexto) {
-        finalCost = calculateSondeoCost(req.body.contexto);
+      if (operation === 'sondeo') {
+        // Para sondeos, usar el costo que se calculó en el endpoint
+        // Si está disponible en req.calculatedCost, usarlo, sino usar el mínimo
+        finalCost = req.calculatedCost || CREDIT_COSTS['sondeo'].min;
         
-        // Estimar tokens usados (aproximación)
-        const contextoSize = JSON.stringify(req.body.contexto).length;
-        const promptSize = contextoSize + (req.body.pregunta?.length || 0);
-        tokensEstimados = Math.ceil(promptSize / 4); // ~4 caracteres por token
-        
-        console.log(`📊 Sondeo: Contexto de ${contextoSize} caracteres, aprox. ${tokensEstimados} tokens`);
-        
-        // Guardar info de tokens en request para logs
-        req.tokens_estimados = tokensEstimados;
+        // Estimar tokens usados si hay información disponible
+        if (req.body && req.body.pregunta) {
+          const promptSize = (req.body.pregunta?.length || 0) + 1000; // Estimación base
+          tokensEstimados = Math.ceil(promptSize / 4); // ~4 caracteres por token
+          
+          console.log(`📊 Sondeo: Costo calculado ${finalCost} créditos, aprox. ${tokensEstimados} tokens`);
+          
+          // Guardar info de tokens en request para logs
+          req.tokens_estimados = tokensEstimados;
+        }
       } else {
         // Para otras operaciones, usar costo fijo
         const operationCost = CREDIT_COSTS[operation];
@@ -190,8 +193,10 @@ const checkCredits = async (req, res, next) => {
     // Calcular costo estimado para verificación
     let estimatedCost = 0;
     
-    if (operation === 'sondeo' && req.body && req.body.contexto) {
-      estimatedCost = calculateSondeoCost(req.body.contexto);
+    if (operation === 'sondeo') {
+      // Para sondeos, usar el costo mínimo para verificación inicial
+      // El costo real se calculará después de construir el contexto
+      estimatedCost = CREDIT_COSTS['sondeo'].min;
     } else {
       const operationCost = CREDIT_COSTS[operation];
       if (typeof operationCost === 'object') {

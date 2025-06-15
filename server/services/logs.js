@@ -31,23 +31,16 @@ async function logUsage(user, operation, credits, req) {
       ip: req.ip || req.headers['x-forwarded-for'] || 'unknown'
     };
 
-    // Crear registro de uso
+    // Crear registro de uso completo
     const logEntry = {
       user_id: user.id,
       user_email: user.email,
       operation: operation,
       credits_consumed: credits,
+      current_credits: user.profile.credits || 0, // Agregar current_credits
       timestamp: new Date().toISOString(),
       request_params: requestParams
     };
-
-    // Intentar agregar current_credits si la columna existe
-    try {
-      logEntry.current_credits = user.profile.credits;
-    } catch (error) {
-      // Ignorar si no se puede agregar current_credits
-      console.log('ℹ️ No se pudo agregar current_credits al log (columna no existe)');
-    }
 
     const { error } = await supabase
       .from('usage_logs')
@@ -56,6 +49,22 @@ async function logUsage(user, operation, credits, req) {
     if (error) {
       console.error('💥 Error de usuario guardado en usage_logs:', operation);
       console.error(error);
+      // Si falla por la columna current_credits, intentar sin ella
+      if (error.message && error.message.includes('current_credits')) {
+        console.log('🔄 Reintentando sin current_credits...');
+        const logEntryWithoutCredits = { ...logEntry };
+        delete logEntryWithoutCredits.current_credits;
+        
+        const { error: retryError } = await supabase
+          .from('usage_logs')
+          .insert([logEntryWithoutCredits]);
+          
+        if (retryError) {
+          console.error('💥 Error en segundo intento:', retryError);
+        } else {
+          console.log(`✅ Uso registrado (sin current_credits): ${user.email} - ${operation} - ${credits} créditos`);
+        }
+      }
     } else {
       console.log(`✅ Uso registrado: ${user.email} - ${operation} - ${credits} créditos`);
       
@@ -91,7 +100,7 @@ async function logError(operation, errorDetails, user = null, req = null) {
       return;
     }
 
-    // Crear registro de error
+    // Crear registro de error completo
     const logEntry = {
       operation: operation,
       timestamp: new Date().toISOString(),
@@ -104,13 +113,7 @@ async function logError(operation, errorDetails, user = null, req = null) {
     if (user) {
       logEntry.user_id = user.id;
       logEntry.user_email = user.email;
-      // Intentar agregar current_credits si la columna existe
-      try {
-        logEntry.current_credits = user.profile?.credits || 0;
-      } catch (error) {
-        // Ignorar si no se puede agregar current_credits
-        console.log('ℹ️ No se pudo agregar current_credits al log de error (columna no existe)');
-      }
+      logEntry.current_credits = user.profile?.credits || 0; // Agregar current_credits
     }
 
     // Agregar información de la solicitud si está disponible
@@ -132,6 +135,22 @@ async function logError(operation, errorDetails, user = null, req = null) {
 
     if (error) {
       console.error('Error al registrar error en logs:', error);
+      // Si falla por la columna current_credits, intentar sin ella
+      if (error.message && error.message.includes('current_credits')) {
+        console.log('🔄 Reintentando error log sin current_credits...');
+        const logEntryWithoutCredits = { ...logEntry };
+        delete logEntryWithoutCredits.current_credits;
+        
+        const { error: retryError } = await supabase
+          .from('usage_logs')
+          .insert([logEntryWithoutCredits]);
+          
+        if (retryError) {
+          console.error('💥 Error en segundo intento de error log:', retryError);
+        } else {
+          console.log(`❌ Error registrado (sin current_credits): ${operation}`);
+        }
+      }
     } else {
       console.log(`❌ Error registrado: ${operation}`);
       
