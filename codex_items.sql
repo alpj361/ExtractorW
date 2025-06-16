@@ -36,6 +36,18 @@ CREATE INDEX IF NOT EXISTS idx_codex_items_created_at ON public.codex_items(crea
 CREATE INDEX IF NOT EXISTS idx_codex_items_is_drive ON public.codex_items(is_drive);
 CREATE INDEX IF NOT EXISTS idx_codex_items_drive_file_id ON public.codex_items(drive_file_id);
 
+-- ===================================================================
+-- ACTUALIZACIÓN PARA INTEGRACIÓN CON PROYECTOS
+-- Agregar referencia directa a proyectos via UUID
+-- ===================================================================
+
+-- Añadir columna project_id para referenciar directamente a la tabla projects
+ALTER TABLE public.codex_items 
+ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES public.projects(id) ON DELETE SET NULL;
+
+-- Crear índice para project_id
+CREATE INDEX IF NOT EXISTS idx_codex_items_project_id ON public.codex_items(project_id);
+
 -- Enable RLS
 ALTER TABLE public.codex_items ENABLE ROW LEVEL SECURITY;
 

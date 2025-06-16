@@ -1,6 +1,8 @@
 const trendsRoutes = require('./trends');
 const adminRoutes = require('./admin');
 const sondeosRoutes = require('./sondeos');
+const projectSuggestionsRoutes = require('./project-suggestions');
+const path = require('path');
 
 /**
  * Configura todas las rutas de la aplicación
@@ -15,6 +17,16 @@ function setupRoutes(app) {
     });
   });
   
+  // Ruta para el panel de administración
+  app.get('/admin', (req, res) => {
+    res.sendFile(path.join(__dirname, '../../admin.html'));
+  });
+  
+  // Ruta de redirección desde /admin/ a /admin
+  app.get('/admin/', (req, res) => {
+    res.redirect('/admin');
+  });
+  
   // Configurar rutas de tendencias
   trendsRoutes(app);
   
@@ -23,6 +35,9 @@ function setupRoutes(app) {
   
   // Configurar rutas de sondeos
   app.use('/', sondeosRoutes);
+  
+  // Configurar rutas de sugerencias de proyectos
+  app.use('/api/project-suggestions', projectSuggestionsRoutes);
 }
 
 module.exports = {

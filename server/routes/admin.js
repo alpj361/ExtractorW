@@ -1469,6 +1469,131 @@ function setupAdminRoutes(app) {
       });
     }
   });
+
+  // Verificar autenticación de administrador
+  app.get('/auth/check', verifyUserAccess, async (req, res) => {
+    try {
+      const { user } = req;
+      
+      // Verificar si el usuario es admin
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      if (profileError) {
+        console.error('Error obteniendo perfil:', profileError);
+        return res.status(500).json({ 
+          success: false, 
+          message: 'Error verificando permisos',
+          isAdmin: false
+        });
+      }
+
+      const isAdmin = profileData.role === 'admin';
+      
+      res.json({
+        success: true,
+        isAdmin: isAdmin,
+        user: {
+          id: user.id,
+          email: user.email,
+          role: profileData.role
+        }
+      });
+
+    } catch (error) {
+      console.error('Error en verificación de admin:', error);
+      res.status(500).json({ 
+        success: false, 
+        message: 'Error interno del servidor',
+        isAdmin: false
+      });
+    }
+  });
+
+  // Login de administrador (redirigir a Supabase Auth)
+  app.post('/auth/login', async (req, res) => {
+    try {
+      const { email, password } = req.body;
+
+      if (!email || !password) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email y contraseña son requeridos'
+        });
+      }
+
+      // Intentar autenticación con Supabase
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email,
+        password: password,
+      });
+
+      if (error) {
+        console.error('Error en login admin:', error);
+        return res.status(401).json({
+          success: false,
+          message: 'Credenciales inválidas'
+        });
+      }
+
+      // Verificar que el usuario sea admin
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', data.user.id)
+        .single();
+
+      if (profileError || profileData.role !== 'admin') {
+        return res.status(403).json({
+          success: false,
+          message: 'Acceso denegado: se requieren permisos de administrador'
+        });
+      }
+
+      // Configurar sesión
+      req.session.userId = data.user.id;
+      req.session.userEmail = data.user.email;
+      req.session.userRole = profileData.role;
+
+      res.json({
+        success: true,
+        message: 'Login exitoso',
+        user: {
+          id: data.user.id,
+          email: data.user.email,
+          role: profileData.role
+        }
+      });
+
+    } catch (error) {
+      console.error('Error en login admin:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error interno del servidor'
+      });
+    }
+  });
+
+  // Logout de administrador
+  app.post('/auth/logout', (req, res) => {
+    req.session.destroy((err) => {
+      if (err) {
+        return res.status(500).json({
+          success: false,
+          message: 'Error cerrando sesión'
+        });
+      }
+      
+      res.clearCookie('connect.sid');
+      res.json({
+        success: true,
+        message: 'Sesión cerrada exitosamente'
+      });
+    });
+  });
 }
 
 module.exports = setupAdminRoutes; 

@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ExtractorW - Panel de Administración</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Configuración personalizada de Tailwind */
+        .admin-gradient {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .hover-scale {
+            transition: transform 0.2s ease;
+        }
+        
+        .hover-scale:hover {
+            transform: scale(1.02);
+        }
+        
+        /* Configuración de colores gold para el tipo Premium */
+        .bg-gold-100 {
+            background-color: #fef3c7;
+        }
+        
+        .text-gold-800 {
+            color: #92400e;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="admin-root"></div>
+    
+    <!-- Loading inicial -->
+    <div id="loading-screen" class="fixed inset-0 bg-white flex items-center justify-center z-50">
+        <div class="text-center">
+            <div class="loading-spinner mx-auto mb-4"></div>
+            <h2 class="text-xl font-semibold text-gray-700">Cargando Panel de Administración</h2>
+            <p class="text-gray-500 mt-2">ExtractorW Admin Dashboard</p>
+        </div>
+    </div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // Verificación de autenticación de administrador
+        const checkAdminAuth = async () => {
+            try {
+                const response = await fetch('/api/admin/auth/check', {
+                    method: 'GET',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    return data.isAdmin === true;
+                }
+                return false;
+            } catch (error) {
+                console.error('Error verificando autenticación admin:', error);
+                return false;
+            }
+        };
+
+        // Componente de Login de Admin
+        const AdminLogin = ({ onLoginSuccess }) => {
+            const [credentials, setCredentials] = useState({ email: '', password: '' });
+            const [loading, setLoading] = useState(false);
+            const [error, setError] = useState('');
+
+            const handleLogin = async (e) => {
+                e.preventDefault();
+                setLoading(true);
+                setError('');
+
+                try {
+                    const response = await fetch('/api/admin/auth/login', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        credentials: 'include',
+                        body: JSON.stringify(credentials)
+                    });
+
+                    if (response.ok) {
+                        onLoginSuccess();
+                    } else {
+                        const errorData = await response.json();
+                        setError(errorData.message || 'Error de autenticación');
+                    }
+                } catch (err) {
+                    setError('Error de conexión');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+                    <div className="max-w-md w-full space-y-8">
+                        <div className="text-center">
+                            <div className="mx-auto h-12 w-12 bg-blue-600 rounded-lg flex items-center justify-center">
+                                <span className="text-white font-bold text-xl">A</span>
+                            </div>
+                            <h2 className="mt-6 text-3xl font-extrabold text-gray-900">
+                                Panel de Administración
+                            </h2>
+                            <p className="mt-2 text-sm text-gray-600">
+                                ExtractorW Admin Dashboard - Acceso restringido
+                            </p>
+                        </div>
+                        
+                        <form className="mt-8 space-y-6" onSubmit={handleLogin}>
+                            <div className="space-y-4">
+                                <div>
+                                    <label htmlFor="email" className="block text-sm font-medium text-gray-700">
+                                        Email de Administrador
+                                    </label>
+                                    <input
+                                        id="email"
+                                        name="email"
+                                        type="email"
+                                        required
+                                        value={credentials.email}
+                                        onChange={(e) => setCredentials({...credentials, email: e.target.value})}
+                                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                                        placeholder="admin@extractorw.com"
+                                    />
+                                </div>
+                                
+                                <div>
+                                    <label htmlFor="password" className="block text-sm font-medium text-gray-700">
+                                        Contraseña
+                                    </label>
+                                    <input
+                                        id="password"
+                                        name="password"
+                                        type="password"
+                                        required
+                                        value={credentials.password}
+                                        onChange={(e) => setCredentials({...credentials, password: e.target.value})}
+                                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                                        placeholder="••••••••"
+                                    />
+                                </div>
+                            </div>
+
+                            {error && (
+                                <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-md text-sm">
+                                    {error}
+                                </div>
+                            )}
+
+                            <button
+                                type="submit"
+                                disabled={loading}
+                                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {loading ? (
+                                    <>
+                                        <div className="loading-spinner mr-2"></div>
+                                        Verificando...
+                                    </>
+                                ) : (
+                                    'Iniciar Sesión como Admin'
+                                )}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+
+        // Componente principal de la aplicación
+        const AdminApp = () => {
+            const [isAuthenticated, setIsAuthenticated] = useState(false);
+            const [isLoading, setIsLoading] = useState(true);
+
+            useEffect(() => {
+                const verifyAuth = async () => {
+                    const isAdmin = await checkAdminAuth();
+                    setIsAuthenticated(isAdmin);
+                    setIsLoading(false);
+                    
+                    // Ocultar pantalla de carga
+                    const loadingScreen = document.getElementById('loading-screen');
+                    if (loadingScreen) {
+                        loadingScreen.style.display = 'none';
+                    }
+                };
+                
+                verifyAuth();
+            }, []);
+
+            const handleLoginSuccess = () => {
+                setIsAuthenticated(true);
+            };
+
+            if (isLoading) {
+                return null; // La pantalla de carga se maneja con HTML estático
+            }
+
+            if (!isAuthenticated) {
+                return <AdminLogin onLoginSuccess={handleLoginSuccess} />;
+            }
+
+            // Aquí iría el AdminDashboard cuando esté disponible
+            return (
+                <div className="fade-in">
+                    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+                        <div className="text-center p-8 bg-white rounded-lg shadow-lg max-w-md w-full">
+                            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                                <span className="text-2xl">✅</span>
+                            </div>
+                            <h2 className="text-2xl font-bold text-gray-900 mb-2">
+                                Acceso Autorizado
+                            </h2>
+                            <p className="text-gray-600 mb-6">
+                                Bienvenido al Panel de Administración de ExtractorW
+                            </p>
+                            
+                            <div className="space-y-3">
+                                <div className="bg-blue-50 p-4 rounded-lg">
+                                    <h3 className="font-semibold text-blue-900 mb-2">📊 Gestión de Límites</h3>
+                                    <p className="text-sm text-blue-700">
+                                        Administra los límites de capas por usuario
+                                    </p>
+                                </div>
+                                
+                                <div className="bg-purple-50 p-4 rounded-lg">
+                                    <h3 className="font-semibold text-purple-900 mb-2">🎫 Códigos de Invitación</h3>
+                                    <p className="text-sm text-purple-700">
+                                        Crea y gestiona códigos con límites personalizados
+                                    </p>
+                                </div>
+                            </div>
+                            
+                            <div className="mt-6 text-sm text-gray-500">
+                                <p>Sistema de administración integrado con:</p>
+                                <p className="font-medium">🔗 PulseJ • ExtractorW • Supabase</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // Renderizar la aplicación
+        ReactDOM.render(<AdminApp />, document.getElementById('admin-root'));
+    </script>
+</body>
+</html> 
