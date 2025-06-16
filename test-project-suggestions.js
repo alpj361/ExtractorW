@@ -1,6 +1,6 @@
 const fetch = require('node-fetch');
 
-const BACKEND_URL = 'http://localhost:3001';
+const BACKEND_URL = 'http://localhost:8080';
 
 const testProjectData = {
   project: {
