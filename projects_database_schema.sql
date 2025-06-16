@@ -73,21 +73,43 @@ CREATE TABLE IF NOT EXISTS public.project_decisions (
     -- Información de la decisión
     title VARCHAR(255) NOT NULL,
     description TEXT NOT NULL,
-    decision_type VARCHAR(50) DEFAULT 'strategic' CHECK (decision_type IN ('strategic', 'tactical', 'operational', 'research', 'analytical')),
+    decision_type VARCHAR(50) DEFAULT 'enfoque' CHECK (decision_type IN ('enfoque', 'alcance', 'configuracion')),
     
     -- Secuenciación
     sequence_number INTEGER NOT NULL,
     parent_decision_id UUID REFERENCES public.project_decisions(id) ON DELETE SET NULL,
     
-    -- Contenido de la decisión
+    -- Campos generales para el sistema de capas
+    change_description TEXT,
+    objective TEXT,
+    next_steps TEXT,
+    deadline DATE,
+    
+    -- Campos específicos para ENFOQUE
+    focus_area TEXT, -- "¿En qué te quieres enfocar?"
+    focus_context TEXT, -- Contexto adicional opcional
+    
+    -- Campos específicos para ALCANCE
+    geographic_scope TEXT, -- Ámbito geográfico
+    monetary_scope TEXT, -- Ámbito monetario
+    time_period_start DATE, -- Inicio del período temporal
+    time_period_end DATE, -- Fin del período temporal
+    target_entities TEXT, -- Entidades objetivo
+    scope_limitations TEXT, -- Limitaciones del alcance
+    
+    -- Campos específicos para CONFIGURACIÓN
+    output_format TEXT[], -- Formato de salida (selección múltiple)
+    methodology TEXT, -- Metodología
+    data_sources TEXT, -- Fuentes de datos (para configuración)
+    search_locations TEXT, -- Ubicaciones de búsqueda
+    tools_required TEXT, -- Herramientas requeridas
+    references TEXT[], -- Referencias (array de links con add/remove)
+    
+    -- Contenido de la decisión (campos existentes mantenidos por compatibilidad)
     rationale TEXT, -- Justificación
     expected_impact TEXT, -- Impacto esperado
     resources_required TEXT, -- Recursos necesarios
     risks_identified TEXT[], -- Riesgos identificados
-    
-    -- Estado de la decisión
-    status VARCHAR(30) DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'implemented', 'cancelled')),
-    implementation_date DATE,
     
     -- Resultados y seguimiento
     actual_impact TEXT,
@@ -102,6 +124,7 @@ CREATE TABLE IF NOT EXISTS public.project_decisions (
     -- Attachments y referencias
     attachments JSONB DEFAULT '[]'::jsonb,
     decision_references JSONB DEFAULT '[]'::jsonb,
+    implementation_date DATE,
     
     -- Timestamps
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),

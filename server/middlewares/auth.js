@@ -136,6 +136,19 @@ const bypassAuthForTesting = async (req, res, next) => {
         .limit(1);
       
       if (adminUsers && adminUsers.length > 0) {
+        // Buscar específicamente tu usuario
+        const tuUsuario = adminUsers.find(u => u.email === 'pablojosea361@gmail.com');
+        if (tuUsuario) {
+          req.user = {
+            id: tuUsuario.id,
+            email: tuUsuario.email,
+            profile: tuUsuario
+          };
+          console.log(`✅ Acceso de desarrollo concedido como: ${tuUsuario.email}`);
+          return next();
+        }
+        
+        // Si no se encuentra tu usuario, usar el primer admin
         const adminProfile = adminUsers[0];
         req.user = {
           id: adminProfile.id,
@@ -146,12 +159,13 @@ const bypassAuthForTesting = async (req, res, next) => {
         return next();
       }
       
-      // Si no hay admin, usar perfil ficticio
+      // Si no hay admin, usar perfil ficticio con UUID válido
+      const testUserId = '00000000-0000-0000-0000-000000000000'; // UUID válido para testing
       req.user = {
-        id: 'test-user-id',
+        id: testUserId,
         email: 'test@example.com',
         profile: {
-          id: 'test-user-id',
+          id: testUserId,
           role: 'admin',
           credits: 999,
           created_at: new Date().toISOString()

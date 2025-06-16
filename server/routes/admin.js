@@ -502,6 +502,973 @@ function setupAdminRoutes(app) {
       });
     }
   });
+
+  // ===================================================================
+  // GESTIÓN DE LÍMITES DE CAPAS
+  // ===================================================================
+
+  // Endpoint para obtener límites de capas de usuarios
+  app.get('/api/admin/users/layers-limits', verifyUserAccess, async (req, res) => {
+    try {
+      const user = req.user;
+      
+      // Verificar que el usuario sea admin
+      if (user.profile.role !== 'admin') {
+        return res.status(403).json({
+          error: 'Acceso denegado',
+          message: 'Solo los administradores pueden acceder a este endpoint'
+        });
+      }
+
+      console.log(`👑 Admin ${user.profile.email} consultando límites de capas`);
+
+      if (!supabase) {
+        return res.status(503).json({
+          error: 'Base de datos no configurada',
+          message: 'Supabase no está disponible'
+        });
+      }
+
+      const { limit = 50, search, role } = req.query;
+
+      // Construir query base
+      let query = supabase
+        .from('profiles')
+        .select('id, email, layerslimit, role, created_at')
+        .order('created_at', { ascending: false });
+
+      // Aplicar filtros
+      if (search) {
+        query = query.ilike('email', `%${search}%`);
+      }
+
+      if (role) {
+        query = query.eq('role', role);
+      }
+
+      query = query.limit(parseInt(limit));
+
+      const { data: profiles, error } = await query;
+
+      if (error) {
+        console.error('❌ Error obteniendo límites de capas:', error);
+        return res.status(500).json({
+          error: 'Error consultando límites',
+          message: error.message
+        });
+      }
+
+      // Calcular estadísticas
+      const stats = {
+        total_users: profiles.length,
+        average_limit: profiles.reduce((acc, p) => acc + (p.layerslimit || 3), 0) / profiles.length,
+        distribution: {}
+      };
+
+      profiles.forEach(profile => {
+        const limit = profile.layerslimit || 3;
+        stats.distribution[limit] = (stats.distribution[limit] || 0) + 1;
+      });
+
+      res.json({
+        users: profiles,
+        statistics: stats,
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      console.error('❌ Error obteniendo límites de capas:', error);
+      res.status(500).json({
+        error: 'Error interno',
+        message: error.message
+      });
+    }
+  });
+
+  // Endpoint para actualizar límite de capas de un usuario
+  app.put('/api/admin/users/:userId/layers-limit', verifyUserAccess, async (req, res) => {
+    try {
+      const user = req.user;
+      
+      // Verificar que el usuario sea admin
+      if (user.profile.role !== 'admin') {
+        return res.status(403).json({
+          error: 'Acceso denegado',
+          message: 'Solo los administradores pueden modificar límites'
+        });
+      }
+
+      const { userId } = req.params;
+      const { layersLimit, reason } = req.body;
+
+      if (!layersLimit || layersLimit < 1 || layersLimit > 20) {
+        return res.status(400).json({
+          error: 'Límite inválido',
+          message: 'El límite debe estar entre 1 y 20 capas'
+        });
+      }
+
+      console.log(`👑 Admin ${user.profile.email} actualizando límite de usuario ${userId} a ${layersLimit}`);
+
+      if (!supabase) {
+        return res.status(503).json({
+          error: 'Base de datos no configurada',
+          message: 'Supabase no está disponible'
+        });
+      }
+
+      // Obtener información del usuario antes del cambio
+      const { data: beforeProfile, error: beforeError } = await supabase
+        .from('profiles')
+        .select('email, layerslimit')
+        .eq('id', userId)
+        .single();
+
+      if (beforeError) {
+        return res.status(404).json({
+          error: 'Usuario no encontrado',
+          message: beforeError.message
+        });
+      }
+
+      // Actualizar el límite
+      const { data: updatedProfile, error: updateError } = await supabase
+        .from('profiles')
+        .update({ layerslimit: layersLimit })
+        .eq('id', userId)
+        .select('id, email, layerslimit, role')
+        .single();
+
+      if (updateError) {
+        console.error('❌ Error actualizando límite:', updateError);
+        return res.status(500).json({
+          error: 'Error actualizando límite',
+          message: updateError.message
+        });
+      }
+
+      // Registrar la acción en logs
+      const logData = {
+        user_email: user.profile.email,
+        operation: 'update_layers_limit',
+        details: {
+          target_user: beforeProfile.email,
+          old_limit: beforeProfile.layerslimit || 3,
+          new_limit: layersLimit,
+          reason: reason || 'Sin razón especificada'
+        },
+        credits_used: 0,
+        success: true,
+        timestamp: new Date().toISOString()
+      };
+
+      await supabase.from('usage_logs').insert([logData]);
+
+      res.json({
+        success: true,
+        message: 'Límite actualizado correctamente',
+        user: updatedProfile,
+        change: {
+          from: beforeProfile.layerslimit || 3,
+          to: layersLimit,
+          admin: user.profile.email,
+          reason: reason || 'Sin razón especificada'
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Error actualizando límite de capas:', error);
+      res.status(500).json({
+        error: 'Error interno',
+        message: error.message
+      });
+    }
+  });
+
+  // Endpoint para obtener uso de capas de un usuario específico
+  app.get('/api/admin/users/:userId/layers-usage', verifyUserAccess, async (req, res) => {
+    try {
+      const user = req.user;
+      
+      // Verificar que el usuario sea admin
+      if (user.profile.role !== 'admin') {
+        return res.status(403).json({
+          error: 'Acceso denegado',
+          message: 'Solo los administradores pueden acceder a este endpoint'
+        });
+      }
+
+      const { userId } = req.params;
+
+      console.log(`👑 Admin ${user.profile.email} consultando uso de capas del usuario ${userId}`);
+
+      if (!supabase) {
+        return res.status(503).json({
+          error: 'Base de datos no configurada',
+          message: 'Supabase no está disponible'
+        });
+      }
+
+      // Obtener información del usuario
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('email, layerslimit')
+        .eq('id', userId)
+        .single();
+
+      if (profileError) {
+        return res.status(404).json({
+          error: 'Usuario no encontrado',
+          message: profileError.message
+        });
+      }
+
+      // Obtener proyectos del usuario
+      const { data: projects, error: projectsError } = await supabase
+        .from('projects')
+        .select('id, title, created_at')
+        .eq('user_id', userId);
+
+      if (projectsError) {
+        console.error('❌ Error obteniendo proyectos:', projectsError);
+        return res.status(500).json({
+          error: 'Error consultando proyectos',
+          message: projectsError.message
+        });
+      }
+
+      // Para cada proyecto, obtener el conteo de capas por tipo
+      const projectsWithUsage = await Promise.all(
+        projects.map(async (project) => {
+          const { data: decisions, error: decisionsError } = await supabase
+            .from('project_decisions')
+            .select('decision_type, parent_decision_id')
+            .eq('project_id', project.id);
+
+          if (decisionsError) {
+            console.error(`❌ Error obteniendo decisiones del proyecto ${project.id}:`, decisionsError);
+            return {
+              ...project,
+              layers_usage: { enfoque: 0, alcance: 0, configuracion: 0 },
+              error: decisionsError.message
+            };
+          }
+
+          // Contar solo capas raíz (sin parent_decision_id)
+          const rootDecisions = decisions.filter(d => !d.parent_decision_id);
+          const usage = {
+            enfoque: rootDecisions.filter(d => d.decision_type === 'enfoque').length,
+            alcance: rootDecisions.filter(d => d.decision_type === 'alcance').length,
+            configuracion: rootDecisions.filter(d => d.decision_type === 'configuracion').length
+          };
+
+          return {
+            ...project,
+            layers_usage: usage,
+            total_layers: usage.enfoque + usage.alcance + usage.configuracion
+          };
+        })
+      );
+
+      // Calcular totales
+      const totalUsage = projectsWithUsage.reduce(
+        (acc, project) => {
+          if (project.layers_usage) {
+            acc.enfoque += project.layers_usage.enfoque;
+            acc.alcance += project.layers_usage.alcance;
+            acc.configuracion += project.layers_usage.configuracion;
+          }
+          return acc;
+        },
+        { enfoque: 0, alcance: 0, configuracion: 0 }
+      );
+
+      res.json({
+        user: {
+          id: userId,
+          email: profile.email,
+          layers_limit: profile.layerslimit || 3
+        },
+        projects: projectsWithUsage,
+        total_usage: totalUsage,
+        summary: {
+          total_projects: projects.length,
+          total_layers_used: totalUsage.enfoque + totalUsage.alcance + totalUsage.configuracion,
+          usage_percentage: ((totalUsage.enfoque + totalUsage.alcance + totalUsage.configuracion) / ((profile.layerslimit || 3) * 3 * projects.length)) * 100
+        },
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      console.error('❌ Error obteniendo uso de capas:', error);
+      res.status(500).json({
+        error: 'Error interno',
+        message: error.message
+      });
+    }
+  });
+
+  // Endpoint para obtener estadísticas generales de uso de capas
+  app.get('/api/admin/layers-usage/stats', verifyUserAccess, async (req, res) => {
+    try {
+      const user = req.user;
+      
+      // Verificar que el usuario sea admin
+      if (user.profile.role !== 'admin') {
+        return res.status(403).json({
+          error: 'Acceso denegado',
+          message: 'Solo los administradores pueden acceder a este endpoint'
+        });
+      }
+
+      console.log(`👑 Admin ${user.profile.email} consultando estadísticas generales de capas`);
+
+      if (!supabase) {
+        return res.status(503).json({
+          error: 'Base de datos no configurada',
+          message: 'Supabase no está disponible'
+        });
+      }
+
+      // Obtener todos los usuarios y sus límites
+      const { data: profiles, error: profilesError } = await supabase
+        .from('profiles')
+        .select('id, email, layerslimit');
+
+      if (profilesError) {
+        console.error('❌ Error obteniendo perfiles:', profilesError);
+        return res.status(500).json({
+          error: 'Error consultando usuarios',
+          message: profilesError.message
+        });
+      }
+
+      // Obtener todas las decisiones raíz por tipo
+      const { data: decisions, error: decisionsError } = await supabase
+        .from('project_decisions')
+        .select('decision_type, project_id, parent_decision_id')
+        .is('parent_decision_id', null); // Solo capas raíz
+
+      if (decisionsError) {
+        console.error('❌ Error obteniendo decisiones:', decisionsError);
+        return res.status(500).json({
+          error: 'Error consultando decisiones',
+          message: decisionsError.message
+        });
+      }
+
+      // Obtener información de proyectos para mapear a usuarios
+      const { data: projects, error: projectsError } = await supabase
+        .from('projects')
+        .select('id, user_id');
+
+      if (projectsError) {
+        console.error('❌ Error obteniendo proyectos:', projectsError);
+        return res.status(500).json({
+          error: 'Error consultando proyectos',
+          message: projectsError.message
+        });
+      }
+
+      // Crear mapa de proyecto a usuario
+      const projectToUser = {};
+      projects.forEach(project => {
+        projectToUser[project.id] = project.user_id;
+      });
+
+      // Calcular estadísticas por usuario
+      const userStats = {};
+      profiles.forEach(profile => {
+        userStats[profile.id] = {
+          email: profile.email,
+          limit: profile.layerslimit || 3,
+          usage: { enfoque: 0, alcance: 0, configuracion: 0 }
+        };
+      });
+
+      // Contar uso por usuario
+      decisions.forEach(decision => {
+        const userId = projectToUser[decision.project_id];
+        if (userId && userStats[userId]) {
+          userStats[userId].usage[decision.decision_type]++;
+        }
+      });
+
+      // Calcular estadísticas globales
+      const stats = {
+        total_users: profiles.length,
+        limits_distribution: {},
+        usage_by_type: { enfoque: 0, alcance: 0, configuracion: 0 },
+        users_at_limit: { enfoque: 0, alcance: 0, configuracion: 0 },
+        average_usage_percentage: 0
+      };
+
+      let totalUsagePercentage = 0;
+      let usersWithProjects = 0;
+
+      Object.values(userStats).forEach(userStat => {
+        // Distribución de límites
+        const limit = userStat.limit;
+        stats.limits_distribution[limit] = (stats.limits_distribution[limit] || 0) + 1;
+
+        // Uso por tipo
+        stats.usage_by_type.enfoque += userStat.usage.enfoque;
+        stats.usage_by_type.alcance += userStat.usage.alcance;
+        stats.usage_by_type.configuracion += userStat.usage.configuracion;
+
+        // Usuarios en el límite
+        if (userStat.usage.enfoque >= userStat.limit) stats.users_at_limit.enfoque++;
+        if (userStat.usage.alcance >= userStat.limit) stats.users_at_limit.alcance++;
+        if (userStat.usage.configuracion >= userStat.limit) stats.users_at_limit.configuracion++;
+
+        // Porcentaje de uso promedio
+        const totalUsed = userStat.usage.enfoque + userStat.usage.alcance + userStat.usage.configuracion;
+        const maxPossible = userStat.limit * 3; // 3 tipos de decisión
+        if (maxPossible > 0) {
+          totalUsagePercentage += (totalUsed / maxPossible) * 100;
+          usersWithProjects++;
+        }
+      });
+
+      stats.average_usage_percentage = usersWithProjects > 0 ? totalUsagePercentage / usersWithProjects : 0;
+
+      res.json({
+        statistics: stats,
+        top_users: Object.entries(userStats)
+          .map(([userId, stats]) => ({
+            user_id: userId,
+            email: stats.email,
+            limit: stats.limit,
+            usage: stats.usage,
+            total_used: stats.usage.enfoque + stats.usage.alcance + stats.usage.configuracion,
+            usage_percentage: ((stats.usage.enfoque + stats.usage.alcance + stats.usage.configuracion) / (stats.limit * 3)) * 100
+          }))
+          .sort((a, b) => b.total_used - a.total_used)
+          .slice(0, 10),
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      console.error('❌ Error obteniendo estadísticas de capas:', error);
+      res.status(500).json({
+        error: 'Error interno',
+        message: error.message
+      });
+    }
+  });
+
+  // ===================================================================
+  // GESTIÓN DE CÓDIGOS DE INVITACIÓN CON LÍMITES PERSONALIZADOS
+  // ===================================================================
+
+  // Endpoint para obtener códigos de invitación
+  app.get('/api/admin/invitation-codes', verifyUserAccess, async (req, res) => {
+    try {
+      const user = req.user;
+      
+      // Verificar que el usuario sea admin
+      if (user.profile.role !== 'admin') {
+        return res.status(403).json({
+          error: 'Acceso denegado',
+          message: 'Solo los administradores pueden acceder a este endpoint'
+        });
+      }
+
+      console.log(`👑 Admin ${user.profile.email} consultando códigos de invitación`);
+
+      if (!supabase) {
+        return res.status(503).json({
+          error: 'Base de datos no configurada',
+          message: 'Supabase no está disponible'
+        });
+      }
+
+      const { status, user_type, limit = 50 } = req.query;
+
+      // Construir query base
+      let query = supabase
+        .from('invitation_codes')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      // Aplicar filtros
+      if (status === 'active') {
+        query = query.eq('used', false).gte('expires_at', new Date().toISOString());
+      } else if (status === 'used') {
+        query = query.eq('used', true);
+      } else if (status === 'expired') {
+        query = query.lt('expires_at', new Date().toISOString());
+      }
+
+      if (user_type) {
+        query = query.eq('user_type', user_type);
+      }
+
+      query = query.limit(parseInt(limit));
+
+      const { data: codes, error } = await query;
+
+      if (error) {
+        console.error('❌ Error obteniendo códigos de invitación:', error);
+        return res.status(500).json({
+          error: 'Error consultando códigos',
+          message: error.message
+        });
+      }
+
+      // Calcular estadísticas
+      const stats = {
+        total: codes.length,
+        active: codes.filter(c => !c.used && (!c.expires_at || new Date(c.expires_at) > new Date())).length,
+        used: codes.filter(c => c.used).length,
+        expired: codes.filter(c => c.expires_at && new Date(c.expires_at) < new Date()).length,
+        by_type: {}
+      };
+
+      codes.forEach(code => {
+        const type = code.user_type || 'Beta';
+        stats.by_type[type] = (stats.by_type[type] || 0) + 1;
+      });
+
+      res.json({
+        codes,
+        statistics: stats,
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      console.error('❌ Error obteniendo códigos de invitación:', error);
+      res.status(500).json({
+        error: 'Error interno',
+        message: error.message
+      });
+    }
+  });
+
+  // Endpoint para crear código de invitación con límites personalizados
+  app.post('/api/admin/invitation-codes', verifyUserAccess, async (req, res) => {
+    try {
+      const user = req.user;
+      
+      // Verificar que el usuario sea admin
+      if (user.profile.role !== 'admin') {
+        return res.status(403).json({
+          error: 'Acceso denegado',
+          message: 'Solo los administradores pueden crear códigos'
+        });
+      }
+
+      const { 
+        code, 
+        description, 
+        user_type = 'Beta', 
+        credits = 100, 
+        layerslimit = 3,
+        max_uses = 1,
+        expires_at 
+      } = req.body;
+
+      if (!code || !description) {
+        return res.status(400).json({
+          error: 'Datos incompletos',
+          message: 'Código y descripción son requeridos'
+        });
+      }
+
+      // Validar límites
+      if (layerslimit < 1 || layerslimit > 50) {
+        return res.status(400).json({
+          error: 'Límite inválido',
+          message: 'El límite de capas debe estar entre 1 y 50'
+        });
+      }
+
+      console.log(`👑 Admin ${user.profile.email} creando código de invitación: ${code}`);
+
+      if (!supabase) {
+        return res.status(503).json({
+          error: 'Base de datos no configurada',
+          message: 'Supabase no está disponible'
+        });
+      }
+
+      // Crear el código
+      const { data: newCode, error: createError } = await supabase
+        .from('invitation_codes')
+        .insert([{
+          code: code.toUpperCase(),
+          description,
+          created_by: user.profile.id,
+          user_type,
+          credits: parseInt(credits),
+          layerslimit: parseInt(layerslimit),
+          max_uses: parseInt(max_uses),
+          expires_at: expires_at || null
+        }])
+        .select()
+        .single();
+
+      if (createError) {
+        if (createError.code === '23505') {
+          return res.status(409).json({
+            error: 'Código duplicado',
+            message: 'Ya existe un código con ese nombre'
+          });
+        }
+        console.error('❌ Error creando código:', createError);
+        return res.status(500).json({
+          error: 'Error creando código',
+          message: createError.message
+        });
+      }
+
+      // Registrar en logs
+      const logData = {
+        user_email: user.profile.email,
+        operation: 'create_invitation_code',
+        details: {
+          code: newCode.code,
+          user_type,
+          credits,
+          layerslimit,
+          max_uses,
+          description
+        },
+        credits_used: 0,
+        success: true,
+        timestamp: new Date().toISOString()
+      };
+
+      await supabase.from('usage_logs').insert([logData]);
+
+      res.json({
+        success: true,
+        message: 'Código de invitación creado correctamente',
+        code: newCode
+      });
+
+    } catch (error) {
+      console.error('❌ Error creando código de invitación:', error);
+      res.status(500).json({
+        error: 'Error interno',
+        message: error.message
+      });
+    }
+  });
+
+  // Endpoint para actualizar código de invitación
+  app.put('/api/admin/invitation-codes/:codeId', verifyUserAccess, async (req, res) => {
+    try {
+      const user = req.user;
+      
+      // Verificar que el usuario sea admin
+      if (user.profile.role !== 'admin') {
+        return res.status(403).json({
+          error: 'Acceso denegado',
+          message: 'Solo los administradores pueden modificar códigos'
+        });
+      }
+
+      const { codeId } = req.params;
+      const { 
+        description, 
+        user_type, 
+        credits, 
+        layerslimit,
+        max_uses,
+        expires_at 
+      } = req.body;
+
+      // Validar límites si se proporcionan
+      if (layerslimit && (layerslimit < 1 || layerslimit > 50)) {
+        return res.status(400).json({
+          error: 'Límite inválido',
+          message: 'El límite de capas debe estar entre 1 y 50'
+        });
+      }
+
+      console.log(`👑 Admin ${user.profile.email} actualizando código de invitación: ${codeId}`);
+
+      if (!supabase) {
+        return res.status(503).json({
+          error: 'Base de datos no configurada',
+          message: 'Supabase no está disponible'
+        });
+      }
+
+      // Obtener código antes del cambio
+      const { data: beforeCode, error: beforeError } = await supabase
+        .from('invitation_codes')
+        .select('*')
+        .eq('id', codeId)
+        .single();
+
+      if (beforeError) {
+        return res.status(404).json({
+          error: 'Código no encontrado',
+          message: beforeError.message
+        });
+      }
+
+      // Preparar datos de actualización
+      const updateData = {};
+      if (description !== undefined) updateData.description = description;
+      if (user_type !== undefined) updateData.user_type = user_type;
+      if (credits !== undefined) updateData.credits = parseInt(credits);
+      if (layerslimit !== undefined) updateData.layerslimit = parseInt(layerslimit);
+      if (max_uses !== undefined) updateData.max_uses = parseInt(max_uses);
+      if (expires_at !== undefined) updateData.expires_at = expires_at;
+
+      // Actualizar el código
+      const { data: updatedCode, error: updateError } = await supabase
+        .from('invitation_codes')
+        .update(updateData)
+        .eq('id', codeId)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('❌ Error actualizando código:', updateError);
+        return res.status(500).json({
+          error: 'Error actualizando código',
+          message: updateError.message
+        });
+      }
+
+      // Registrar en logs
+      const logData = {
+        user_email: user.profile.email,
+        operation: 'update_invitation_code',
+        details: {
+          code_id: codeId,
+          code: beforeCode.code,
+          changes: updateData,
+          before: {
+            user_type: beforeCode.user_type,
+            credits: beforeCode.credits,
+            layerslimit: beforeCode.layerslimit,
+            max_uses: beforeCode.max_uses
+          }
+        },
+        credits_used: 0,
+        success: true,
+        timestamp: new Date().toISOString()
+      };
+
+      await supabase.from('usage_logs').insert([logData]);
+
+      res.json({
+        success: true,
+        message: 'Código actualizado correctamente',
+        code: updatedCode,
+        changes: updateData
+      });
+
+    } catch (error) {
+      console.error('❌ Error actualizando código de invitación:', error);
+      res.status(500).json({
+        error: 'Error interno',
+        message: error.message
+      });
+    }
+  });
+
+  // Endpoint para eliminar código de invitación
+  app.delete('/api/admin/invitation-codes/:codeId', verifyUserAccess, async (req, res) => {
+    try {
+      const user = req.user;
+      
+      // Verificar que el usuario sea admin
+      if (user.profile.role !== 'admin') {
+        return res.status(403).json({
+          error: 'Acceso denegado',
+          message: 'Solo los administradores pueden eliminar códigos'
+        });
+      }
+
+      const { codeId } = req.params;
+
+      console.log(`👑 Admin ${user.profile.email} eliminando código de invitación: ${codeId}`);
+
+      if (!supabase) {
+        return res.status(503).json({
+          error: 'Base de datos no configurada',
+          message: 'Supabase no está disponible'
+        });
+      }
+
+      // Obtener información del código antes de eliminar
+      const { data: codeToDelete, error: getError } = await supabase
+        .from('invitation_codes')
+        .select('*')
+        .eq('id', codeId)
+        .single();
+
+      if (getError) {
+        return res.status(404).json({
+          error: 'Código no encontrado',
+          message: getError.message
+        });
+      }
+
+      // Eliminar el código
+      const { error: deleteError } = await supabase
+        .from('invitation_codes')
+        .delete()
+        .eq('id', codeId);
+
+      if (deleteError) {
+        console.error('❌ Error eliminando código:', deleteError);
+        return res.status(500).json({
+          error: 'Error eliminando código',
+          message: deleteError.message
+        });
+      }
+
+      // Registrar en logs
+      const logData = {
+        user_email: user.profile.email,
+        operation: 'delete_invitation_code',
+        details: {
+          deleted_code: codeToDelete.code,
+          user_type: codeToDelete.user_type,
+          credits: codeToDelete.credits,
+          layerslimit: codeToDelete.layerslimit,
+          was_used: codeToDelete.used
+        },
+        credits_used: 0,
+        success: true,
+        timestamp: new Date().toISOString()
+      };
+
+      await supabase.from('usage_logs').insert([logData]);
+
+      res.json({
+        success: true,
+        message: 'Código eliminado correctamente',
+        deleted_code: codeToDelete.code
+      });
+
+    } catch (error) {
+      console.error('❌ Error eliminando código de invitación:', error);
+      res.status(500).json({
+        error: 'Error interno',
+        message: error.message
+      });
+    }
+  });
+
+  // Endpoint para generar código automáticamente
+  app.post('/api/admin/invitation-codes/generate', verifyUserAccess, async (req, res) => {
+    try {
+      const user = req.user;
+      
+      // Verificar que el usuario sea admin
+      if (user.profile.role !== 'admin') {
+        return res.status(403).json({
+          error: 'Acceso denegado',
+          message: 'Solo los administradores pueden generar códigos'
+        });
+      }
+
+      const { 
+        prefix = 'PRESS',
+        description, 
+        user_type = 'Beta', 
+        credits = 100, 
+        layerslimit = 3,
+        max_uses = 1,
+        expires_at 
+      } = req.body;
+
+      if (!description) {
+        return res.status(400).json({
+          error: 'Descripción requerida',
+          message: 'La descripción es requerida para generar un código'
+        });
+      }
+
+      console.log(`👑 Admin ${user.profile.email} generando código automático con prefijo: ${prefix}`);
+
+      if (!supabase) {
+        return res.status(503).json({
+          error: 'Base de datos no configurada',
+          message: 'Supabase no está disponible'
+        });
+      }
+
+      // Generar código único
+      const { data: generatedCode, error: generateError } = await supabase
+        .rpc('generate_invitation_code', { 
+          code_prefix: prefix,
+          code_length: 8 
+        });
+
+      if (generateError) {
+        console.error('❌ Error generando código:', generateError);
+        return res.status(500).json({
+          error: 'Error generando código',
+          message: generateError.message
+        });
+      }
+
+      // Crear el código con el código generado
+      const { data: newCode, error: createError } = await supabase
+        .from('invitation_codes')
+        .insert([{
+          code: generatedCode,
+          description,
+          created_by: user.profile.id,
+          user_type,
+          credits: parseInt(credits),
+          layerslimit: parseInt(layerslimit),
+          max_uses: parseInt(max_uses),
+          expires_at: expires_at || null
+        }])
+        .select()
+        .single();
+
+      if (createError) {
+        console.error('❌ Error creando código generado:', createError);
+        return res.status(500).json({
+          error: 'Error creando código',
+          message: createError.message
+        });
+      }
+
+      // Registrar en logs
+      const logData = {
+        user_email: user.profile.email,
+        operation: 'generate_invitation_code',
+        details: {
+          generated_code: newCode.code,
+          user_type,
+          credits,
+          layerslimit,
+          max_uses,
+          description
+        },
+        credits_used: 0,
+        success: true,
+        timestamp: new Date().toISOString()
+      };
+
+      await supabase.from('usage_logs').insert([logData]);
+
+      res.json({
+        success: true,
+        message: 'Código generado exitosamente',
+        code: newCode
+      });
+
+    } catch (error) {
+      console.error('❌ Error generando código de invitación:', error);
+      res.status(500).json({
+        error: 'Error interno',
+        message: error.message
+      });
+    }
+  });
 }
 
 module.exports = setupAdminRoutes; 

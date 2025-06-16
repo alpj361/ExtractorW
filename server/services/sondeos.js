@@ -307,30 +307,154 @@ async function obtenerContextoAdicionalPerplexity(pregunta, contextoBase) {
   try {
     console.log('🔍 Obteniendo contexto adicional con Perplexity');
     
-    // Usar la función existente de perplexity.js para obtener contexto de tweets
-    const contextoTweets = await obtenerContextoTweets();
+    // Importar funciones de perplexity.js y supabase
+    const { obtenerContextoTweets, getAboutFromPerplexityIndividual } = require('./perplexity');
+    const { createClient } = require('@supabase/supabase-js');
+    const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
     
-    // Construir query para Perplexity basado en la pregunta y contexto
-    const query = `Contexto sobre: ${pregunta}. 
-    Información adicional relevante para Guatemala y Centroamérica.
-    Contexto de redes sociales: ${contextoTweets}`;
+    // 1. OBTENER TWEETS RELEVANTES basados en las tendencias del contexto
+    console.log(`🐦 Buscando tweets relevantes basados en tendencias actuales`);
+    let contextoTweets = '';
+    
+    // Extraer nombres de tendencias del contexto base para buscar tweets
+    if (contextoBase && contextoBase.data && contextoBase.data.tendencias) {
+      // Extraer nombres de tendencias de la estructura correcta
+      let tendenciasNombres = [];
+      
+      contextoBase.data.tendencias.forEach(trendGroup => {
+        if (trendGroup.trends && Array.isArray(trendGroup.trends)) {
+          // Extraer nombres de las tendencias individuales
+          const nombres = trendGroup.trends
+            .slice(0, 2) // Solo las primeras 2 de cada grupo
+            .map(t => t.name || t.trend || '')
+            .filter(nombre => nombre.length > 2); // Filtrar nombres muy cortos
+          
+          tendenciasNombres = tendenciasNombres.concat(nombres);
+        }
+      });
+      
+      // Limitar a máximo 5 tendencias para búsqueda
+      tendenciasNombres = tendenciasNombres.slice(0, 5);
+      
+      console.log(`🐦 Buscando tweets para tendencias: ${tendenciasNombres.join(', ')}`);
+      
+      if (tendenciasNombres.length > 0) {
+        // Buscar tweets en la tabla trending_tweets usando palabras clave de las tendencias
+        try {
+          const { data: tweets, error } = await supabase
+            .from('trending_tweets')
+            .select('texto, usuario, likes, retweets, replies, verified, fecha_tweet, sentimiento')
+            .or(tendenciasNombres.map(tendencia => 
+              `texto.ilike.%${tendencia}%,usuario.ilike.%${tendencia}%,trend_clean.ilike.%${tendencia}%`
+            ).join(','))
+            .order('fecha_captura', { ascending: false })
+            .limit(10);
 
-    // Aquí se podría integrar con Perplexity API si está disponible
-    // Por ahora retornamos el contexto de tweets
+          if (error) {
+            console.error('❌ Error buscando tweets:', error);
+          } else if (tweets && tweets.length > 0) {
+            // Formatear tweets encontrados
+            const tweetsFormateados = tweets.map(tweet => {
+              const engagement = (tweet.likes || 0) + (tweet.retweets || 0) + (tweet.replies || 0);
+              const verificado = tweet.verified ? ' ✓' : '';
+              return `@${tweet.usuario}${verificado}: ${tweet.texto} (${engagement} interacciones)`;
+            });
+            
+            contextoTweets = tweetsFormateados.join('\n\n');
+            console.log(`✅ Encontrados ${tweets.length} tweets relevantes para las tendencias`);
+          } else {
+            console.log(`📭 No se encontraron tweets para las tendencias actuales`);
+          }
+        } catch (tweetError) {
+          console.error('❌ Error en búsqueda de tweets:', tweetError);
+          console.log(`📭 No se encontraron tweets para las tendencias actuales`);
+        }
+      } else {
+        console.log(`📭 No se encontraron nombres de tendencias válidos`);
+      }
+    } else {
+      console.log(`⚠️ No hay tendencias en el contexto base para buscar tweets`);
+    }
+    
+    // 2. OBTENER CONTEXTO WEB CON PERPLEXITY
+    console.log(`🌐 Buscando información web con Perplexity para: "${pregunta}"`);
+    let contextoWeb = '';
+    
+    if (process.env.PERPLEXITY_API_KEY) {
+      try {
+        // Usar Perplexity para obtener información actualizada sobre la pregunta
+        const perplexityResult = await getAboutFromPerplexityIndividual(pregunta, 'Guatemala', 2025);
+        
+        if (perplexityResult && perplexityResult.resumen) {
+          contextoWeb = `INFORMACIÓN WEB ACTUALIZADA:
+${perplexityResult.resumen}
+
+RAZÓN DE RELEVANCIA: ${perplexityResult.razon_tendencia || 'Información relevante para el contexto guatemalteco'}
+
+PALABRAS CLAVE: ${perplexityResult.palabras_clave ? perplexityResult.palabras_clave.join(', ') : 'No disponibles'}`;
+        }
+      } catch (perplexityError) {
+        console.error('⚠️ Error con Perplexity API:', perplexityError.message);
+        contextoWeb = 'No se pudo obtener información web adicional.';
+      }
+    } else {
+      console.log('⚠️ PERPLEXITY_API_KEY no configurada, saltando búsqueda web');
+      contextoWeb = 'Búsqueda web no disponible (API key no configurada).';
+    }
+    
+    // 3. CONSTRUIR CONTEXTO ENRIQUECIDO
+    let contextoEnriquecido = '';
+    
+    if (contextoTweets && contextoTweets.length > 0) {
+      contextoEnriquecido += `\n📱 CONVERSACIÓN EN REDES SOCIALES:\n${contextoTweets}\n`;
+    }
+    
+    if (contextoWeb && contextoWeb.length > 0) {
+      contextoEnriquecido += `\n🌐 CONTEXTO WEB ACTUALIZADO:\n${contextoWeb}\n`;
+    }
+    
+    // 4. EXTRAER KEYWORDS DE LA PREGUNTA para búsquedas más específicas
+    const keywords = extraerKeywords(pregunta);
+    
+    console.log(`✅ Contexto adicional obtenido: ${contextoTweets ? 'Tweets ✓' : 'Tweets ✗'} | ${contextoWeb ? 'Web ✓' : 'Web ✗'}`);
+    
     return {
+      contexto_enriquecido: contextoEnriquecido,
       contexto_tweets: contextoTweets,
-      query_utilizado: query,
-      timestamp: new Date().toISOString()
+      contexto_web: contextoWeb,
+      keywords_extraidas: keywords,
+      query_utilizado: pregunta,
+      timestamp: new Date().toISOString(),
+      fuentes_utilizadas: ['tweets', 'perplexity_web']
     };
 
   } catch (error) {
     console.error('❌ Error obteniendo contexto adicional:', error);
     return {
+      contexto_enriquecido: '',
       contexto_tweets: '',
+      contexto_web: '',
       error: error.message,
       timestamp: new Date().toISOString()
     };
   }
+}
+
+/**
+ * Extrae keywords relevantes de una pregunta para búsquedas más específicas
+ */
+function extraerKeywords(pregunta) {
+  // Palabras comunes a filtrar
+  const stopWords = ['qué', 'cuáles', 'cómo', 'dónde', 'cuándo', 'por', 'para', 'con', 'sin', 'sobre', 'en', 'de', 'la', 'el', 'los', 'las', 'un', 'una', 'y', 'o', 'pero', 'son', 'es', 'está', 'están', 'tiene', 'tienen', 'principales', 'principales', 'actualmente', 'hoy', 'día', 'días'];
+  
+  // Extraer palabras de 3+ caracteres que no sean stop words
+  const palabras = pregunta.toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .split(/\s+/)
+    .filter(palabra => palabra.length >= 3 && !stopWords.includes(palabra))
+    .slice(0, 5); // Máximo 5 keywords
+  
+  return palabras;
 }
 
 /**
@@ -674,58 +798,102 @@ function generarDatosVisualizacion(consulta, tipo) {
 }
 
 /**
- * Construye el prompt optimizado para ChatGPT (reducido para evitar límite de tokens)
+ * Construye el prompt optimizado para ChatGPT con contexto enriquecido
  */
 function construirPromptSondeo(pregunta, contexto, configuracion) {
   // Crear resumen conciso del contexto en lugar de JSON completo
   let resumenContexto = '';
   
+  // 1. CONTEXTO ENRIQUECIDO (Perplexity + Tweets)
+  if (contexto.contexto_adicional && contexto.contexto_adicional.contexto_enriquecido) {
+    resumenContexto += `\n🔍 CONTEXTO ACTUALIZADO:\n${contexto.contexto_adicional.contexto_enriquecido}`;
+  }
+  
+  // 2. DATOS DE FUENTES SELECCIONADAS
   if (contexto.data) {
     // Resumir tendencias
     if (contexto.data.tendencias && contexto.data.tendencias.length > 0) {
-      const tendenciasTop = contexto.data.tendencias.slice(0, 5).map(t => t.nombre || t.trend || 'Tendencia').join(', ');
-      resumenContexto += `\nTENDENCIAS ACTUALES: ${tendenciasTop}`;
+      const tendenciasTop = contexto.data.tendencias.slice(0, 5).map(t => {
+        const nombre = t.nombre || t.trend || 'Tendencia';
+        const categoria = t.categoria || 'Sin categoría';
+        
+        // Manejar el campo about de forma segura
+        let about = '';
+        if (t.about) {
+          if (typeof t.about === 'string') {
+            about = ` - ${t.about.substring(0, 100)}...`;
+          } else if (typeof t.about === 'object' && t.about.resumen) {
+            about = ` - ${t.about.resumen.substring(0, 100)}...`;
+          }
+        }
+        
+        return `${nombre} (${categoria})${about}`;
+      }).join('\n• ');
+      resumenContexto += `\n\n📈 TENDENCIAS ACTUALES:\n• ${tendenciasTop}`;
     }
     
     // Resumir noticias
     if (contexto.data.noticias && contexto.data.noticias.length > 0) {
-      const noticiasTop = contexto.data.noticias.slice(0, 3).map(n => n.title || n.titulo || 'Noticia').join(', ');
-      resumenContexto += `\nNOTICIAS RELEVANTES: ${noticiasTop}`;
-    }
-    
-    // Resumir tweets
-    if (contexto.data.tweets && contexto.data.tweets.length > 0) {
-      const tweetsTop = contexto.data.tweets.slice(0, 3).map(t => t.text ? t.text.substring(0, 100) + '...' : 'Tweet').join(' | ');
-      resumenContexto += `\nTWEETS DESTACADOS: ${tweetsTop}`;
+      const noticiasTop = contexto.data.noticias.slice(0, 3).map(n => {
+        const titulo = n.title || n.titulo || 'Noticia';
+        const contenido = n.summary || n.resumen || n.content;
+        const resumen = (contenido && typeof contenido === 'string') ? ` - ${contenido.substring(0, 150)}...` : '';
+        return `${titulo}${resumen}`;
+      }).join('\n• ');
+      resumenContexto += `\n\n📰 NOTICIAS RELEVANTES:\n• ${noticiasTop}`;
     }
     
     // Resumir codex
     if (contexto.data.codex && contexto.data.codex.length > 0) {
-      const codexTop = contexto.data.codex.slice(0, 3).map(c => c.title || c.titulo || 'Documento').join(', ');
-      resumenContexto += `\nDOCUMENTOS CODEX: ${codexTop}`;
+      const codexTop = contexto.data.codex.slice(0, 3).map(c => {
+        const titulo = c.title || c.titulo || 'Documento';
+        const contenido = c.description || c.descripcion || c.content;
+        const descripcion = (contenido && typeof contenido === 'string') ? ` - ${contenido.substring(0, 100)}...` : '';
+        return `${titulo}${descripcion}`;
+      }).join('\n• ');
+      resumenContexto += `\n\n📚 DOCUMENTOS CODEX:\n• ${codexTop}`;
     }
   }
   
-  // Estadísticas del contexto
+  // 3. ESTADÍSTICAS DEL CONTEXTO
   const stats = contexto.estadisticas || {};
-  resumenContexto += `\n\nESTADÍSTICAS: ${stats.total_items || 0} elementos de ${stats.total_fuentes || 0} fuentes`;
+  resumenContexto += `\n\n📊 ESTADÍSTICAS: ${stats.total_items || 0} elementos de ${stats.total_fuentes || 0} fuentes`;
+  
+  // 4. KEYWORDS EXTRAÍDAS
+  if (contexto.contexto_adicional && contexto.contexto_adicional.keywords_extraidas) {
+    resumenContexto += `\n🔑 PALABRAS CLAVE: ${contexto.contexto_adicional.keywords_extraidas.join(', ')}`;
+  }
   
   const prompt = `
-Eres un analista experto en tendencias y datos de Guatemala y Centroamérica.
+Eres un analista experto en tendencias y datos de Guatemala y Centroamérica con acceso a información actualizada de redes sociales y web.
 
-PREGUNTA: "${pregunta}"
+PREGUNTA DEL USUARIO: "${pregunta}"
 
 CONTEXTO DISPONIBLE:${resumenContexto}
 
 FUENTES UTILIZADAS: ${contexto.fuentes_utilizadas ? contexto.fuentes_utilizadas.join(', ') : 'No especificadas'}
 
-INSTRUCCIONES:
-1. Analiza la pregunta basándote en el contexto proporcionado
-2. Identifica patrones relevantes para Guatemala/Centroamérica
-3. Proporciona insights específicos y recomendaciones
-4. Mantén un enfoque práctico y accionable
+INSTRUCCIONES ESPECÍFICAS:
+1. 📊 ANALIZA la pregunta basándote ESPECÍFICAMENTE en el contexto proporcionado
+2. 🎯 USA la información de tweets y web actualizada para dar respuestas ESPECÍFICAS y ACTUALES
+3. 🇬🇹 ENFÓCATE en Guatemala y Centroamérica, pero incluye contexto internacional relevante
+4. 💡 PROPORCIONA insights específicos, no generalidades
+5. 📈 INCLUYE datos concretos cuando estén disponibles
+6. 🔍 MENCIONA las fuentes de información que usaste (tweets, noticias, tendencias, etc.)
+7. ⚡ SÉ CONCISO pero COMPLETO - máximo 3 párrafos de análisis
 
-Responde en español con análisis detallado pero conciso.
+FORMATO DE RESPUESTA:
+- Párrafo 1: Respuesta directa a la pregunta con datos específicos
+- Párrafo 2: Análisis del contexto actual (tendencias, conversaciones sociales)
+- Párrafo 3: Conclusiones y recomendaciones prácticas
+
+IMPORTANTE: 
+- NO inventes datos que no estén en el contexto
+- SI hay tweets relevantes, menciona qué está diciendo la gente
+- SI hay información web actualizada, úsala para dar contexto específico
+- SIEMPRE conecta tu respuesta con la realidad guatemalteca actual
+
+Responde en español con análisis específico y basado en evidencia.
 `;
 
   return prompt;
