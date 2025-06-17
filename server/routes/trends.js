@@ -53,12 +53,21 @@ function setupTrendsRoutes(app) {
         if (data && data.length > 0) {
           console.log('✅ Procesamiento encontrado en base de datos');
           // Si encontramos el registro en la base de datos, el procesamiento está completo
+          // Devolver tanto el status como los datos reales
+          const record = data[0];
           return res.json({
             timestamp: timestamp,
-            status: 'completed',
-            has_about: true,
-            has_statistics: true,
-            completion_time: new Date().toISOString()
+            status: 'complete',
+            has_about: !!(record.about && record.about.length > 0),
+            has_statistics: !!(record.statistics && Object.keys(record.statistics).length > 0),
+            completion_time: new Date().toISOString(),
+            data: {
+              about: record.about || [],
+              statistics: record.statistics || {},
+              categoryData: record.category_data || [],
+              wordCloudData: record.word_cloud_data || [],
+              topKeywords: record.top_keywords || []
+            }
           });
         }
       }
