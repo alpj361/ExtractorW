@@ -7,9 +7,29 @@ const { setupMiddlewares } = require('./middlewares');
 // Inicializar la aplicación Express
 const app = express();
 
-// Configuración básica
+// Permitir orígenes adicionales definidos por variable de entorno (ALLOWED_ORIGINS)
+// Separados por coma, por ejemplo: "https://jornal.standatpd.com,https://pulsej.standatpd.com"
+const defaultOrigins = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'https://qqshdccpmypelhmyqnut.supabase.co',
+  'https://jornal.standatpd.com' // Dominio de producción del frontend
+];
+
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? [...defaultOrigins, ...process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())]
+  : defaultOrigins;
+
+// Aplicar middleware CORS con la lista dinámica de orígenes permitidos
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:3000', 'https://qqshdccpmypelhmyqnut.supabase.co'],
+  origin: function (origin, callback) {
+    // Permitir peticiones sin cabecera Origin (curl, Postman, health checks)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error(`Origin ${origin} not allowed by CORS`));
+  },
   methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-client-info', 'apikey'],
   credentials: true,
