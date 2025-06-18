@@ -2,6 +2,7 @@ const trendsRoutes = require('./trends');
 const adminRoutes = require('./admin');
 const sondeosRoutes = require('./sondeos');
 const projectSuggestionsRoutes = require('./project-suggestions');
+const transcriptionRoutes = require('./transcription');
 const path = require('path');
 
 /**
@@ -38,6 +39,9 @@ function setupRoutes(app) {
   
   // Configurar rutas de sugerencias de proyectos
   app.use('/api/project-suggestions', projectSuggestionsRoutes);
+  
+  // Configurar rutas de transcripción
+  app.use('/api/transcription', transcriptionRoutes);
 }
 
 module.exports = {
