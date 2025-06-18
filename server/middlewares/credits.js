@@ -230,10 +230,119 @@ const checkCredits = async (req, res, next) => {
   }
 };
 
+/**
+ * Función utilitaria para verificar créditos de manera programática
+ */
+async function checkCreditsFunction(userId, requiredCredits) {
+  try {
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('credits, role')
+      .eq('id', userId)
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    // Admin tiene acceso ilimitado
+    if (profile.role === 'admin') {
+      return {
+        hasCredits: true,
+        isAdmin: true,
+        currentCredits: profile.credits
+      };
+    }
+
+    return {
+      hasCredits: profile.credits >= requiredCredits,
+      isAdmin: false,
+      currentCredits: profile.credits
+    };
+  } catch (error) {
+    console.error('Error verificando créditos:', error);
+    return {
+      hasCredits: false,
+      isAdmin: false,
+      currentCredits: 0,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Función utilitaria para debitar créditos de manera programática
+ */
+async function debitCreditsFunction(userId, amount, operation, metadata = {}) {
+  try {
+    // Primero verificar si es admin
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('credits, role, email')
+      .eq('id', userId)
+      .single();
+
+    if (profileError) {
+      throw profileError;
+    }
+
+    // Admin no paga créditos, pero sí loggeamos
+    if (profile.role === 'admin') {
+      console.log(`👑 Admin ${profile.email} ejecutó ${operation} - No se debitan créditos`);
+      
+      // Registrar log sin débito
+      await logUsage({ id: userId, profile }, operation, amount, { 
+        body: metadata,
+        path: operation 
+      });
+      
+      return {
+        success: true,
+        newBalance: profile.credits,
+        isAdmin: true
+      };
+    }
+
+    // Debitar créditos del usuario normal
+    const { data: updateResult, error: updateError } = await supabase
+      .from('profiles')
+      .update({ credits: profile.credits - amount })
+      .eq('id', userId)
+      .select('credits')
+      .single();
+
+    if (updateError) {
+      throw updateError;
+    }
+
+    console.log(`✅ ${amount} créditos debitados de ${profile.email}. Nuevo saldo: ${updateResult.credits}`);
+
+    // Registrar log de uso
+    await logUsage({ id: userId, profile }, operation, amount, { 
+      body: metadata,
+      path: operation 
+    });
+
+    return {
+      success: true,
+      newBalance: updateResult.credits,
+      isAdmin: false
+    };
+  } catch (error) {
+    console.error('Error debitando créditos:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
 module.exports = {
   debitCredits,
   checkCredits,
   calculateSondeoCost,
   CREDIT_COSTS,
-  FREE_OPERATIONS
+  FREE_OPERATIONS,
+  checkCreditsFunction,
+  debitCreditsFunction
 }; 

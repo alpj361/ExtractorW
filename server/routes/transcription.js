@@ -2,8 +2,8 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { verifyToken } = require('../middlewares/auth');
-const { checkCredits, debitCredits } = require('../middlewares/credits');
+const { verifyUserAccess } = require('../middlewares/auth');
+const { checkCreditsFunction, debitCreditsFunction } = require('../middlewares/credits');
 const { transcribeFile, detectFileType, SUPPORTED_AUDIO_FORMATS, SUPPORTED_VIDEO_FORMATS } = require('../services/transcription');
 
 const router = express.Router();
@@ -50,7 +50,7 @@ const upload = multer({
  * POST /api/transcription/upload
  * Sube y transcribe un archivo de audio/video
  */
-router.post('/upload', verifyToken, upload.single('audioFile'), async (req, res) => {
+router.post('/upload', verifyUserAccess, upload.single('audioFile'), async (req, res) => {
   try {
     console.log('📤 Solicitud de transcripción recibida');
 
@@ -62,7 +62,7 @@ router.post('/upload', verifyToken, upload.single('audioFile'), async (req, res)
     }
 
     const { titulo, descripcion, etiquetas, proyecto, project_id, prompt } = req.body;
-    const userId = req.user.userId;
+    const userId = req.user.id;
     const filePath = req.file.path;
     const fileType = detectFileType(filePath);
 
@@ -70,7 +70,7 @@ router.post('/upload', verifyToken, upload.single('audioFile'), async (req, res)
 
     // Verificar créditos (costo base: 20 créditos por transcripción)
     const creditsCost = 20;
-    const creditsCheck = await checkCredits(userId, creditsCost);
+    const creditsCheck = await checkCreditsFunction(userId, creditsCost);
     
     if (!creditsCheck.hasCredits) {
       // Limpiar archivo subido
@@ -106,7 +106,7 @@ router.post('/upload', verifyToken, upload.single('audioFile'), async (req, res)
 
     if (result.success) {
       // Debitar créditos solo si fue exitoso
-      await debitCredits(userId, creditsCost, 'Transcripción de audio/video', {
+      await debitCreditsFunction(userId, creditsCost, 'Transcripción de audio/video', {
         fileName: req.file.originalname,
         fileType: fileType,
         wordsCount: result.metadata.wordsCount,
@@ -159,10 +159,10 @@ router.post('/upload', verifyToken, upload.single('audioFile'), async (req, res)
  * POST /api/transcription/from-codex
  * Transcribe un archivo que ya está en el Codex
  */
-router.post('/from-codex', verifyToken, async (req, res) => {
+router.post('/from-codex', verifyUserAccess, async (req, res) => {
   try {
     const { codexItemId, titulo, descripcion, etiquetas, proyecto, project_id, prompt } = req.body;
-    const userId = req.user.userId;
+    const userId = req.user.id;
 
     if (!codexItemId) {
       return res.status(400).json({
@@ -232,7 +232,7 @@ router.post('/from-codex', verifyToken, async (req, res) => {
 
     // Verificar créditos
     const creditsCost = 20;
-    const creditsCheck = await checkCredits(userId, creditsCost);
+    const creditsCheck = await checkCreditsFunction(userId, creditsCost);
     
     if (!creditsCheck.hasCredits) {
       fs.unlinkSync(tempFilePath);
@@ -266,7 +266,7 @@ router.post('/from-codex', verifyToken, async (req, res) => {
 
     if (result.success) {
       // Debitar créditos
-      await debitCredits(userId, creditsCost, 'Transcripción desde Codex', {
+      await debitCreditsFunction(userId, creditsCost, 'Transcripción desde Codex', {
         originalCodexItemId: codexItemId,
         originalFileName: codexItem.nombre_archivo,
         fileType: fileType,
@@ -324,12 +324,12 @@ router.get('/supported-formats', (req, res) => {
  * GET /api/transcription/cost
  * Obtiene el costo en créditos para transcripción
  */
-router.get('/cost', verifyToken, async (req, res) => {
-  const userId = req.user.userId;
+router.get('/cost', verifyUserAccess, async (req, res) => {
+  const userId = req.user.id;
   const creditsCost = 20;
 
   try {
-    const creditsCheck = await checkCredits(userId, creditsCost);
+    const creditsCheck = await checkCreditsFunction(userId, creditsCost);
     
     res.json({
       success: true,
