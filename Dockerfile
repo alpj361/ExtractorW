@@ -1,6 +1,14 @@
 # Usar Node.js oficial como base
 FROM node:18-alpine
 
+# Instalar FFmpeg y dependencias del sistema
+RUN apk add --no-cache \
+    ffmpeg \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/cache/apk/*
+
 # Establecer directorio de trabajo
 WORKDIR /app
 
