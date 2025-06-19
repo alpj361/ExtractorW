@@ -173,20 +173,40 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
 
     console.log(`🔄 Transcribiendo item del Codex: ${codexItemId}`);
 
-    // Obtener item del Codex
-    const { data: codexItem, error: fetchError } = await require('../utils/supabase')
+    // Crear cliente de Supabase con el token del usuario para RLS
+    const { createClient } = require('@supabase/supabase-js');
+    const authToken = req.headers.authorization?.split(' ')[1] || '';
+    
+    const userSupabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY, {
+      auth: {
+        persistSession: false
+      },
+      global: {
+        headers: {
+          Authorization: `Bearer ${authToken}`
+        }
+      }
+    });
+
+    console.log(`🔑 Usando token para RLS: ${authToken.substring(0, 20)}...`);
+
+    // Obtener item del Codex usando el cliente autenticado
+    const { data: codexItem, error: fetchError } = await userSupabase
       .from('codex_items')
       .select('*')
       .eq('id', codexItemId)
-      .eq('user_id', userId)
       .single();
 
     if (fetchError || !codexItem) {
+      console.log(`❌ Error obteniendo item del Codex:`, fetchError);
       return res.status(404).json({
         success: false,
-        error: 'Item del Codex no encontrado o no tienes permisos para accederlo'
+        error: 'Item del Codex no encontrado o no tienes permisos para accederlo',
+        details: fetchError?.message
       });
     }
+
+    console.log(`✅ Item del Codex encontrado: ${codexItem.titulo}`);
 
     // Verificar que el item tenga un archivo asociado
     if (!codexItem.storage_path) {
@@ -196,15 +216,17 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
       });
     }
 
-    // Descargar archivo desde Supabase Storage
-    const { data: fileData, error: downloadError } = await require('../utils/supabase').storage
+    // Descargar archivo desde Supabase Storage usando el cliente autenticado
+    const { data: fileData, error: downloadError } = await userSupabase.storage
       .from('digitalstorage')
       .download(codexItem.storage_path);
 
     if (downloadError || !fileData) {
+      console.log(`❌ Error descargando archivo:`, downloadError);
       return res.status(404).json({
         success: false,
-        error: 'No se pudo descargar el archivo del Codex'
+        error: 'No se pudo descargar el archivo del Codex',
+        details: downloadError?.message
       });
     }
 
