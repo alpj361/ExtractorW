@@ -3,6 +3,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { verifyUserAccess } = require('../middlewares/auth');
+const { createClient } = require('@supabase/supabase-js');
 const { checkCreditsFunction, debitCreditsFunction } = require('../middlewares/credits');
 const { transcribeFile, detectFileType, SUPPORTED_AUDIO_FORMATS, SUPPORTED_VIDEO_FORMATS } = require('../services/transcription');
 
@@ -68,6 +69,13 @@ router.post('/upload', verifyUserAccess, upload.single('audioFile'), async (req,
 
     console.log(`📁 Archivo recibido: ${req.file.originalname} (${fileType})`);
 
+    // Crear cliente Supabase autenticado con token para respetar RLS
+    const authToken = req.headers.authorization?.split(' ')[1] || '';
+    const userSupabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY, {
+      auth: { persistSession: false },
+      global: { headers: { Authorization: `Bearer ${authToken}` } }
+    });
+
     // Verificar créditos (costo base: 20 créditos por transcripción)
     const creditsCost = 20;
     const creditsCheck = await checkCreditsFunction(userId, creditsCost);
@@ -94,7 +102,7 @@ router.post('/upload', verifyUserAccess, upload.single('audioFile'), async (req,
     };
 
     // Iniciar transcripción
-    const result = await transcribeFile(filePath, userId, options);
+    const result = await transcribeFile(filePath, userId, { ...options, supabaseClient: userSupabase });
 
     // Limpiar archivo subido
     try {
@@ -277,7 +285,7 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
     };
 
     // Transcribir
-    const result = await transcribeFile(tempFilePath, userId, options);
+    const result = await transcribeFile(tempFilePath, userId, { ...options, supabaseClient: userSupabase });
 
     // Limpiar archivo temporal
     try {

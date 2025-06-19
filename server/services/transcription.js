@@ -175,9 +175,16 @@ async function transcribeWithGemini(audioPath, options = {}) {
  * @param {string} originalFilePath - Ruta del archivo original
  * @param {string} userId - ID del usuario
  * @param {Object} metadata - Metadatos adicionales
+ * @param {Object} supabaseClient - Cliente de Supabase autenticado
  * @returns {Promise<Object>} - Datos del item guardado
  */
-async function saveTranscriptionToCodex(transcriptionResult, originalFilePath, userId, metadata = {}) {
+async function saveTranscriptionToCodex(
+  transcriptionResult,
+  originalFilePath,
+  userId,
+  metadata = {},
+  supabaseClient = supabase
+) {
   try {
     console.log(`💾 Guardando transcripción en Codex para usuario: ${userId}`);
     
@@ -210,7 +217,7 @@ async function saveTranscriptionToCodex(transcriptionResult, originalFilePath, u
     
     console.log(`📝 Creando registro con transcripción de ${transcriptionResult.transcription.length} caracteres...`);
     
-    const { data: codexData, error: codexError } = await supabase
+    const { data: codexData, error: codexError } = await supabaseClient
       .from('codex_items')
       .insert([codexItem])
       .select()
@@ -261,6 +268,8 @@ function cleanupTempFiles(tempFiles) {
  * @returns {Promise<Object>} - Resultado completo de la transcripción
  */
 async function transcribeFile(filePath, userId, options = {}) {
+  // Permitimos pasar un cliente de Supabase autenticado a través de options.supabaseClient
+  const spClient = options.supabaseClient || supabase;
   const tempFiles = [];
   
   try {
@@ -278,10 +287,11 @@ async function transcribeFile(filePath, userId, options = {}) {
     
     // Guardar en Codex
     const saveResult = await saveTranscriptionToCodex(
-      transcriptionResult, 
-      filePath, 
-      userId, 
-      options
+      transcriptionResult,
+      filePath,
+      userId,
+      options,
+      spClient
     );
     
     return {
