@@ -109,6 +109,13 @@ async function handleCreditDebit(data, req, responseType) {
       
       if (isFreeOperation) {
         console.log(`🆓 Operación gratuita: ${operation}`);
+        // Registrar uso sin consumo de créditos
+        if (!req.usage_logged) {
+          req.tokens_consumed = req.tokens_consumed || 0;
+          req.dollars_consumed = req.dollars_consumed || 0;
+          await logUsage(user, req.path, 0, req);
+          req.usage_logged = true;
+        }
         return;
       }
 

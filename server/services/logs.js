@@ -1,4 +1,14 @@
-const supabase = require('../utils/supabase');
+let supabase = require('../utils/supabase');
+
+// Si existe una clave de servicio, usarla para operaciones de logging (omite RLS)
+if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  const { createClient } = require('@supabase/supabase-js');
+  const SUPABASE_URL = process.env.SUPABASE_URL;
+  supabase = createClient(SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false },
+    db: { schema: 'public' }
+  });
+}
 
 /**
  * Registra el uso de una operación por parte de un usuario
