@@ -42,6 +42,14 @@ async function logUsage(user, operation, credits, req) {
       request_params: requestParams
     };
 
+    // Agregar métricas de tokens y costo si existen en la request
+    if (req.tokens_consumed !== undefined) {
+      logEntry.tokens_consumed = req.tokens_consumed;
+    }
+    if (req.dollars_consumed !== undefined) {
+      logEntry.dollars_consumed = req.dollars_consumed;
+    }
+
     const { error } = await supabase
       .from('usage_logs')
       .insert([logEntry]);

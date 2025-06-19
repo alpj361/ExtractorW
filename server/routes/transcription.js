@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { verifyUserAccess } = require('../middlewares/auth');
 const { createClient } = require('@supabase/supabase-js');
-const { checkCreditsFunction, debitCreditsFunction } = require('../middlewares/credits');
+const { logUsage } = require('../services/logs');
 const { transcribeFile, detectFileType, SUPPORTED_AUDIO_FORMATS, SUPPORTED_VIDEO_FORMATS } = require('../services/transcription');
 
 const router = express.Router();
@@ -94,21 +94,6 @@ router.post('/upload', verifyUserAccess, upload.single('audioFile'), async (req,
       global: { headers: { Authorization: `Bearer ${authToken}` } }
     });
 
-    // Verificar créditos (costo base: 20 créditos por transcripción)
-    const creditsCost = 20;
-    const creditsCheck = await checkCreditsFunction(userId, creditsCost);
-    
-    if (!creditsCheck.hasCredits) {
-      // Limpiar archivo subido
-      fs.unlinkSync(filePath);
-      return res.status(402).json({
-        success: false,
-        error: 'Créditos insuficientes',
-        required: creditsCost,
-        available: creditsCheck.currentCredits
-      });
-    }
-
     // Preparar opciones de transcripción
     const options = {
       titulo: titulo || `Transcripción de ${req.file.originalname}`,
@@ -131,15 +116,19 @@ router.post('/upload', verifyUserAccess, upload.single('audioFile'), async (req,
     }
 
     if (result.success) {
-      // Debitar créditos solo si fue exitoso
-      await debitCreditsFunction(userId, creditsCost, 'Transcripción de audio/video', {
-        fileName: req.file.originalname,
-        fileType: fileType,
-        wordsCount: result.metadata.wordsCount,
-        charactersCount: result.metadata.charactersCount
-      });
+      // Calcular tokens y costo aproximado
+      const tokensConsumed = Math.ceil(result.metadata.charactersCount / 4);
+      const dollarsPerToken = parseFloat(process.env.GEMINI_TRANSCRIPTION_COST_PER_TOKEN || '0.000015');
+      const dollarsConsumed = parseFloat((tokensConsumed * dollarsPerToken).toFixed(6));
 
-      console.log(`✅ Transcripción completada para usuario ${userId}`);
+      // Guardar métricas para el log
+      req.tokens_consumed = tokensConsumed;
+      req.dollars_consumed = dollarsConsumed;
+
+      // Registrar uso (créditos 0 porque es gratuito)
+      await logUsage(req.user, req.path, 0, req);
+
+      console.log(`✅ Transcripción completada para usuario ${userId} (${tokensConsumed} tokens, $${dollarsConsumed})`);
 
       res.json({
         success: true,
@@ -148,7 +137,8 @@ router.post('/upload', verifyUserAccess, upload.single('audioFile'), async (req,
           transcription: result.transcription,
           metadata: result.metadata,
           codexItem: result.codexItem,
-          creditsUsed: creditsCost
+          tokensConsumed,
+          dollarsConsumed
         }
       });
     } else {
@@ -279,20 +269,6 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
       });
     }
 
-    // Verificar créditos
-    const creditsCost = 20;
-    const creditsCheck = await checkCreditsFunction(userId, creditsCost);
-    
-    if (!creditsCheck.hasCredits) {
-      fs.unlinkSync(tempFilePath);
-      return res.status(402).json({
-        success: false,
-        error: 'Créditos insuficientes',
-        required: creditsCost,
-        available: creditsCheck.currentCredits
-      });
-    }
-
     // Preparar opciones
     const options = {
       titulo: titulo || `Transcripción de ${codexItem.titulo}`,
@@ -314,16 +290,19 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
     }
 
     if (result.success) {
-      // Debitar créditos
-      await debitCreditsFunction(userId, creditsCost, 'Transcripción desde Codex', {
-        originalCodexItemId: codexItemId,
-        originalFileName: codexItem.nombre_archivo,
-        fileType: fileType,
-        wordsCount: result.metadata.wordsCount,
-        charactersCount: result.metadata.charactersCount
-      });
+      // Calcular tokens y costo aproximado
+      const tokensConsumed = Math.ceil(result.metadata.charactersCount / 4);
+      const dollarsPerToken = parseFloat(process.env.GEMINI_TRANSCRIPTION_COST_PER_TOKEN || '0.000015');
+      const dollarsConsumed = parseFloat((tokensConsumed * dollarsPerToken).toFixed(6));
 
-      console.log(`✅ Transcripción desde Codex completada para usuario ${userId}`);
+      // Guardar métricas para el log
+      req.tokens_consumed = tokensConsumed;
+      req.dollars_consumed = dollarsConsumed;
+
+      // Registrar uso (créditos 0 porque es gratuito)
+      await logUsage(req.user, req.path, 0, req);
+
+      console.log(`✅ Transcripción desde Codex completada para usuario ${userId} (${tokensConsumed} tokens, $${dollarsConsumed})`);
 
       res.json({
         success: true,
@@ -333,7 +312,8 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
           metadata: result.metadata,
           codexItem: result.codexItem,
           originalItem: codexItem,
-          creditsUsed: creditsCost
+          tokensConsumed,
+          dollarsConsumed
         }
       });
     } else {
@@ -374,28 +354,13 @@ router.get('/supported-formats', (req, res) => {
  * Obtiene el costo en créditos para transcripción
  */
 router.get('/cost', verifyUserAccess, async (req, res) => {
-  const userId = req.user.id;
-  const creditsCost = 20;
-
-  try {
-    const creditsCheck = await checkCreditsFunction(userId, creditsCost);
-    
-    res.json({
-      success: true,
-      data: {
-        cost: creditsCost,
-        userCredits: creditsCheck.currentCredits,
-        canAfford: creditsCheck.hasCredits,
-        description: 'Costo por transcripción de archivo de audio o video'
-      }
-    });
-  } catch (error) {
-    console.error('Error verificando créditos:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error verificando créditos del usuario'
-    });
-  }
+  res.json({
+    success: true,
+    data: {
+      cost: 0,
+      description: 'La transcripción de audio/video es ahora gratuita para todos los usuarios'
+    }
+  });
 });
 
 module.exports = router; 
