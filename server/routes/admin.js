@@ -464,7 +464,16 @@ function setupAdminRoutes(app) {
       // Contar actividad por día
       usageLogs.forEach(log => {
         const dateStr = new Date(log.timestamp).toISOString().split('T')[0];
-          .map(([name, count]) => ({ name, count })),
+        if (dailyActivity.hasOwnProperty(dateStr)) {
+          dailyActivity[dateStr] += 1;
+        }
+      });
+      
+      // Preparar respuesta
+      res.json({
+        total_logs: usageLogs.length,
+        unique_users: uniqueUsers.length,
+        operations: Object.entries(operationCounts).map(([name, count]) => ({ name, count })),
         daily_activity: Object.entries(dailyActivity)
           .map(([date, count]) => ({ date, count }))
           .sort((a, b) => a.date.localeCompare(b.date)),
