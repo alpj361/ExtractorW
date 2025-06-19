@@ -22,7 +22,7 @@ const storage = multer.diskStorage({
     // Mantener el nombre original con timestamp
     const timestamp = Date.now();
     const ext = path.extname(file.originalname);
-    const name = path.basename(file.originalname, ext);
+    const name = sanitizeFileName(path.basename(file.originalname, ext));
     cb(null, `${name}_${timestamp}${ext}`);
   }
 });
@@ -46,6 +46,24 @@ const upload = multer({
     fileSize: 500 * 1024 * 1024 // 500MB máximo
   }
 });
+
+// Sanitiza nombres de archivo para evitar rutas demasiado largas o caracteres no válidos
+function sanitizeFileName(fileName, maxLength = 120) {
+  if (!fileName) return `${Date.now()}`;
+  // Separar extensión
+  const ext = path.extname(fileName);
+  const base = path.basename(fileName, ext);
+  // Normalizar y remover caracteres no ASCII que suelen causar problemas
+  let sanitized = base
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '') // tildes
+    .replace(/[^a-zA-Z0-9._-]/g, '_');
+
+  if (sanitized.length > maxLength) {
+    sanitized = sanitized.substring(0, maxLength);
+  }
+  return `${sanitized}${ext}`;
+}
 
 /**
  * POST /api/transcription/upload
@@ -244,7 +262,8 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
       fs.mkdirSync(tempDir, { recursive: true });
     }
 
-    const tempFilePath = path.join(tempDir, `${Date.now()}_${codexItem.nombre_archivo}`);
+    const safeName = sanitizeFileName(codexItem.nombre_archivo);
+    const tempFilePath = path.join(tempDir, `${Date.now()}_${safeName}`);
     const buffer = Buffer.from(await fileData.arrayBuffer());
     fs.writeFileSync(tempFilePath, buffer);
 
