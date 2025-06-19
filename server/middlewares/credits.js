@@ -97,6 +97,8 @@ async function handleCreditDebit(data, req, responseType) {
     if (req.usage_logged) {
       return; // Ya se registró un log para esta petición
     }
+    // Marcar inmediatamente para evitar carrera antes de await
+    req.usage_logged = true;
 
     if (this.statusCode >= 200 && this.statusCode < 300) {
       const user = req.user;
@@ -141,9 +143,6 @@ async function handleCreditDebit(data, req, responseType) {
 
       // SIEMPRE registrar log de uso (tanto para admin como usuarios normales)
       await logUsage(user, req.path, finalCost, req);
-
-      // Marcar como registrado para evitar duplicado en llamadas subsecuentes dentro de la misma respuesta
-      req.usage_logged = true;
 
       // Solo debitar créditos si NO es admin y la operación tiene costo
       if (user.profile.role !== 'admin' && finalCost > 0) {
