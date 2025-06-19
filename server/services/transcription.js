@@ -194,7 +194,7 @@ async function saveTranscriptionToCodex(
     // Crear registro en codex_items con la transcripción en la columna audio_transcription
     const codexItem = {
       user_id: userId,
-      tipo: 'transcripcion',
+      tipo: originalFileType,
       titulo: metadata.titulo || `Transcripción: ${originalFileName}`,
       descripcion: metadata.descripcion || `Transcripción automática de ${originalFileType === 'video' ? 'video' : 'audio'} generada con Gemini AI. ${transcriptionResult.metadata.wordsCount} palabras, ${transcriptionResult.metadata.charactersCount} caracteres.`,
       etiquetas: [
