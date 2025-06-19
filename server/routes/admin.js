@@ -188,7 +188,7 @@ function setupAdminRoutes(app) {
       const { 
         user_email,
         operation,
-        log_type = 'user', // Default a 'user'
+        log_type = 'all', // Default 'all' para incluir todos los tipos de logs
         success,
         days = 7,
         limit = 50,
@@ -322,6 +322,49 @@ function setupAdminRoutes(app) {
         }
       }
       
+      // Consultar logs de sistema si se requiere
+      if (log_type === 'system' || log_type === 'all') {
+        console.log('📊 Consultando system_execution_logs...');
+        let sysQuery = supabase
+          .from('system_execution_logs')
+          .select('*')
+          .order('timestamp', { ascending: false });
+
+        if (days && days !== '0') {
+          sysQuery = sysQuery.gte('timestamp', daysAgo.toISOString());
+        }
+        if (operation && operation !== 'all') {
+          sysQuery = sysQuery.eq('operation', operation);
+        }
+
+        const { data: sysLogs, error: sysError } = await sysQuery;
+        if (sysError) {
+          console.error('❌ Error obteniendo logs de sistema:', sysError);
+          return res.status(500).json({ error: 'Error obteniendo logs', message: sysError.message });
+        }
+
+        if (sysLogs && sysLogs.length > 0) {
+          console.log(`✅ Logs de sistema encontrados: ${sysLogs.length}`);
+          const mappedSys = sysLogs.map(log => ({
+            ...log,
+            log_type: 'system',
+            source_table: 'system_execution_logs',
+            is_system: true,
+            is_success: log.is_success !== false,
+            formatted_time: new Date(log.timestamp || log.created_at).toLocaleString('es-ES', { timeZone: 'America/Guatemala' })
+          }));
+          allLogs = allLogs.concat(mappedSys);
+        }
+      }
+
+      // Eliminar duplicados basados en id + source_table
+      const uniqueMap = new Map();
+      allLogs.forEach(l => {
+        const key = `${l.id || l.execution_id}-${l.source_table}`;
+        if (!uniqueMap.has(key)) uniqueMap.set(key, l);
+      });
+      allLogs = Array.from(uniqueMap.values());
+
       // Devolver resultados con la estructura esperada por el frontend
       res.json({
         logs: allLogs,
@@ -369,7 +412,7 @@ function setupAdminRoutes(app) {
       console.log(`👑 Admin ${user.profile.email} consultando estadísticas de logs`);
       
       // Procesar parámetros
-      const { days = 7, log_type = 'user' } = req.query;
+      const { days = 7, log_type = 'all' } = req.query;
       
       if (!supabase) {
         return res.status(503).json({
@@ -421,18 +464,6 @@ function setupAdminRoutes(app) {
       // Contar actividad por día
       usageLogs.forEach(log => {
         const dateStr = new Date(log.timestamp).toISOString().split('T')[0];
-        if (dailyActivity[dateStr] !== undefined) {
-          dailyActivity[dateStr] += 1;
-        }
-      });
-      
-      res.json({
-        total_logs: usageLogs.length,
-        unique_users: uniqueUsers.length,
-        operations: operationCounts,
-        top_operations: Object.entries(operationCounts)
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 5)
           .map(([name, count]) => ({ name, count })),
         daily_activity: Object.entries(dailyActivity)
           .map(([date, count]) => ({ date, count }))
