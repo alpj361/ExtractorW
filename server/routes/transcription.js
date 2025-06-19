@@ -285,7 +285,7 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
     };
 
     // Transcribir
-    const result = await transcribeFile(tempFilePath, userId, { ...options, supabaseClient: userSupabase });
+    const result = await transcribeFile(tempFilePath, userId, { ...options, supabaseClient: userSupabase, updateItemId: codexItemId });
 
     // Limpiar archivo temporal
     try {

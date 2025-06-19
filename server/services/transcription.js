@@ -176,6 +176,7 @@ async function transcribeWithGemini(audioPath, options = {}) {
  * @param {string} userId - ID del usuario
  * @param {Object} metadata - Metadatos adicionales
  * @param {Object} supabaseClient - Cliente de Supabase autenticado
+ * @param {string} updateItemId - ID del item existente para UPDATE (opcional)
  * @returns {Promise<Object>} - Datos del item guardado
  */
 async function saveTranscriptionToCodex(
@@ -183,7 +184,8 @@ async function saveTranscriptionToCodex(
   originalFilePath,
   userId,
   metadata = {},
-  supabaseClient = supabase
+  supabaseClient = supabase,
+  updateItemId = null
 ) {
   try {
     console.log(`💾 Guardando transcripción en Codex para usuario: ${userId}`);
@@ -191,9 +193,10 @@ async function saveTranscriptionToCodex(
     const originalFileName = path.basename(originalFilePath);
     const originalFileType = detectFileType(originalFilePath);
     
-    // Crear registro en codex_items con la transcripción en la columna audio_transcription
-    const codexItem = {
+    // Datos comunes para INSERT o UPDATE
+    const codexItemData = {
       user_id: userId,
+      // Usamos el mismo tipo del archivo original para cumplir con RLS (audio|video)
       tipo: originalFileType,
       titulo: metadata.titulo || `Transcripción: ${originalFileName}`,
       descripcion: metadata.descripcion || `Transcripción automática de ${originalFileType === 'video' ? 'video' : 'audio'} generada con Gemini AI. ${transcriptionResult.metadata.wordsCount} palabras, ${transcriptionResult.metadata.charactersCount} caracteres.`,
@@ -215,21 +218,35 @@ async function saveTranscriptionToCodex(
       audio_transcription: transcriptionResult.transcription
     };
     
-    console.log(`📝 Creando registro con transcripción de ${transcriptionResult.transcription.length} caracteres...`);
-    
-    const { data: codexData, error: codexError } = await supabaseClient
-      .from('codex_items')
-      .insert([codexItem])
-      .select()
-      .single();
+    let codexData, codexError;
+    if (updateItemId) {
+      console.log(`📝 Actualizando item existente ${updateItemId} con transcripción...`);
+      ({ data: codexData, error: codexError } = await supabaseClient
+        .from('codex_items')
+        .update({
+          audio_transcription: codexItemData.audio_transcription,
+          descripcion: codexItemData.descripcion,
+          nombre_archivo: codexItemData.nombre_archivo,
+          etiquetas: codexItemData.etiquetas
+        })
+        .eq('id', updateItemId)
+        .select()
+        .single());
+    } else {
+      console.log(`📝 Creando registro con transcripción de ${transcriptionResult.transcription.length} caracteres...`);
+      ({ data: codexData, error: codexError } = await supabaseClient
+        .from('codex_items')
+        .insert([codexItemData])
+        .select()
+        .single());
+    }
     
     if (codexError) {
       console.error('❌ Error insertando en codex_items:', codexError);
       throw codexError;
     }
     
-    console.log(`✅ Registro creado en codex_items: ${codexData.id}`);
-    console.log(`📊 Transcripción guardada: ${transcriptionResult.metadata.wordsCount} palabras, ${transcriptionResult.metadata.charactersCount} caracteres`);
+    console.log(`✅ Transcripción guardada en codex_items id: ${codexData.id}`);
     
     return {
       codexItem: codexData,
@@ -270,6 +287,7 @@ function cleanupTempFiles(tempFiles) {
 async function transcribeFile(filePath, userId, options = {}) {
   // Permitimos pasar un cliente de Supabase autenticado a través de options.supabaseClient
   const spClient = options.supabaseClient || supabase;
+  const updateItemId = options.updateItemId || null;
   const tempFiles = [];
   
   try {
@@ -291,7 +309,8 @@ async function transcribeFile(filePath, userId, options = {}) {
       filePath,
       userId,
       options,
-      spClient
+      spClient,
+      updateItemId
     );
     
     return {
