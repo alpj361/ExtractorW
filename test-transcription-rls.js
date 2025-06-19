@@ -10,8 +10,12 @@ const fetch = require('node-fetch');
 // Configuración
 const EXTRACTORW_URL = process.env.EXTRACTORW_URL || 'https://server.standatpd.com';
 
-// Token real de tu usuario (cámbialo por el tuyo)
-const TEST_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjoxNzM0NTk0NzQ0LCJpYXQiOjE3MzQ1OTExNDQsImlzcyI6Imh0dHBzOi8vcXFzaGRjY3BteXBlbGhteXFudXQuc3VwYWJhc2UuY28vYXV0aC92MSIsInN1YiI6IjNlN2VlNTM3LTQyMzAtNGJiZi1hZGMwLWRhNmJlMGJmOWMwMyIsImVtYWlsIjoicGFibG9qb3NlYTM2MUBnbWFpbC5jb20iLCJwaG9uZSI6IiIsImFwcF9tZXRhZGF0YSI6eyJwcm92aWRlciI6ImVtYWlsIiwicHJvdmlkZXJzIjpbImVtYWlsIl19LCJ1c2VyX21ldGFkYXRhIjp7fSwicm9sZSI6ImF1dGhlbnRpY2F0ZWQiLCJhYWwiOiJhYWwxIiwiYW1yIjpbeyJtZXRob2QiOiJwYXNzd29yZCIsInRpbWVzdGFtcCI6MTczNDU5MTE0NH1dLCJzZXNzaW9uX2lkIjoiNGY4YTJjMzEtNGUzOS00NDhmLWI3YjItODNiNDEzNWZjODBhIn0.GKI3dcCeokKL_MkRJhx_wvbDV9V5z2_bYqHaAFWiGNk';
+// Token real de tu usuario - ACTUALIZA ESTE TOKEN
+// Para obtener un token fresco:
+// 1. Ve a PulseJ → DevTools (F12) → Console
+// 2. Ejecuta: localStorage.getItem('sb-qqshdccpmypelhmyqnut-auth-token')
+// 3. O en Application → Local Storage → busca el token de Supabase
+const TEST_TOKEN = process.env.TEST_TOKEN || 'ACTUALIZA_ESTE_TOKEN';
 
 const TEST_CODEX_ITEM_ID = 'b2197afe-caa9-4dc0-b9fa-a435e8f11a60';
 

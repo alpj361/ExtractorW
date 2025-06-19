@@ -184,40 +184,12 @@ async function saveTranscriptionToCodex(transcriptionResult, originalFilePath, u
     const originalFileName = path.basename(originalFilePath);
     const originalFileType = detectFileType(originalFilePath);
     
-    // Preparar datos de la transcripción para guardar
-    const transcriptionData = {
-      transcription: transcriptionResult.transcription,
-      metadata: transcriptionResult.metadata,
-      originalFile: originalFileName,
-      originalFileType: originalFileType,
-      processedAt: new Date().toISOString()
-    };
-    
-    // Crear nombre de archivo para la transcripción
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const transcriptionFileName = `transcripcion_${originalFileName}_${timestamp}.json`;
-    
-    // Subir transcripción a Supabase Storage
-    const storagePath = `${userId}/transcripciones/${transcriptionFileName}`;
-    
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from('digitalstorage')
-      .upload(storagePath, JSON.stringify(transcriptionData, null, 2), {
-        contentType: 'application/json'
-      });
-    
-    if (uploadError) {
-      throw uploadError;
-    }
-    
-    console.log(`📤 Transcripción subida a Storage: ${storagePath}`);
-    
-    // Crear registro en codex_items
+    // Crear registro en codex_items con la transcripción en la columna audio_transcription
     const codexItem = {
       user_id: userId,
       tipo: 'transcripcion',
       titulo: metadata.titulo || `Transcripción: ${originalFileName}`,
-      descripcion: `Transcripción automática de ${originalFileType === 'video' ? 'video' : 'audio'} generada con Gemini AI. ${transcriptionResult.metadata.wordsCount} palabras, ${transcriptionResult.metadata.charactersCount} caracteres.`,
+      descripcion: metadata.descripcion || `Transcripción automática de ${originalFileType === 'video' ? 'video' : 'audio'} generada con Gemini AI. ${transcriptionResult.metadata.wordsCount} palabras, ${transcriptionResult.metadata.charactersCount} caracteres.`,
       etiquetas: [
         'transcripcion',
         'audio',
@@ -227,14 +199,16 @@ async function saveTranscriptionToCodex(transcriptionResult, originalFilePath, u
       ],
       proyecto: metadata.proyecto || 'Transcripciones Automáticas',
       project_id: metadata.project_id || null,
-      storage_path: storagePath,
-      url: null, // No hay URL pública para transcripciones
-      nombre_archivo: transcriptionFileName,
-      tamano: JSON.stringify(transcriptionData).length,
+      storage_path: null, // No necesitamos storage para transcripciones
+      url: null,
+      nombre_archivo: `${originalFileName}.transcripcion.txt`,
+      tamano: transcriptionResult.transcription.length,
       fecha: new Date().toISOString().split('T')[0],
-      // Metadatos específicos de transcripción en descripcion
-      descripcion: `${transcriptionResult.transcription.substring(0, 200)}${transcriptionResult.transcription.length > 200 ? '...' : ''}`
+      // CLAVE: Guardar la transcripción en la columna específica
+      audio_transcription: transcriptionResult.transcription
     };
+    
+    console.log(`📝 Creando registro con transcripción de ${transcriptionResult.transcription.length} caracteres...`);
     
     const { data: codexData, error: codexError } = await supabase
       .from('codex_items')
@@ -243,15 +217,17 @@ async function saveTranscriptionToCodex(transcriptionResult, originalFilePath, u
       .single();
     
     if (codexError) {
+      console.error('❌ Error insertando en codex_items:', codexError);
       throw codexError;
     }
     
     console.log(`✅ Registro creado en codex_items: ${codexData.id}`);
+    console.log(`📊 Transcripción guardada: ${transcriptionResult.metadata.wordsCount} palabras, ${transcriptionResult.metadata.charactersCount} caracteres`);
     
     return {
       codexItem: codexData,
       transcriptionResult: transcriptionResult,
-      storagePath: storagePath
+      storagePath: null // No se usa storage
     };
     
   } catch (error) {
