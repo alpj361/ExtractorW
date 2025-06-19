@@ -93,89 +93,81 @@ const debitCredits = async (req, res, next) => {
  */
 async function handleCreditDebit(data, req, responseType) {
   try {
-    // Evitar doble registro cuando res.json llama internamente a res.send
     if (req.usage_logged) {
       return; // Ya se registró un log para esta petición
     }
-    // Marcar inmediatamente para evitar carrera antes de await
-    req.usage_logged = true;
 
-    if (this.statusCode >= 200 && this.statusCode < 300) {
-      const user = req.user;
-      const operation = req.path.replace('/api/', '');
+    const user = req.user;
+    const operation = req.path.replace('/api/', '');
 
-      // Verificar si la operación requiere créditos
-      const isFreeOperation = FREE_OPERATIONS.some(freeOp => operation.includes(freeOp));
+    // Verificar si la operación requiere créditos
+    const isFreeOperation = FREE_OPERATIONS.some(freeOp => operation.includes(freeOp));
+    
+    if (isFreeOperation) {
+      console.log(`🆓 Operación gratuita: ${operation}`);
+      // Registrar uso sin consumo de créditos
+      await logUsage(user, req.path, 0, req);
+      req.usage_logged = true;
+      return;
+    }
+
+    // Calcular costo real basado en la respuesta según el endpoint
+    let finalCost = 0;
+    let tokensEstimados = 0;
+    
+    if (operation === 'sondeo') {
+      // Para sondeos, usar el costo que se calculó en el endpoint
+      // Si está disponible en req.calculatedCost, usarlo, sino usar el mínimo
+      finalCost = req.calculatedCost || CREDIT_COSTS['sondeo'].min;
       
-      if (isFreeOperation) {
-        console.log(`🆓 Operación gratuita: ${operation}`);
-        // Registrar uso sin consumo de créditos
-        if (!req.usage_logged) {
-          req.tokens_consumed = req.tokens_consumed || 0;
-          req.dollars_consumed = req.dollars_consumed || 0;
-          await logUsage(user, req.path, 0, req);
-          req.usage_logged = true;
-        }
-        return;
-      }
-
-      // Calcular costo real basado en la respuesta según el endpoint
-      let finalCost = 0;
-      let tokensEstimados = 0;
-      
-      if (operation === 'sondeo') {
-        // Para sondeos, usar el costo que se calculó en el endpoint
-        // Si está disponible en req.calculatedCost, usarlo, sino usar el mínimo
-        finalCost = req.calculatedCost || CREDIT_COSTS['sondeo'].min;
+      // Estimar tokens usados si hay información disponible
+      if (req.body && req.body.pregunta) {
+        const promptSize = (req.body.pregunta?.length || 0) + 1000; // Estimación base
+        tokensEstimados = Math.ceil(promptSize / 4); // ~4 caracteres por token
         
-        // Estimar tokens usados si hay información disponible
-        if (req.body && req.body.pregunta) {
-          const promptSize = (req.body.pregunta?.length || 0) + 1000; // Estimación base
-          tokensEstimados = Math.ceil(promptSize / 4); // ~4 caracteres por token
-          
-          console.log(`📊 Sondeo: Costo calculado ${finalCost} créditos, aprox. ${tokensEstimados} tokens`);
-          
-          // Guardar info de tokens en request para logs
-          req.tokens_estimados = tokensEstimados;
-        }
+        console.log(`📊 Sondeo: Costo calculado ${finalCost} créditos, aprox. ${tokensEstimados} tokens`);
+        
+        // Guardar info de tokens en request para logs
+        req.tokens_estimados = tokensEstimados;
+      }
+    } else {
+      // Para otras operaciones, usar costo fijo
+      const operationCost = CREDIT_COSTS[operation];
+      if (typeof operationCost === 'object') {
+        finalCost = operationCost.min;
       } else {
-        // Para otras operaciones, usar costo fijo
-        const operationCost = CREDIT_COSTS[operation];
-        if (typeof operationCost === 'object') {
-          finalCost = operationCost.min;
-        } else {
-          finalCost = operationCost || 1;
+        finalCost = operationCost || 1;
+      }
+    }
+
+    // SIEMPRE registrar log de uso (tanto para admin como usuarios normales)
+    await logUsage(user, req.path, finalCost, req);
+    req.usage_logged = true; // marcar después de registrar
+
+    // Solo debitar créditos si NO es admin y la operación tiene costo
+    if (user.profile.role !== 'admin' && finalCost > 0) {
+      console.log(`💳 Debitando ${finalCost} créditos de ${user.profile.email}`);
+
+      // Debitar créditos en la base de datos
+      const { data: updateResult, error } = await supabase
+        .from('profiles')
+        .update({ credits: user.profile.credits - finalCost })
+        .eq('id', user.id)
+        .select('credits')
+        .single();
+
+      if (error) {
+        console.error('❌ Error debitando créditos:', error);
+      } else {
+        console.log(`✅ Créditos debitados. Nuevo saldo: ${updateResult.credits}`);
+
+        // Verificar si necesita alerta de créditos bajos
+        if (updateResult.credits <= 10 && updateResult.credits > 0) {
+          console.log(`⚠️  Alerta: Usuario ${user.profile.email} tiene ${updateResult.credits} créditos restantes`);
         }
       }
-
-      // SIEMPRE registrar log de uso (tanto para admin como usuarios normales)
-      await logUsage(user, req.path, finalCost, req);
-
-      // Solo debitar créditos si NO es admin y la operación tiene costo
-      if (user.profile.role !== 'admin' && finalCost > 0) {
-        console.log(`💳 Debitando ${finalCost} créditos de ${user.profile.email}`);
-
-        // Debitar créditos en la base de datos
-        const { data: updateResult, error } = await supabase
-          .from('profiles')
-          .update({ credits: user.profile.credits - finalCost })
-          .eq('id', user.id)
-          .select('credits')
-          .single();
-
-        if (error) {
-          console.error('❌ Error debitando créditos:', error);
-        } else {
-          console.log(`✅ Créditos debitados. Nuevo saldo: ${updateResult.credits}`);
-
-          // Verificar si necesita alerta de créditos bajos
-          if (updateResult.credits <= 10 && updateResult.credits > 0) {
-            console.log(`⚠️  Alerta: Usuario ${user.profile.email} tiene ${updateResult.credits} créditos restantes`);
-          }
-        }
-      } else if (user.profile.role === 'admin') {
-        console.log(`👑 Admin ${user.profile.email} ejecutó ${req.path} - Log registrado, sin débito de créditos`);
-      }
+    } else if (user.profile.role === 'admin') {
+      console.log(`👑 Admin ${user.profile.email} ejecutó ${req.path} - Log registrado, sin débito de créditos`);
     }
   } catch (error) {
     console.error('❌ Error en handleCreditDebit:', error);
