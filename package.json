@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "@sentry/node": "^9.30.0",
     "@supabase/supabase-js": "^2.49.7",
     "cheerio": "^1.0.0",
     "cors": "^2.8.5",

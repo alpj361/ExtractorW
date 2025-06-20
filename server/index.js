@@ -1,3 +1,6 @@
+// Import Sentry first - must be before any other imports
+const Sentry = require('../instrument');
+
 const express = require('express');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
@@ -6,6 +9,12 @@ const { setupMiddlewares } = require('./middlewares');
 
 // Inicializar la aplicación Express
 const app = express();
+
+// The request handler must be the first middleware on the app
+app.use(Sentry.requestHandler());
+
+// The tracing middleware should be after Sentry request handler
+app.use(Sentry.tracingHandler());
 
 // Permitir orígenes adicionales definidos por variable de entorno (ALLOWED_ORIGINS)
 // Separados por coma, por ejemplo: "https://jornal.standatpd.com,https://pulsej.standatpd.com"
@@ -42,6 +51,18 @@ setupMiddlewares(app);
 
 // Configurar rutas
 setupRoutes(app);
+
+// The error handler must be registered before any other error middleware and after all controllers
+app.use(Sentry.errorHandler());
+
+// Optional fallthrough error handler
+app.use(function onError(err, req, res, next) {
+  // The error id is attached to `res.sentry` to be returned
+  // and optionally displayed to the user for support.
+  console.error('❌ Error no manejado:', err);
+  res.statusCode = 500;
+  res.end(res.sentry + "\n");
+});
 
 // Registrar proceso y errores
 process.on('uncaughtException', (error) => {
