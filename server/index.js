@@ -11,10 +11,10 @@ const { setupMiddlewares } = require('./middlewares');
 const app = express();
 
 // The request handler must be the first middleware on the app
-app.use(Sentry.requestHandler());
+app.use(Sentry.Handlers.requestHandler());
 
 // The tracing middleware should be after Sentry request handler
-app.use(Sentry.tracingHandler());
+app.use(Sentry.Handlers.tracingHandler());
 
 // Permitir orígenes adicionales definidos por variable de entorno (ALLOWED_ORIGINS)
 // Separados por coma, por ejemplo: "https://jornal.standatpd.com,https://pulsej.standatpd.com"
@@ -53,7 +53,7 @@ setupMiddlewares(app);
 setupRoutes(app);
 
 // The error handler must be registered before any other error middleware and after all controllers
-app.use(Sentry.errorHandler());
+app.use(Sentry.Handlers.errorHandler());
 
 // Optional fallthrough error handler
 app.use(function onError(err, req, res, next) {

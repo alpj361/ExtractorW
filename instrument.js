@@ -14,17 +14,6 @@ Sentry.init({
   // Release and Environment
   environment: process.env.NODE_ENV || 'development',
   
-  // Integrations
-  integrations: [
-    // Express integration
-    Sentry.expressIntegration(),
-    // HTTP integration
-    Sentry.httpIntegration(),
-    // Node.js specific integrations
-    Sentry.onUncaughtExceptionIntegration(),
-    Sentry.onUnhandledRejectionIntegration(),
-  ],
-
   // Error filtering
   beforeSend(event) {
     // Don't send events in development unless explicitly enabled
