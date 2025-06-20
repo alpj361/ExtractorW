@@ -1,7 +1,7 @@
 const { verifyUserAccess, debitCredits } = require('../middlewares');
 const { processWithPerplexityIndividual, generateStatistics } = require('../services/perplexity');
 const { detectarCategoria } = require('../services/categorization');
-const { logError } = require('../services/logs');
+const { logError, logUsage } = require('../services/logs');
 const supabase = require('../utils/supabase');
 
 /**
@@ -158,7 +158,7 @@ function setupTrendsRoutes(app) {
   });
   
   // Endpoint para procesar tendencias
-  app.post('/api/processTrends', verifyUserAccess, debitCredits, async (req, res) => {
+  app.post('/api/processTrends', verifyUserAccess, async (req, res) => {
     console.time('procesamiento-total');
     try {
       const startTime = Date.now();
@@ -420,6 +420,37 @@ function setupTrendsRoutes(app) {
       }
       
       console.timeEnd('procesamiento-basico');
+      
+      // MANEJO MANUAL DE CRÉDITOS Y LOGGING
+      const creditCost = 3; // Costo fijo para processTrends
+      
+      try {
+        // SIEMPRE registrar log de uso
+        await logUsage(req.user, '/api/processTrends', creditCost, req);
+        
+        // Solo debitar créditos si NO es admin
+        if (req.user.profile.role !== 'admin') {
+          console.log(`💳 Debitando ${creditCost} créditos de ${req.user.profile.email}`);
+          
+          const { data: updateResult, error } = await supabase
+            .from('profiles')
+            .update({ credits: req.user.profile.credits - creditCost })
+            .eq('id', req.user.id)
+            .select('credits')
+            .single();
+
+          if (error) {
+            console.error('❌ Error debitando créditos:', error);
+          } else {
+            console.log(`✅ Créditos debitados. Nuevo saldo: ${updateResult.credits}`);
+          }
+        } else {
+          console.log(`👑 Admin ${req.user.profile.email} ejecutó processTrends - Log registrado, sin débito de créditos`);
+        }
+      } catch (creditError) {
+        console.error('❌ Error en manejo de créditos:', creditError);
+        // No fallar la operación por errores de créditos/logging
+      }
       
       // 3. ENVIAR RESPUESTA CON DATOS BÁSICOS (compatible con frontend)
       res.json({
