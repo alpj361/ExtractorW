@@ -24,4 +24,15 @@ Sentry.init({
   },
 });
 
+// Capture unhandled exceptions and rejections
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  Sentry.captureException(error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection:', reason);
+  Sentry.captureException(reason);
+});
+
 module.exports = Sentry; 
