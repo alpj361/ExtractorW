@@ -76,6 +76,30 @@ async function extractCapturadoCards(transcription) {
   }
 }
 
+function isValidISODate(dateStr) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(dateStr) && !isNaN(Date.parse(dateStr));
+}
+
+// Ensure cards fields are clean
+function sanitizeCard(card) {
+  const sanitized = { ...card };
+  // start_date
+  if (sanitized.start_date && !isValidISODate(sanitized.start_date)) {
+    sanitized.start_date = null;
+  }
+  // amount numeric
+  if (sanitized.amount !== null && sanitized.amount !== undefined) {
+    const num = Number(sanitized.amount);
+    sanitized.amount = isNaN(num) ? null : num;
+  }
+  // duration_days numeric
+  if (sanitized.duration_days !== null && sanitized.duration_days !== undefined) {
+    const num = parseInt(sanitized.duration_days, 10);
+    sanitized.duration_days = isNaN(num) ? null : num;
+  }
+  return sanitized;
+}
+
 /**
  * Crea registros en la tabla capturado_cards a partir de un codex_item.
  * @param {Object} params
@@ -107,11 +131,14 @@ async function createCardsFromCodex({ codexItemId, projectId }) {
   }
 
   // 3. Preparar datos para inserción
-  const insertData = cards.map(card => ({
-    ...card,
-    project_id: projectId,
-    codex_item_id: codexItemId
-  }));
+  const insertData = cards.map(raw => {
+    const card = sanitizeCard(raw);
+    return {
+      ...card,
+      project_id: projectId,
+      codex_item_id: codexItemId
+    };
+  });
 
   const { data: inserted, error: insertError } = await supabase
     .from('capturado_cards')
