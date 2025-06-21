@@ -411,7 +411,7 @@ router.get('/stats', verifyUserAccess, async (req, res) => {
     console.error('❌ Error obteniendo estadísticas de sugerencias:', error);
     res.status(500).json({
       error: 'Error obteniendo estadísticas',
-      details: error.message
+      details: error.message 
     });
   }
 });

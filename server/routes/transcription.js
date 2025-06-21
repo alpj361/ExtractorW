@@ -354,9 +354,9 @@ router.get('/supported-formats', (req, res) => {
  * Obtiene el costo en créditos para transcripción
  */
 router.get('/cost', verifyUserAccess, async (req, res) => {
-  res.json({
-    success: true,
-    data: {
+    res.json({
+      success: true,
+      data: {
       cost: 0,
       description: 'La transcripción de audio/video es ahora gratuita para todos los usuarios'
     }

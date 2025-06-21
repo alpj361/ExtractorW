@@ -4,6 +4,7 @@ const sondeosRoutes = require('./sondeos');
 const projectSuggestionsRoutes = require('./project-suggestions');
 const transcriptionRoutes = require('./transcription');
 const path = require('path');
+const capturadosRoutes = require('./capturados');
 
 /**
  * Configura todas las rutas de la aplicación
@@ -42,6 +43,9 @@ function setupRoutes(app) {
   
   // Configurar rutas de transcripción
   app.use('/api/transcription', transcriptionRoutes);
+  
+  // Configurar rutas de capturados (hallazgos extraídos)
+  app.use('/api/capturados', capturadosRoutes);
 }
 
 module.exports = {
