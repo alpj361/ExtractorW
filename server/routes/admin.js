@@ -7,6 +7,260 @@ const supabase = require('../utils/supabase');
  */
 function setupAdminRoutes(app) {
   
+  // ===================================================================
+  // DASHBOARD PRINCIPAL DE ADMINISTRACIÓN
+  // ===================================================================
+  
+  // Endpoint para obtener datos completos del dashboard de admin
+  app.get('/api/admin/dashboard', verifyUserAccess, async (req, res) => {
+    try {
+      const user = req.user;
+
+      // Verificar que el usuario sea admin
+      if (user.profile.role !== 'admin') {
+        return res.status(403).json({
+          error: 'Acceso denegado',
+          message: 'Solo los administradores pueden acceder a este endpoint'
+        });
+      }
+
+      console.log(`👑 Admin ${user.profile.email} consultando dashboard`);
+
+      if (!supabase) {
+        return res.status(503).json({
+          error: 'Base de datos no configurada',
+          message: 'Supabase no está disponible'
+        });
+      }
+
+      // 1. ESTADÍSTICAS GENERALES DEL SISTEMA
+      console.log('📊 Obteniendo estadísticas generales...');
+
+      // Total de usuarios
+      const { data: totalUsersData, error: usersError } = await supabase
+        .from('profiles')
+        .select('id', { count: 'exact' });
+
+      if (usersError) {
+        console.error('Error obteniendo total de usuarios:', usersError);
+      }
+
+      // Total de créditos en el sistema
+      const { data: creditsData, error: creditsError } = await supabase
+        .from('profiles')
+        .select('credits')
+        .neq('role', 'admin'); // Excluir admins
+
+      let totalCredits = 0;
+      let avgCredits = 0;
+      if (!creditsError && creditsData) {
+        totalCredits = creditsData.reduce((sum, user) => sum + (user.credits || 0), 0);
+        avgCredits = creditsData.length > 0 ? Math.round(totalCredits / creditsData.length) : 0;
+      }
+
+      // Estadísticas de logs (últimos 30 días)
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+      const { data: logsData, error: logsError } = await supabase
+        .from('usage_logs')
+        .select('credits_consumed, operation, timestamp')
+        .gte('timestamp', thirtyDaysAgo.toISOString());
+
+      let totalOperations = 0;
+      let totalCreditsConsumed = 0;
+      let operationStats = {};
+
+      if (!logsError && logsData) {
+        totalOperations = logsData.length;
+        totalCreditsConsumed = logsData.reduce((sum, log) => sum + (log.credits_consumed || 0), 0);
+
+        // Estadísticas por operación
+        logsData.forEach(log => {
+          const op = log.operation;
+          if (!operationStats[op]) {
+            operationStats[op] = { count: 0, credits: 0 };
+          }
+          operationStats[op].count++;
+          operationStats[op].credits += log.credits_consumed || 0;
+        });
+      }
+
+      // 2. LISTA DE USUARIOS CON CRÉDITOS
+      console.log('👥 Obteniendo lista de usuarios...');
+      const { data: usersData, error: usersListError } = await supabase
+        .from('profiles')
+        .select('id, email, user_type, role, credits, created_at')
+        .order('credits', { ascending: false });
+
+      let usersList = [];
+      let lowCreditUsers = [];
+
+      if (!usersListError && usersData) {
+        usersList = usersData.map(user => ({
+          id: user.id,
+          email: user.email,
+          user_type: user.user_type,
+          role: user.role,
+          credits: user.role === 'admin' ? 'ilimitado' : user.credits,
+          credits_numeric: user.role === 'admin' ? null : user.credits,
+          created_at: user.created_at,
+          is_low_credits: user.role !== 'admin' && user.credits <= 10
+        }));
+
+        lowCreditUsers = usersData
+          .filter(user => user.role !== 'admin' && user.credits <= 10)
+          .map(user => ({
+            email: user.email,
+            credits: user.credits,
+            user_type: user.user_type
+          }));
+      }
+
+      // 3. LOGS RECIENTES (últimos 20)
+      console.log('📋 Obteniendo logs recientes...');
+      const { data: recentLogs, error: recentLogsError } = await supabase
+        .from('usage_logs')
+        .select('user_email, operation, credits_consumed, timestamp, ip_address, response_time')
+        .order('timestamp', { ascending: false })
+        .limit(20);
+
+      // 4. MÉTRICAS DE USO POR DÍA (últimos 7 días)
+      console.log('📈 Calculando métricas diarias...');
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+      const { data: dailyLogs, error: dailyLogsError } = await supabase
+        .from('usage_logs')
+        .select('timestamp, credits_consumed, operation')
+        .gte('timestamp', sevenDaysAgo.toISOString());
+
+      let dailyMetrics = {};
+
+      if (!dailyLogsError && dailyLogs) {
+        // Inicializar últimos 7 días
+        for (let i = 6; i >= 0; i--) {
+          const date = new Date();
+          date.setDate(date.getDate() - i);
+          const dateKey = date.toISOString().split('T')[0];
+          dailyMetrics[dateKey] = { operations: 0, credits: 0 };
+        }
+
+        // Llenar con datos reales
+        dailyLogs.forEach(log => {
+          const dateKey = log.timestamp.split('T')[0];
+          if (dailyMetrics[dateKey]) {
+            dailyMetrics[dateKey].operations++;
+            dailyMetrics[dateKey].credits += log.credits_consumed || 0;
+          }
+        });
+      }
+
+      // 5. TOP USUARIOS POR CONSUMO (últimos 30 días)
+      console.log('🏆 Calculando top usuarios...');
+      let topUsers = [];
+
+      if (!logsError && logsData) {
+        const userConsumption = {};
+        logsData.forEach(log => {
+          const email = log.user_email;
+          if (!userConsumption[email]) {
+            userConsumption[email] = { operations: 0, credits: 0 };
+          }
+          userConsumption[email].operations++;
+          userConsumption[email].credits += log.credits_consumed || 0;
+        });
+
+        topUsers = Object.entries(userConsumption)
+          .map(([email, stats]) => ({ email, ...stats }))
+          .sort((a, b) => b.credits - a.credits)
+          .slice(0, 10);
+      }
+
+      // 6. DISTRIBUCIÓN POR TIPO DE USUARIO
+      console.log('📊 Calculando distribución de usuarios...');
+      let userTypeDistribution = {};
+
+      if (!usersListError && usersData) {
+        usersData.forEach(user => {
+          const type = user.user_type || 'Unknown';
+          if (!userTypeDistribution[type]) {
+            userTypeDistribution[type] = 0;
+          }
+          userTypeDistribution[type]++;
+        });
+      }
+
+      // RESPUESTA COMPLETA
+      const dashboardData = {
+        // Estadísticas generales
+        general_stats: {
+          total_users: totalUsersData?.length || 0,
+          total_credits_in_system: totalCredits,
+          average_credits_per_user: avgCredits,
+          total_operations_30d: totalOperations,
+          total_credits_consumed_30d: totalCreditsConsumed,
+          low_credit_users_count: lowCreditUsers.length
+        },
+
+        // Estadísticas por operación
+        operation_stats: Object.entries(operationStats).map(([operation, stats]) => ({
+          operation,
+          count: stats.count,
+          credits_consumed: stats.credits,
+          avg_credits_per_operation: stats.count > 0 ? Math.round(stats.credits / stats.count) : 0
+        })),
+
+        // Lista de usuarios
+        users: usersList,
+
+        // Usuarios con créditos bajos
+        low_credit_users: lowCreditUsers,
+
+        // Logs recientes
+        recent_logs: recentLogs || [],
+
+        // Métricas diarias
+        daily_metrics: Object.entries(dailyMetrics).map(([date, metrics]) => ({
+          date,
+          operations: metrics.operations,
+          credits_consumed: metrics.credits
+        })),
+
+        // Top usuarios por consumo
+        top_users_by_consumption: topUsers,
+
+        // Distribución por tipo de usuario
+        user_type_distribution: Object.entries(userTypeDistribution).map(([user_type, count]) => ({
+          user_type,
+          count
+        })),
+
+        // Metadatos
+        metadata: {
+          timestamp: new Date().toISOString(),
+          admin_user: user.profile.email,
+          data_period: '30 días',
+          total_endpoints_with_credits: Object.keys(operationStats).length
+        }
+      };
+
+      console.log(`✅ Dashboard data generado para ${user.profile.email}`);
+      res.json(dashboardData);
+
+    } catch (error) {
+      console.error('❌ Error generando dashboard de admin:', error);
+      res.status(500).json({
+        error: 'Error interno generando dashboard',
+        message: error.message
+      });
+    }
+  });
+  
+  // ===================================================================
+  // LOGS Y DIAGNÓSTICOS
+  // ===================================================================
+  
   // Endpoint para diagnóstico de logs
   app.get('/api/admin/logs/diagnose', verifyUserAccess, async (req, res) => {
     try {
