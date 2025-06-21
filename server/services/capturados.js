@@ -152,6 +152,45 @@ async function createCardsFromCodex({ codexItemId, projectId }) {
   return inserted;
 }
 
+/**
+ * Procesa todos los codex_items de audio/video con transcripción que aún no tengan capturado_cards
+ * @param {string} projectId
+ */
+async function bulkCreateCardsForProject(projectId) {
+  // 1. Obtener ids ya capturados
+  const { data: rowsCaptured, error: errorCaptured } = await supabase
+    .from('capturado_cards')
+    .select('codex_item_id')
+    .eq('project_id', projectId);
+  if (errorCaptured) throw errorCaptured;
+  const capturedIds = (rowsCaptured || []).map(r => r.codex_item_id);
+
+  // 2. Obtener codex_items pendientes
+  let query = supabase
+    .from('codex_items')
+    .select('id')
+    .eq('project_id', projectId)
+    .not('audio_transcription', 'is', null)
+    .in('tipo', ['audio','video']);
+  if (capturedIds.length > 0) query = query.not('id', 'in', `(${capturedIds.join(',')})`);
+  const { data: pendingItems, error: errorPending } = await query;
+  if (errorPending) throw errorPending;
+
+  let totalCards = 0;
+  const processed = [];
+  for (const item of pendingItems) {
+    try {
+      const cards = await createCardsFromCodex({ codexItemId: item.id, projectId });
+      totalCards += cards.length;
+      processed.push({ codex_item_id: item.id, cards_created: cards.length });
+    } catch (err) {
+      console.error('Error bulk capturados en item', item.id, err.message);
+    }
+  }
+  return { processed_count: processed.length, total_cards: totalCards, details: processed };
+}
+
 module.exports = {
-  createCardsFromCodex
+  createCardsFromCodex,
+  bulkCreateCardsForProject
 }; 

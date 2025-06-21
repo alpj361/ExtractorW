@@ -95,4 +95,27 @@ router.get('/', verifyUserAccess, async (req, res) => {
   }
 });
 
+// =============== BULK EXTRACTION ===============
+router.post('/bulk', verifyUserAccess, async (req, res) => {
+  const { project_id } = req.body || {};
+
+  if (!project_id) {
+    return res.status(400).json({ error: 'Parámetro faltante', message: 'project_id requerido' });
+  }
+
+  try {
+    const { bulkCreateCardsForProject } = require('../services/capturados');
+    const summary = await bulkCreateCardsForProject(project_id);
+
+    await logUsage(req.user, '/api/capturados/bulk', 0, req);
+    req.usage_logged = true;
+
+    res.json({ success: true, ...summary });
+  } catch (error) {
+    console.error('Error bulk capturados:', error);
+    await logError('/api/capturados/bulk', error, req.user, req);
+    res.status(500).json({ error: 'Error interno', message: error.message });
+  }
+});
+
 module.exports = router; 
