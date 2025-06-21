@@ -328,13 +328,13 @@ function setupAdminRoutes(app) {
         let sysQuery = supabase
           .from('system_execution_logs')
           .select('*')
-          .order('timestamp', { ascending: false });
+          .order('started_at', { ascending: false });
 
         if (days && days !== '0') {
-          sysQuery = sysQuery.gte('timestamp', daysAgo.toISOString());
+          sysQuery = sysQuery.gte('started_at', daysAgo.toISOString());
         }
         if (operation && operation !== 'all') {
-          sysQuery = sysQuery.eq('operation', operation);
+          sysQuery = sysQuery.eq('script_name', operation);
         }
 
         const { data: sysLogs, error: sysError } = await sysQuery;
@@ -350,8 +350,8 @@ function setupAdminRoutes(app) {
             log_type: 'system',
             source_table: 'system_execution_logs',
             is_system: true,
-            is_success: log.is_success !== false,
-            formatted_time: new Date(log.timestamp || log.created_at).toLocaleString('es-ES', { timeZone: 'America/Guatemala' })
+            is_success: log.status === 'completed',
+            formatted_time: new Date(log.started_at || log.created_at).toLocaleString('es-ES', { timeZone: 'America/Guatemala' })
           }));
           allLogs = allLogs.concat(mappedSys);
         }
