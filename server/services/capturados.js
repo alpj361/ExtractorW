@@ -168,10 +168,9 @@ async function bulkCreateCardsForProject(projectId) {
   // 2. Obtener codex_items pendientes
   let query = supabase
     .from('codex_items')
-    .select('id')
+    .select('id, tipo')
     .eq('project_id', projectId)
-    .not('audio_transcription', 'is', null)
-    .in('tipo', ['audio','video']);
+    .not('audio_transcription', 'is', null);
   if (capturedIds.length > 0) query = query.not('id', 'in', `(${capturedIds.join(',')})`);
   const { data: pendingItems, error: errorPending } = await query;
   if (errorPending) throw errorPending;
