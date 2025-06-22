@@ -118,4 +118,62 @@ router.post('/bulk', verifyUserAccess, async (req, res) => {
   }
 });
 
+/**
+ * DELETE /api/capturados/:id
+ * Elimina una tarjeta capturado específica por ID
+ */
+router.delete('/:id', verifyUserAccess, async (req, res) => {
+  const { id } = req.params;
+
+  if (!id) {
+    return res.status(400).json({
+      error: 'Parámetro faltante',
+      message: 'Se requiere el ID de la tarjeta capturado'
+    });
+  }
+
+  try {
+    // Verificar que la tarjeta existe y pertenece a un proyecto del usuario
+    const { data: card, error: fetchError } = await supabase
+      .from('capturado_cards')
+      .select('id, project_id')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !card) {
+      return res.status(404).json({
+        error: 'Tarjeta no encontrada',
+        message: 'La tarjeta capturado no existe o no tienes acceso a ella'
+      });
+    }
+
+    // Eliminar la tarjeta
+    const { error: deleteError } = await supabase
+      .from('capturado_cards')
+      .delete()
+      .eq('id', id);
+
+    if (deleteError) {
+      throw deleteError;
+    }
+
+    // Log de la operación
+    await logUsage(req.user, '/api/capturados/delete', 0, req);
+    req.usage_logged = true;
+
+    return res.json({
+      success: true,
+      message: 'Tarjeta eliminada exitosamente',
+      deleted_id: id
+    });
+  } catch (error) {
+    console.error('❌ Error en DELETE /capturados:', error);
+    await logError('/api/capturados/delete', error, req.user, req);
+    return res.status(500).json({
+      error: 'Error interno',
+      message: error.message || 'Error eliminando tarjeta capturado'
+    });
+  }
+});
+
 module.exports = router; 
