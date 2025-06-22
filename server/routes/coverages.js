@@ -4,7 +4,7 @@
 // ===================================================================
 
 const express = require('express');
-const { supabase } = require('../utils/supabase');
+const supabase = require('../utils/supabase');
 const { verifyUserAccess } = require('../middlewares/auth');
 const { logUsage } = require('../services/logs');
 
