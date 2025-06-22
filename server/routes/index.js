@@ -5,6 +5,7 @@ const projectSuggestionsRoutes = require('./project-suggestions');
 const transcriptionRoutes = require('./transcription');
 const path = require('path');
 const capturadosRoutes = require('./capturados');
+const coveragesRoutes = require('./coverages');
 
 /**
  * Configura todas las rutas de la aplicación
@@ -46,6 +47,9 @@ function setupRoutes(app) {
   
   // Configurar rutas de capturados (hallazgos extraídos)
   app.use('/api/capturados', capturadosRoutes);
+  
+  // Configurar rutas de coberturas geográficas
+  app.use('/api/coverages', coveragesRoutes);
 }
 
 module.exports = {
