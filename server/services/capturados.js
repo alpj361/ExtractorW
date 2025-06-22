@@ -16,28 +16,67 @@ if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
 }
 
 /**
- * Genera un prompt estructurado para extraer tarjetas de hallazgos ("capturados")
- * desde la transcripción de audio.
+ * Genera un prompt estructurado para extraer tarjetas de información relevante ("capturados")
+ * desde la transcripción de audio, adaptándose automáticamente al tipo de contenido.
  * @param {string} transcription - Texto completo de la transcripción
  */
 function buildPrompt(transcription) {
-  return `Eres un sistema experto en análisis de transcripciones de audios de investigaciones sobre contrataciones públicas en Guatemala. Analiza la siguiente transcripción en español y EXTRAERÁS TODA la información sobre hallazgos que implique posible corrupción (llamados \"capturados\").
+  return `Eres un sistema experto en análisis de transcripciones de contenido en español. Analiza la siguiente transcripción y DETECTA automáticamente el tipo de contenido, luego EXTRAE TODA la información relevante según el contexto identificado.
 
-1. Devuelve la respuesta **exclusivamente** como un ARRAY JSON. **No** incluyas comentarios, claves adicionales ni formateo Markdown.
-2. Cada elemento del array debe tener **exactamente** estas claves (usa null si no se encontró valor):
-   - entity (string)
-   - amount (number)
-   - currency (string)
-   - city (string)
-   - department (string)
-   - discovery (string)
-   - source (string)
-   - start_date (string, formato YYYY-MM-DD o null)
-   - duration_days (number)
-   - description (string)
-3. La clave **source** debe ser un extracto máximo de 120 caracteres que cite la parte de la transcripción donde se menciona el hallazgo.
-4. La clave **description** es un resumen conciso (\u2264 150 caracteres).
-5. Si no hay capturados, devuelve un array vacío [].
+TIPOS DE CONTENIDO Y QUÉ EXTRAER:
+
+🔍 INVESTIGATIVO (casos, auditorías, investigaciones):
+- Hallazgos, irregularidades, problemas detectados
+- Corrupción, malversación, mala gestión
+- Proyectos fallidos, gastos excesivos
+- Evidencias, testimonios, datos comprometedores
+
+📰 INFORMATIVO (noticias, reportes, datos):
+- Eventos importantes, anuncios, declaraciones
+- Estadísticas, cifras, datos relevantes
+- Cambios, nuevas políticas, decisiones
+- Hechos verificables y fechas importantes
+
+📚 EDUCATIVO (tutoriales, explicaciones, capacitaciones):
+- Conceptos clave, definiciones importantes
+- Procesos, metodologías, pasos a seguir
+- Herramientas, recursos, recomendaciones
+- Lecciones aprendidas, mejores prácticas
+
+💼 COMERCIAL (productos, servicios, ventas):
+- Productos/servicios mencionados, precios
+- Ofertas, promociones, descuentos
+- Empresas, marcas, contactos
+- Oportunidades de negocio, inversiones
+
+👤 PERSONAL (experiencias, opiniones, historias):
+- Experiencias significativas, anécdotas
+- Opiniones importantes, recomendaciones
+- Logros, fracasos, lecciones de vida
+- Contactos, relaciones, colaboraciones
+
+INSTRUCCIONES:
+1. DETECTA automáticamente el tipo de contenido predominante
+2. ADAPTA la extracción según el contexto identificado
+3. EXTRAE información específica y relevante para ese tipo
+4. Si hay múltiples tipos, incluye información de todos
+
+FORMATO DE RESPUESTA:
+Devuelve **exclusivamente** un ARRAY JSON. **No** incluyas comentarios ni formateo Markdown.
+
+Cada elemento debe tener **exactamente** estas claves (usa null si no aplica):
+- entity (string) - Persona, institución, empresa o entidad mencionada
+- amount (number) - Cantidad de dinero, precio, costo o cifra numérica relevante
+- currency (string) - Moneda si aplica (ej: "GTQ", "USD", "EUR")
+- city (string) - Ciudad, lugar o ubicación mencionada
+- department (string) - Departamento, área, región o categoría
+- discovery (string) - Tipo de hallazgo, información o dato extraído
+- source (string) - Extracto de máximo 120 caracteres de la transcripción
+- start_date (string) - Fecha mencionada en formato YYYY-MM-DD o null
+- duration_days (number) - Duración en días si se menciona
+- description (string) - Resumen conciso del punto extraído (≤ 150 caracteres)
+
+Si no hay información relevante que extraer, devuelve un array vacío [].
 
 TRANSCRIPCIÓN A ANALIZAR:
 """
@@ -157,6 +196,8 @@ async function createCardsFromCodex({ codexItemId, projectId }) {
  * @param {string} projectId
  */
 async function bulkCreateCardsForProject(projectId) {
+  console.log(`🔍 Iniciando bulk processing para proyecto: ${projectId}`);
+  
   // 1. Obtener ids ya capturados
   const { data: rowsCaptured, error: errorCaptured } = await supabase
     .from('capturado_cards')
@@ -164,28 +205,74 @@ async function bulkCreateCardsForProject(projectId) {
     .eq('project_id', projectId);
   if (errorCaptured) throw errorCaptured;
   const capturedIds = (rowsCaptured || []).map(r => r.codex_item_id);
+  console.log(`📋 Items ya capturados: ${capturedIds.length}`);
 
   // 2. Obtener codex_items pendientes
-  let query = supabase
+  console.log('🔍 Buscando items con transcripción...');
+  const { data: allItems, error: errorAllItems } = await supabase
     .from('codex_items')
-    .select('id, tipo')
+    .select('id, tipo, titulo')
     .eq('project_id', projectId)
     .not('audio_transcription', 'is', null);
-  if (capturedIds.length > 0) query = query.not('id', 'in', `(${capturedIds.join(',')})`);
-  const { data: pendingItems, error: errorPending } = await query;
-  if (errorPending) throw errorPending;
+  
+  if (errorAllItems) {
+    console.error('❌ Error obteniendo todos los items:', errorAllItems);
+    throw errorAllItems;
+  }
+  
+  console.log(`📋 Todos los items con transcripción: ${allItems?.length || 0}`);
+  if (allItems && allItems.length > 0) {
+    console.log('📝 Items encontrados:');
+    allItems.forEach(item => {
+      console.log(`   - ${item.id} | ${item.titulo} | ${item.tipo}`);
+    });
+  }
+  
+  // También buscar específicamente videos para debug
+  console.log('🎥 Verificando items de video específicamente...');
+  const { data: videoItems, error: videoError } = await supabase
+    .from('codex_items')
+    .select('id, tipo, titulo')
+    .eq('project_id', projectId)
+    .eq('tipo', 'video');
+  
+  if (!videoError && videoItems) {
+    console.log(`📹 Videos en el proyecto: ${videoItems.length}`);
+    videoItems.forEach(item => {
+      console.log(`   - ${item.id} | ${item.titulo} | ${item.tipo}`);
+    });
+  }
+  
+  // Filtrar items que no han sido procesados
+  const pendingItems = (allItems || []).filter(item => !capturedIds.includes(item.id));
+  const errorPending = null; // No hay error ya que filtramos en memoria
+  if (errorPending) {
+    console.error('❌ Error obteniendo items pendientes:', errorPending);
+    throw errorPending;
+  }
+  
+  console.log(`📝 Items pendientes encontrados: ${pendingItems?.length || 0}`);
+  if (pendingItems?.length > 0) {
+    console.log('📋 Items a procesar:', pendingItems.map(item => `${item.id} (${item.tipo})`));
+  }
 
   let totalCards = 0;
   const processed = [];
-  for (const item of pendingItems) {
+  for (const item of pendingItems || []) {
     try {
+      console.log(`⚙️ Procesando item: ${item.id}`);
       const cards = await createCardsFromCodex({ codexItemId: item.id, projectId });
       totalCards += cards.length;
       processed.push({ codex_item_id: item.id, cards_created: cards.length });
+      console.log(`✅ Item ${item.id} procesado: ${cards.length} cards creadas`);
     } catch (err) {
-      console.error('Error bulk capturados en item', item.id, err.message);
+      console.error('❌ Error bulk capturados en item', item.id, ':', err.message);
+      // Continuar con el siguiente item en lugar de fallar completamente
+      processed.push({ codex_item_id: item.id, cards_created: 0, error: err.message });
     }
   }
+  
+  console.log(`🎯 Procesamiento completado: ${processed.length} items procesados, ${totalCards} cards totales`);
   return { processed_count: processed.length, total_cards: totalCards, details: processed };
 }
 
