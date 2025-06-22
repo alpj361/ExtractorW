@@ -5,7 +5,7 @@
 
 const express = require('express');
 const { supabase } = require('../utils/supabase');
-const { authenticateUser } = require('../middlewares/auth');
+const { verifyUserAccess } = require('../middlewares/auth');
 const { logUsage } = require('../services/logs');
 
 const router = express.Router();
@@ -15,7 +15,7 @@ const router = express.Router();
 // ===================================================================
 
 // GET /api/coverages?project_id=UUID - Obtener coberturas de un proyecto
-router.get('/', authenticateUser, async (req, res) => {
+router.get('/', verifyUserAccess, async (req, res) => {
     try {
         const { project_id, type, status, source } = req.query;
         
@@ -97,7 +97,7 @@ router.get('/', authenticateUser, async (req, res) => {
 });
 
 // POST /api/coverages - Crear nueva cobertura manualmente
-router.post('/', authenticateUser, async (req, res) => {
+router.post('/', verifyUserAccess, async (req, res) => {
     try {
         const {
             project_id,
@@ -209,7 +209,7 @@ router.post('/', authenticateUser, async (req, res) => {
 });
 
 // POST /api/coverages/detect - Detectar coberturas automáticamente desde texto
-router.post('/detect', authenticateUser, async (req, res) => {
+router.post('/detect', verifyUserAccess, async (req, res) => {
     try {
         const {
             project_id,
@@ -309,7 +309,7 @@ router.post('/detect', authenticateUser, async (req, res) => {
 });
 
 // POST /api/coverages/from-card - Crear cobertura desde información de una card
-router.post('/from-card', authenticateUser, async (req, res) => {
+router.post('/from-card', verifyUserAccess, async (req, res) => {
     try {
         const { card_id, project_id } = req.body;
 
@@ -450,7 +450,7 @@ router.post('/from-card', authenticateUser, async (req, res) => {
 });
 
 // PUT /api/coverages/:id - Actualizar cobertura
-router.put('/:id', authenticateUser, async (req, res) => {
+router.put('/:id', verifyUserAccess, async (req, res) => {
     try {
         const { id } = req.params;
         const {
@@ -544,7 +544,7 @@ router.put('/:id', authenticateUser, async (req, res) => {
 });
 
 // DELETE /api/coverages/:id - Eliminar cobertura
-router.delete('/:id', authenticateUser, async (req, res) => {
+router.delete('/:id', verifyUserAccess, async (req, res) => {
     try {
         const { id } = req.params;
 
@@ -611,7 +611,7 @@ router.delete('/:id', authenticateUser, async (req, res) => {
 });
 
 // GET /api/coverages/stats/:project_id - Estadísticas de coberturas de un proyecto
-router.get('/stats/:project_id', authenticateUser, async (req, res) => {
+router.get('/stats/:project_id', verifyUserAccess, async (req, res) => {
     try {
         const { project_id } = req.params;
 
