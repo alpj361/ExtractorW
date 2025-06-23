@@ -279,12 +279,29 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
             headers: { Authorization: `Bearer ${drive_access_token}` }
           });
         } catch (primaryErr) {
-          console.warn('⚠️ Fallo descarga primaria Drive API, intentando enlace uc...', primaryErr.message);
-          const altUrl = `https://drive.google.com/uc?export=download&id=${drive_file_id}`;
-          response = await axios.get(altUrl, {
-            responseType: 'arraybuffer',
-            maxRedirects: 5
-          });
+          // 404 / insuficiente permiso
+          console.warn('⚠️ Descarga directa falló:', primaryErr.response?.status, primaryErr.message);
+          try {
+            // Copiar el archivo a un espacio que pertenezca a la aplicación
+            const copyUrl = `https://www.googleapis.com/drive/v3/files/${drive_file_id}/copy?supportsAllDrives=true`;
+            const copyRes = await axios.post(copyUrl, { name: `copied_${drive_file_id}` }, {
+              headers: { Authorization: `Bearer ${drive_access_token}` }
+            });
+            const newId = copyRes.data.id;
+            console.log('📄 Archivo copiado, nuevo ID:', newId);
+            const newDownload = `https://www.googleapis.com/drive/v3/files/${newId}?alt=media`;
+            response = await axios.get(newDownload, {
+              responseType: 'arraybuffer',
+              headers: { Authorization: `Bearer ${drive_access_token}` }
+            });
+          } catch (copyErr) {
+            console.warn('⚠️ Copia falló, intentando enlace uc...', copyErr.message);
+            const altUrl = `https://drive.google.com/uc?export=download&id=${drive_file_id}`;
+            response = await axios.get(altUrl, {
+              responseType: 'arraybuffer',
+              maxRedirects: 5
+            });
+          }
         }
 
         const ext = path.extname(codexItem.nombre_archivo || '.wav') || '.wav';
