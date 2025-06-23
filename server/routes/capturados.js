@@ -260,4 +260,50 @@ router.put('/:id', verifyUserAccess, async (req, res) => {
   }
 });
 
+/**
+ * DELETE /api/capturados/project/:project_id
+ * Elimina todas las tarjetas capturado asociadas a un proyecto
+ */
+router.delete('/project/:project_id', verifyUserAccess, async (req, res) => {
+  const { project_id } = req.params;
+
+  if (!project_id) {
+    return res.status(400).json({ error: 'Parámetro faltante', message: 'project_id requerido' });
+  }
+
+  try {
+    // Verificar permisos del usuario sobre el proyecto
+    const { data: project, error: projectErr } = await supabase
+      .from('projects')
+      .select('id, user_id, collaborators')
+      .eq('id', project_id)
+      .single();
+
+    if (projectErr || !project) {
+      return res.status(404).json({ error: 'Proyecto no encontrado' });
+    }
+
+    const hasAccess = project.user_id === req.user.id ||
+      (project.collaborators && project.collaborators.includes(req.user.id));
+
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'No tienes permisos' });
+    }
+
+    const { error: delErr } = await supabase
+      .from('capturado_cards')
+      .delete()
+      .eq('project_id', project_id);
+
+    if (delErr) throw delErr;
+
+    await logUsage(req.user, '/api/capturados/project/delete_all', 0, req);
+
+    return res.json({ success: true, message: 'Todos los hallazgos eliminados' });
+  } catch (error) {
+    console.error('Error bulk delete capturados:', error);
+    return res.status(500).json({ error: 'Error interno', message: error.message });
+  }
+});
+
 module.exports = router; 
