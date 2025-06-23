@@ -224,40 +224,80 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
 
     console.log(`✅ Item del Codex encontrado: ${codexItem.titulo}`);
 
-    // Verificar que el item tenga un archivo asociado
-    if (!codexItem.storage_path) {
+    // ------------------------------------------------------------------
+    // Obtener archivo asociado (Supabase Storage o Google Drive)
+    // ------------------------------------------------------------------
+
+    const tempDir = '/tmp/codex-transcriptions';
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    let tempFilePath;
+
+    if (codexItem.storage_path) {
+      // -----------------------------
+      // Archivo en Supabase Storage
+      // -----------------------------
+      const { data: fileData, error: downloadError } = await userSupabase.storage
+        .from('digitalstorage')
+        .download(codexItem.storage_path);
+
+      if (downloadError || !fileData) {
+        console.log(`❌ Error descargando archivo:`, downloadError);
+        return res.status(404).json({
+          success: false,
+          error: 'No se pudo descargar el archivo del Codex',
+          details: downloadError?.message
+        });
+      }
+
+      tempFilePath = path.join(tempDir, `${codexItem.id}_${Date.now()}${path.extname(codexItem.nombre_archivo || 'audio.wav')}`);
+      fs.writeFileSync(tempFilePath, Buffer.from(await fileData.arrayBuffer()));
+
+    } else if (codexItem.is_drive) {
+      // -----------------------------
+      // Archivo en Google Drive
+      // -----------------------------
+      const { drive_file_id, drive_access_token } = req.body;
+
+      if (!drive_file_id || !drive_access_token) {
+        return res.status(400).json({
+          success: false,
+          error: 'Faltan parámetros de Google Drive (drive_file_id o drive_access_token)'
+        });
+      }
+
+      try {
+        console.log(`⬇️ Descargando archivo de Google Drive: ${drive_file_id}`);
+        const axios = require('axios');
+        const downloadUrl = `https://www.googleapis.com/drive/v3/files/${drive_file_id}?alt=media`;
+        const response = await axios.get(downloadUrl, {
+          responseType: 'arraybuffer',
+          headers: { Authorization: `Bearer ${drive_access_token}` }
+        });
+
+        const ext = path.extname(codexItem.nombre_archivo || '.wav') || '.wav';
+        tempFilePath = path.join(tempDir, `${codexItem.id}_${Date.now()}${ext}`);
+        fs.writeFileSync(tempFilePath, response.data);
+        console.log(`✅ Archivo de Drive descargado: ${tempFilePath}`);
+      } catch (driveErr) {
+        console.error('❌ Error descargando desde Google Drive:', driveErr.message);
+        return res.status(500).json({
+          success: false,
+          error: 'No se pudo descargar el archivo desde Google Drive',
+          details: driveErr.message
+        });
+      }
+
+    } else {
       return res.status(400).json({
         success: false,
         error: 'El item del Codex no tiene un archivo asociado'
       });
     }
 
-    // Descargar archivo desde Supabase Storage usando el cliente autenticado
-    const { data: fileData, error: downloadError } = await userSupabase.storage
-      .from('digitalstorage')
-      .download(codexItem.storage_path);
-
-    if (downloadError || !fileData) {
-      console.log(`❌ Error descargando archivo:`, downloadError);
-      return res.status(404).json({
-        success: false,
-        error: 'No se pudo descargar el archivo del Codex',
-        details: downloadError?.message
-      });
-    }
-
-    // Guardar archivo temporalmente
-    const tempDir = '/tmp/codex-transcriptions';
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
-    }
-
-    const safeName = sanitizeFileName(codexItem.nombre_archivo);
-    const tempFilePath = path.join(tempDir, `${Date.now()}_${safeName}`);
-    const buffer = Buffer.from(await fileData.arrayBuffer());
-    fs.writeFileSync(tempFilePath, buffer);
-
-    console.log(`📁 Archivo descargado temporalmente: ${tempFilePath}`);
+    console.log(`�� Archivo descargado a: ${tempFilePath}`);
 
     // Verificar formato de archivo
     const fileType = detectFileType(tempFilePath);
