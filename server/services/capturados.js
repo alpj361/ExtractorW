@@ -65,9 +65,11 @@ FORMATO DE RESPUESTA:
 Devuelve **exclusivamente** un ARRAY JSON. **No** incluyas comentarios ni formateo Markdown.
 
 Cada elemento debe tener **exactamente** estas claves (usa null si no aplica):
+- title (string) - Título corto (≤ 60 caracteres) que describa el hallazgo
 - entity (string) - Persona, institución, empresa o entidad mencionada
-- amount (number) - Cantidad de dinero, precio, costo o cifra numérica relevante
+- amount (number) - Cantidad de dinero relevante. Si la cifra NO es dinero (p.ej. "286 obras"), pon null.
 - currency (string) - Moneda si aplica (ej: "GTQ", "USD", "EUR")
+- item_count (number) - Un conteo de unidades (obras, proyectos, víctimas, etc.). Usa null si no corresponde.
 - city (string) - Ciudad, lugar o ubicación mencionada
 - department (string) - Departamento, área, región o categoría
 - discovery (string) - Tipo de hallazgo, información o dato extraído
@@ -122,6 +124,10 @@ function isValidISODate(dateStr) {
 // Ensure cards fields are clean
 function sanitizeCard(card) {
   const sanitized = { ...card };
+  // title
+  if (!sanitized.title || sanitized.title.trim() === '') {
+    sanitized.title = sanitized.discovery ? sanitized.discovery.slice(0, 60) : null;
+  }
   // start_date
   if (sanitized.start_date && !isValidISODate(sanitized.start_date)) {
     sanitized.start_date = null;
@@ -130,6 +136,15 @@ function sanitizeCard(card) {
   if (sanitized.amount !== null && sanitized.amount !== undefined) {
     const num = Number(sanitized.amount);
     sanitized.amount = isNaN(num) ? null : num;
+  }
+  // item_count derivado de amount cuando no es dinero
+  if (!sanitized.currency && sanitized.amount !== null) {
+    const hintText = `${card.description || ''} ${card.discovery || ''}`.toLowerCase();
+    if (hintText.includes('obra') || hintText.includes('obras') || hintText.includes('proyecto') || hintText.includes('proyectos')) {
+      sanitized.item_count = sanitized.amount;
+      sanitized.amount = null;
+      sanitized.currency = null;
+    }
   }
   // duration_days numeric
   if (sanitized.duration_days !== null && sanitized.duration_days !== undefined) {
