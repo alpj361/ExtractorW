@@ -169,15 +169,31 @@ async function createCardsFromCodex({ codexItemId, projectId }) {
     return [];
   }
 
-  // 3. Preparar datos para inserción
-  const insertData = cards.map(raw => {
-    const card = sanitizeCard(raw);
-    return {
-      ...card,
-      project_id: projectId,
-      codex_item_id: codexItemId
-    };
-  });
+  // 3. Obtener tarjetas existentes para evitar duplicados
+  const { data: existingCards, error: existingErr } = await supabase
+    .from('capturado_cards')
+    .select('*')
+    .eq('codex_item_id', codexItemId);
+
+  if (existingErr) throw new Error(`Error leyendo capturado_cards existentes: ${existingErr.message}`);
+
+  const existingFingerprints = new Set(
+    (existingCards || []).map(c => `${c.entity}|${c.city}|${c.department}|${c.discovery}|${c.description}`)
+  );
+
+  // 4. Preparar datos filtrando duplicados
+  const insertData = cards
+    .map(raw => {
+      const card = sanitizeCard(raw);
+      return {
+        ...card,
+        project_id: projectId,
+        codex_item_id: codexItemId
+      };
+    })
+    .filter(c => !existingFingerprints.has(`${c.entity}|${c.city}|${c.department}|${c.discovery}|${c.description}`));
+
+  if (insertData.length === 0) return [];
 
   const { data: inserted, error: insertError } = await supabase
     .from('capturado_cards')
