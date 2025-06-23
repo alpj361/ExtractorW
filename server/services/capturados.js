@@ -95,7 +95,7 @@ async function extractCapturadoCards(transcription) {
   }
 
   const prompt = buildPrompt(transcription);
-  const model = genai.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const model = genai.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
   const result = await model.generateContent(prompt);
   let text = result.response.text().trim();
