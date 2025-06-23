@@ -319,6 +319,8 @@ router.post('/from-card', verifyUserAccess, async (req, res) => {
             });
         }
 
+        console.log(`🔍 Buscando card con ID: ${card_id}`);
+
         // Obtener información de la card
         const { data: card, error: cardError } = await supabase
             .from('capturado_cards')
@@ -326,11 +328,38 @@ router.post('/from-card', verifyUserAccess, async (req, res) => {
             .eq('id', card_id)
             .single();
 
-        if (cardError || !card) {
-            return res.status(404).json({ 
-                error: 'Card no encontrada' 
+        if (cardError) {
+            console.error('❌ Error consultando capturado_cards:', cardError);
+            if (cardError.code === 'PGRST116') {
+                return res.status(404).json({ 
+                    error: 'Card no encontrada',
+                    details: `No existe una card con ID: ${card_id}`,
+                    debug_info: {
+                        card_id,
+                        error_code: cardError.code,
+                        error_message: cardError.message
+                    }
+                });
+            }
+            return res.status(500).json({ 
+                error: 'Error consultando la base de datos',
+                details: cardError.message 
             });
         }
+
+        if (!card) {
+            console.warn('⚠️ Card no encontrada - respuesta vacía');
+            return res.status(404).json({ 
+                error: 'Card no encontrada',
+                details: `No existe una card con ID: ${card_id}`,
+                debug_info: {
+                    card_id,
+                    query_result: 'empty'
+                }
+            });
+        }
+
+        console.log(`✅ Card encontrada: ${card.entity || 'Sin entidad'} - ${card.city || 'Sin ciudad'}, ${card.department || 'Sin departamento'}`);
 
         // Verificar acceso al proyecto
         const { data: project, error: projectError } = await supabase
@@ -382,7 +411,12 @@ router.post('/from-card', verifyUserAccess, async (req, res) => {
         if (coveragesToCreate.length === 0) {
             return res.status(400).json({
                 error: 'La card no contiene información geográfica válida',
-                details: 'Se requiere al menos ciudad o departamento'
+                details: 'Se requiere al menos ciudad o departamento',
+                card_data: {
+                    city: card.city,
+                    department: card.department,
+                    entity: card.entity
+                }
             });
         }
 
