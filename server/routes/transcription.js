@@ -308,6 +308,21 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
         tempFilePath = path.join(tempDir, `${codexItem.id}_${Date.now()}${ext}`);
         fs.writeFileSync(tempFilePath, response.data);
         console.log(`✅ Archivo de Drive descargado: ${tempFilePath}`);
+
+        // ----- DEBUG: inspeccionar respuesta -----
+        try {
+          const dbgType = response.headers['content-type'] || 'unknown';
+          const dbgSize = response.data?.byteLength || response.data?.length || 0;
+          console.log(`📦 Drive download status: ${response.status} (${dbgType}) size=${dbgSize} bytes`);
+          // Si es texto, mostrar primeros 200 caracteres para inspección
+          if (dbgType.startsWith('text') && dbgSize < 20000) {
+            const preview = response.data.toString().slice(0, 200);
+            console.log('🔍 Response preview:', preview.replace(/\n/g, ' '));
+          }
+        } catch (dbgErr) {
+          console.warn('⚠️ No se pudo inspeccionar respuesta:', dbgErr.message);
+        }
+
       } catch (driveErr) {
         console.error('❌ Error descargando desde Google Drive:', driveErr.message);
         return res.status(500).json({
