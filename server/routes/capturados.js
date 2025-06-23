@@ -176,4 +176,88 @@ router.delete('/:id', verifyUserAccess, async (req, res) => {
   }
 });
 
+/**
+ * PUT /api/capturados/:id
+ * Actualiza los campos de una tarjeta capturado
+ * Body params permitidos: entity, city, department, description, discovery
+ */
+router.put('/:id', verifyUserAccess, async (req, res) => {
+  const { id } = req.params;
+  const { entity, city, department, description, discovery } = req.body || {};
+
+  if (!id) {
+    return res.status(400).json({
+      error: 'Parámetro faltante',
+      message: 'Se requiere el ID de la tarjeta capturado'
+    });
+  }
+
+  const updateData = {};
+  if (entity !== undefined) updateData.entity = entity?.trim();
+  if (city !== undefined) updateData.city = city?.trim();
+  if (department !== undefined) updateData.department = department?.trim();
+  if (description !== undefined) updateData.description = description?.trim();
+  if (discovery !== undefined) updateData.discovery = discovery?.trim();
+
+  if (Object.keys(updateData).length === 0) {
+    return res.status(400).json({
+      error: 'Sin cambios',
+      message: 'No se proporcionaron campos para actualizar'
+    });
+  }
+
+  try {
+    // Verificar acceso y existencia
+    const { data: card, error: fetchError } = await supabase
+      .from('capturado_cards')
+      .select('id, project_id')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !card) {
+      return res.status(404).json({
+        error: 'Tarjeta no encontrada',
+        message: 'La tarjeta capturado no existe o no tienes acceso a ella'
+      });
+    }
+
+    // Permisos: debe pertenecer a un proyecto del usuario
+    const { data: project, error: projectErr } = await supabase
+      .from('projects')
+      .select('id, user_id, collaborators')
+      .eq('id', card.project_id)
+      .single();
+
+    if (projectErr || !project) {
+      return res.status(403).json({ error: 'Acceso denegado' });
+    }
+
+    const hasAccess = project.user_id === req.user.id ||
+      (project.collaborators && project.collaborators.includes(req.user.id));
+
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'No tienes permisos para editar esta tarjeta' });
+    }
+
+    // Actualizar
+    const { data: updatedCard, error: updateError } = await supabase
+      .from('capturado_cards')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+
+    await logUsage(req.user, '/api/capturados/update', 0, req);
+    req.usage_logged = true;
+
+    return res.json({ success: true, card: updatedCard });
+  } catch (error) {
+    console.error('❌ Error en PUT /capturados:', error);
+    await logError('/api/capturados/update', error, req.user, req);
+    return res.status(500).json({ error: 'Error interno', message: error.message });
+  }
+});
+
 module.exports = router; 
