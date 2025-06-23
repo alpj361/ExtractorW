@@ -271,11 +271,21 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
       try {
         console.log(`⬇️ Descargando archivo de Google Drive: ${drive_file_id}`);
         const axios = require('axios');
-        const downloadUrl = `https://www.googleapis.com/drive/v3/files/${drive_file_id}?alt=media`;
-        const response = await axios.get(downloadUrl, {
-          responseType: 'arraybuffer',
-          headers: { Authorization: `Bearer ${drive_access_token}` }
-        });
+        const downloadUrl = `https://www.googleapis.com/drive/v3/files/${drive_file_id}?alt=media&supportsAllDrives=true`;
+        let response;
+        try {
+          response = await axios.get(downloadUrl, {
+            responseType: 'arraybuffer',
+            headers: { Authorization: `Bearer ${drive_access_token}` }
+          });
+        } catch (primaryErr) {
+          console.warn('⚠️ Fallo descarga primaria Drive API, intentando enlace uc...', primaryErr.message);
+          const altUrl = `https://drive.google.com/uc?export=download&id=${drive_file_id}`;
+          response = await axios.get(altUrl, {
+            responseType: 'arraybuffer',
+            maxRedirects: 5
+          });
+        }
 
         const ext = path.extname(codexItem.nombre_archivo || '.wav') || '.wav';
         tempFilePath = path.join(tempDir, `${codexItem.id}_${Date.now()}${ext}`);
