@@ -152,6 +152,8 @@ function sanitizeCard(card) {
     const num = parseInt(sanitized.duration_days, 10);
     sanitized.duration_days = isNaN(num) ? null : num;
   }
+  // Nueva lógica: determinar topic para agrupación basándonos en propiedades originales
+  sanitized.topic = card.categoria || card.category || card.tipo_tema || 'General';
   return sanitized;
 }
 
@@ -213,15 +215,38 @@ async function ensureDocumentAnalysis(codexItem, userId) {
       project_id: codexItem.project_id
     };
 
-    const analysis = await analyzeDocument({
-      codexItemId: codexItem.id,
-      storagePath: codexItem.storage_path,
-      fileName: codexItem.nombre_archivo,
-      userId: userId,
+    const analysisResult = await analyzeDocument(tempFilePath, userId, {
+      ...analysisOptions,
+      updateItemId: codexItem.id // guardar en el mismo codex_item
     });
-    
-    // Devolvemos el texto del análisis para que pueda ser procesado
-    return analysis.analysisText;
+
+    // Limpiar archivo temporal
+    try {
+      fs.unlinkSync(tempFilePath);
+    } catch (cleanupError) {
+      console.warn(`⚠️ No se pudo limpiar archivo temporal: ${cleanupError.message}`);
+    }
+
+    if (analysisResult.success) {
+      console.log(`✅ Documento analizado exitosamente: ${analysisResult.analysis.estadisticas.hallazgos_totales} hallazgos encontrados`);
+
+      // Obtener el análisis actualizado del item
+      const { data: updatedItem, error: updateError } = await supabase
+        .from('codex_items')
+        .select('document_analysis')
+        .eq('id', codexItem.id)
+        .single();
+
+      if (updateError) {
+        console.error(`❌ Error obteniendo análisis actualizado: ${updateError.message}`);
+        return null;
+      }
+
+      return updatedItem.document_analysis;
+    } else {
+      console.error(`❌ Error en análisis de documento: ${analysisResult.error}`);
+      return null;
+    }
   } catch (error) {
     console.error(`❌ Error en ensureDocumentAnalysis para item ${codexItem.id}:`, error.message);
     return null;
