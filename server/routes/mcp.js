@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const mcpService = require('../services/mcp');
-const { requireAuth } = require('../middlewares/auth');
+const { verifyUserAccess } = require('../middlewares/auth');
 
 // ===================================================================
 // MCP SERVER ROUTES - Micro Command Processor
@@ -12,7 +12,7 @@ const { requireAuth } = require('../middlewares/auth');
  * GET /api/mcp/tools
  * Lista todas las herramientas disponibles en el MCP Server
  */
-router.get('/tools', requireAuth, async (req, res) => {
+router.get('/tools', verifyUserAccess, async (req, res) => {
   try {
     const tools = await mcpService.listAvailableTools();
     
@@ -36,7 +36,7 @@ router.get('/tools', requireAuth, async (req, res) => {
  * POST /api/mcp/execute
  * Ejecuta una herramienta específica del MCP Server
  */
-router.post('/execute', requireAuth, async (req, res) => {
+router.post('/execute', verifyUserAccess, async (req, res) => {
   try {
     const { tool_name, parameters } = req.body;
     
@@ -69,7 +69,7 @@ router.post('/execute', requireAuth, async (req, res) => {
  * GET /api/mcp/tools/:tool_name
  * Obtiene información detallada de una herramienta específica
  */
-router.get('/tools/:tool_name', requireAuth, async (req, res) => {
+router.get('/tools/:tool_name', verifyUserAccess, async (req, res) => {
   try {
     const { tool_name } = req.params;
     const toolInfo = await mcpService.getToolInfo(tool_name);
@@ -100,7 +100,7 @@ router.get('/tools/:tool_name', requireAuth, async (req, res) => {
  * POST /api/mcp/tools/nitter_context
  * Endpoint específico para la herramienta nitter_context (acceso directo)
  */
-router.post('/tools/nitter_context', requireAuth, async (req, res) => {
+router.post('/tools/nitter_context', verifyUserAccess, async (req, res) => {
   try {
     const { q, location = "guatemala", limit = 10 } = req.body;
     
@@ -133,7 +133,7 @@ router.post('/tools/nitter_context', requireAuth, async (req, res) => {
  * GET /api/mcp/status
  * Estado general del MCP Server
  */
-router.get('/status', requireAuth, async (req, res) => {
+router.get('/status', verifyUserAccess, async (req, res) => {
   try {
     const status = await mcpService.getServerStatus();
     
