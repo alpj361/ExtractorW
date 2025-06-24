@@ -98,7 +98,7 @@ router.get('/', verifyUserAccess, async (req, res) => {
 
 // =============== BULK EXTRACTION ===============
 router.post('/bulk', verifyUserAccess, async (req, res) => {
-  const { project_id } = req.body || {};
+  const { project_id, codex_item_ids } = req.body || {};
 
   if (!project_id) {
     return res.status(400).json({ error: 'Parámetro faltante', message: 'project_id requerido' });
@@ -106,7 +106,7 @@ router.post('/bulk', verifyUserAccess, async (req, res) => {
 
   try {
     const { bulkCreateCardsForProject } = require('../services/capturados');
-    const summary = await bulkCreateCardsForProject(project_id, req.user.id);
+    const summary = await bulkCreateCardsForProject(project_id, req.user.id, codex_item_ids);
 
     await logUsage(req.user, '/api/capturados/bulk', 0, req);
     req.usage_logged = true;

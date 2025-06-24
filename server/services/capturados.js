@@ -72,7 +72,7 @@ Cada elemento debe tener **exactamente** estas claves (usa null si no aplica):
 - currency (string) - Moneda si aplica (ej: "GTQ", "USD", "EUR")
 - item_count (number) - Un conteo de unidades (obras, proyectos, víctimas, etc.). Usa null si no corresponde.
 - city (string) - Ciudad, lugar o ubicación mencionada
-- department (string) - Departamento, área, región o categoría
+- department (string) - Departamento del país (ej: Guatemala, Sacatepéquez, Quetzaltenango), área geográfica o región administrativa
 - discovery (string) - Tipo de hallazgo, información o dato extraído
 - source (string) - Extracto de máximo 120 caracteres de la transcripción
 - start_date (string) - Fecha mencionada en formato YYYY-MM-DD o null
@@ -359,76 +359,46 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
  * Procesa todos los codex_items de audio/video con transcripción o documentos que aún no tengan capturado_cards
  * @param {string} projectId - ID del proyecto
  * @param {string} userId - ID del usuario (requerido para análisis automático de documentos)
+ * @param {string[]} [codexItemIds] - Opcional: Array de IDs de codex_items a procesar. Si no se provee, procesa todos los pendientes.
  */
-async function bulkCreateCardsForProject(projectId, userId) {
+async function bulkCreateCardsForProject(projectId, userId, codexItemIds) {
   console.log(`🔍 Iniciando bulk processing para proyecto: ${projectId}`);
   
-  // 1. Obtener ids ya capturados
-  const { data: rowsCaptured, error: errorCaptured } = await supabase
-    .from('capturado_cards')
-    .select('codex_item_id')
-    .eq('project_id', projectId);
-  if (errorCaptured) throw errorCaptured;
-  const capturedIds = (rowsCaptured || []).map(r => r.codex_item_id);
-  console.log(`📋 Items ya capturados: ${capturedIds.length}`);
-
-  // 2. Obtener codex_items pendientes (con transcripción, análisis de documento O documentos sin análisis)
-  console.log('🔍 Buscando items con transcripción, análisis de documento o documentos analizables...');
-  const { data: allItems, error: errorAllItems } = await supabase
+  let query = supabase
     .from('codex_items')
     .select('id, tipo, titulo, audio_transcription, document_analysis, storage_path')
-    .eq('project_id', projectId)
-    .or('audio_transcription.not.is.null,document_analysis.not.is.null,and(tipo.eq.documento,storage_path.not.is.null)');
+    .eq('project_id', projectId);
+
+  // Si se especifican IDs, solo procesar esos.
+  if (codexItemIds && codexItemIds.length > 0) {
+    console.log(`🎯 Procesando ${codexItemIds.length} items específicos.`);
+    query = query.in('id', codexItemIds);
+  } else {
+    // Comportamiento original: buscar todos los analizables que no han sido capturados.
+    console.log('📋 Procesando todos los items pendientes del proyecto.');
+    const { data: rowsCaptured } = await supabase
+      .from('capturado_cards')
+      .select('codex_item_id')
+      .eq('project_id', projectId);
+    const capturedIds = (rowsCaptured || []).map(r => r.codex_item_id);
+    
+    if (capturedIds.length > 0) {
+      query = query.not('id', 'in', `(${capturedIds.join(',')})`);
+    }
+
+    query = query.or('audio_transcription.not.is.null,document_analysis.not.is.null,and(tipo.eq.documento,storage_path.not.is.null)');
+  }
+
+  const { data: allItems, error: errorAllItems } = await query;
   
   if (errorAllItems) {
     console.error('❌ Error obteniendo todos los items:', errorAllItems);
     throw errorAllItems;
   }
   
-  console.log(`📋 Todos los items con contenido analizable: ${allItems?.length || 0}`);
-  if (allItems && allItems.length > 0) {
-    console.log('📝 Items encontrados:');
-    allItems.forEach(item => {
-      const hasTranscription = item.audio_transcription && item.audio_transcription.trim();
-      const hasDocumentAnalysis = item.document_analysis && item.document_analysis.trim();
-      const isAnalyzableDocument = item.tipo === 'documento' && item.storage_path;
-      let contentType = 'sin contenido';
-      
-      if (hasTranscription) contentType = 'transcripción';
-      else if (hasDocumentAnalysis) contentType = 'análisis';
-      else if (isAnalyzableDocument) contentType = 'documento analizable';
-      
-      console.log(`   - ${item.id} | ${item.titulo} | ${item.tipo} | ${contentType}`);
-    });
-  }
+  console.log(`📋 Items a procesar: ${allItems?.length || 0}`);
   
-  // También buscar específicamente videos para debug
-  console.log('🎥 Verificando items de video específicamente...');
-  const { data: videoItems, error: videoError } = await supabase
-    .from('codex_items')
-    .select('id, tipo, titulo')
-    .eq('project_id', projectId)
-    .eq('tipo', 'video');
-  
-  if (!videoError && videoItems) {
-    console.log(`📹 Videos en el proyecto: ${videoItems.length}`);
-    videoItems.forEach(item => {
-      console.log(`   - ${item.id} | ${item.titulo} | ${item.tipo}`);
-    });
-  }
-  
-  // Filtrar items que no han sido procesados
-  const pendingItems = (allItems || []).filter(item => !capturedIds.includes(item.id));
-  const errorPending = null; // No hay error ya que filtramos en memoria
-  if (errorPending) {
-    console.error('❌ Error obteniendo items pendientes:', errorPending);
-    throw errorPending;
-  }
-  
-  console.log(`📝 Items pendientes encontrados: ${pendingItems?.length || 0}`);
-  if (pendingItems?.length > 0) {
-    console.log('📋 Items a procesar:', pendingItems.map(item => `${item.id} (${item.tipo})`));
-  }
+  const pendingItems = allItems;
 
   let totalCards = 0;
   const processed = [];

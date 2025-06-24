@@ -315,7 +315,7 @@ async function analyzeTextChunkWithGemini(textChunk, options = {}) {
           "monto": "Cantidad de dinero relevante como número (si aplica)",
           "moneda": "GTQ|USD|EUR (si aplica)",
           "cantidad": "Número de unidades si es conteo (obras, casos, etc.)",
-          "ubicacion": "Ciudad, departamento o lugar (si aplica)",
+          "ubicacion": "Ciudad, departamento del país (ej: Guatemala, Sacatepéquez, Quetzaltenango) o lugar (si aplica)",
           "fecha": "YYYY-MM-DD (si aplica)",
           "fuente": "Extracto textual de máximo 120 caracteres",
           "relevancia": "alta|media|baja",
