@@ -386,6 +386,17 @@ router.post('/from-card', verifyUserAccess, async (req, res) => {
         // Extraer información geográfica de la card
         const coveragesToCreate = [];
 
+        // País
+        if (card.pais) {
+            coveragesToCreate.push({
+                coverage_type: 'pais',
+                name: card.pais,
+                parent_name: null,
+                description: `Detectado desde: ${card.discovery || card.description || 'Card capturada'}`,
+                relevance: 'high'
+            });
+        }
+
         // Ciudad
         if (card.city) {
             coveragesToCreate.push({
@@ -402,7 +413,7 @@ router.post('/from-card', verifyUserAccess, async (req, res) => {
             coveragesToCreate.push({
                 coverage_type: 'departamento',
                 name: card.department,
-                parent_name: 'Guatemala',
+                parent_name: card.pais || 'Guatemala',
                 description: `Detectado desde: ${card.discovery || card.description || 'Card capturada'}`,
                 relevance: 'medium'
             });
@@ -411,8 +422,9 @@ router.post('/from-card', verifyUserAccess, async (req, res) => {
         if (coveragesToCreate.length === 0) {
             return res.status(400).json({
                 error: 'La card no contiene información geográfica válida',
-                details: 'Se requiere al menos ciudad o departamento',
+                details: 'Se requiere al menos país, ciudad o departamento',
                 card_data: {
+                    pais: card.pais,
                     city: card.city,
                     department: card.department,
                     entity: card.entity

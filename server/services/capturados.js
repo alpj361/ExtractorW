@@ -73,6 +73,7 @@ Cada elemento debe tener **exactamente** estas claves (usa null si no aplica):
 - item_count (number) - Un conteo de unidades (obras, proyectos, víctimas, etc.). Usa null si no corresponde.
 - city (string) - Ciudad, lugar o ubicación mencionada
 - department (string) - Departamento del país (ej: Guatemala, Sacatepéquez, Quetzaltenango), área geográfica o región administrativa
+- pais (string) - País mencionado (ej: Guatemala, Honduras, El Salvador, México)
 - discovery (string) - Tipo de hallazgo, información o dato extraído
 - source (string) - Extracto de máximo 120 caracteres de la transcripción
 - start_date (string) - Fecha mencionada en formato YYYY-MM-DD o null
@@ -123,7 +124,7 @@ function isValidISODate(dateStr) {
 }
 
 // Ensure cards fields are clean
-function sanitizeCard(card) {
+function sanitizeCard(card, codexItem = null) {
   const sanitized = { ...card };
   // title
   if (!sanitized.title || sanitized.title.trim() === '') {
@@ -152,8 +153,20 @@ function sanitizeCard(card) {
     const num = parseInt(sanitized.duration_days, 10);
     sanitized.duration_days = isNaN(num) ? null : num;
   }
-  // Nueva lógica: determinar topic para agrupación basándonos en propiedades originales
-  sanitized.topic = card.categoria || card.category || card.tipo_tema || 'General';
+  // Nueva lógica: usar el título del archivo/documento como topic
+  if (codexItem && codexItem.titulo) {
+    // Extraer el tema del título del archivo, limpiando prefijos como "Análisis automático:"
+    let topic = codexItem.titulo;
+    if (topic.includes('Análisis automático:')) {
+      topic = topic.replace('Análisis automático:', '').trim();
+    }
+    // Remover extensiones de archivo
+    topic = topic.replace(/\.(pdf|doc|docx|txt|rtf|mp3|wav|mp4|avi|mov)$/i, '');
+    sanitized.topic = topic || 'General';
+  } else {
+    // Fallback a las propiedades originales o General
+    sanitized.topic = card.categoria || card.category || card.tipo_tema || 'General';
+  }
   return sanitized;
 }
 
@@ -332,7 +345,7 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
   // 4. Preparar datos filtrando duplicados
   const insertData = cards
     .map(raw => {
-      const card = sanitizeCard(raw);
+      const card = sanitizeCard(raw, codexItem);
       return {
         ...card,
         project_id: projectId,
