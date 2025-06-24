@@ -213,37 +213,17 @@ async function ensureDocumentAnalysis(codexItem, userId) {
       project_id: codexItem.project_id
     };
 
-    const analysisResult = await analyzeDocument(tempFilePath, userId, analysisOptions, supabase, codexItem.id);
-
-    // Limpiar archivo temporal
-    try {
-      fs.unlinkSync(tempFilePath);
-    } catch (cleanupError) {
-      console.warn(`⚠️ No se pudo limpiar archivo temporal: ${cleanupError.message}`);
-    }
-
-    if (analysisResult.success) {
-      console.log(`✅ Documento analizado exitosamente: ${analysisResult.analysis.estadisticas.hallazgos_totales} hallazgos encontrados`);
-      
-      // Obtener el análisis actualizado del item
-      const { data: updatedItem, error: updateError } = await supabase
-        .from('codex_items')
-        .select('document_analysis')
-        .eq('id', codexItem.id)
-        .single();
-
-      if (updateError) {
-        console.error(`❌ Error obteniendo análisis actualizado: ${updateError.message}`);
-        return null;
-      }
-
-      return updatedItem.document_analysis;
-    } else {
-      console.error(`❌ Error en análisis de documento: ${analysisResult.error}`);
-      return null;
-    }
+    const analysis = await analyzeDocument({
+      codexItemId: codexItem.id,
+      storagePath: codexItem.storage_path,
+      fileName: codexItem.nombre_archivo,
+      userId: userId,
+    });
+    
+    // Devolvemos el texto del análisis para que pueda ser procesado
+    return analysis.analysisText;
   } catch (error) {
-    console.error(`❌ Error durante análisis automático de documento: ${error.message}`);
+    console.error(`❌ Error en ensureDocumentAnalysis para item ${codexItem.id}:`, error.message);
     return null;
   }
 }
