@@ -802,6 +802,12 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
         // 🌎 NORMALIZACIÓN GEOGRÁFICA CON IA EN LOTE
         console.log(`🤖 Normalizando geografía con IA para ${cards.length} hallazgos...`);
         
+        // Declarar variables fuera del bloque try para que estén disponibles globalmente
+        let coverageGroups = {};
+        let createdCoverages = [];
+        let errors = [];
+        let normalizedCards = [];
+        
         try {
             // Extraer información geográfica para normalización en lote
             const geoData = cards.map(card => ({
@@ -814,7 +820,7 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
             const normalizedGeoData = await batchNormalizeGeography(geoData);
 
             // Aplicar resultados normalizados a las cards
-            const normalizedCards = cards.map((card, index) => {
+            normalizedCards = cards.map((card, index) => {
                 const normalized = normalizedGeoData[index];
                 return {
                     ...card,
@@ -836,11 +842,6 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
             };
             
             console.log(`📊 Estadísticas de detección automática:`, detectionStats);
-
-            // Agrupar por tema y procesar coberturas
-            const coverageGroups = {};
-            const createdCoverages = [];
-            const errors = [];
 
             for (const geoCard of normalizedCards) {
                 const topic = geoCard.topic || 'General';
@@ -935,10 +936,10 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
             console.error(`❌ Error en normalización geográfica con IA:`, geoError.message);
             console.log(`🔄 Fallback a procesamiento manual sin IA...`);
             
-            // Fallback: procesar sin normalización de IA
-            const coverageGroups = {};
-            const createdCoverages = [];
-            const errors = [];
+            // Fallback: procesar sin normalización de IA usando las variables ya declaradas
+            coverageGroups = {};
+            createdCoverages = [];
+            errors = [];
 
             for (const card of cards) {
                 const topic = card.topic || 'General';
