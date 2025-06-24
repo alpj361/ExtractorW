@@ -3,6 +3,7 @@ const adminRoutes = require('./admin');
 const sondeosRoutes = require('./sondeos');
 const projectSuggestionsRoutes = require('./project-suggestions');
 const transcriptionRoutes = require('./transcription');
+const documentAnalysisRoutes = require('./documentAnalysis');
 const path = require('path');
 const capturadosRoutes = require('./capturados');
 const coveragesRoutes = require('./coverages');
@@ -44,6 +45,9 @@ function setupRoutes(app) {
   
   // Configurar rutas de transcripción
   app.use('/api/transcription', transcriptionRoutes);
+  
+  // Configurar rutas de análisis de documentos
+  app.use('/api/document-analysis', documentAnalysisRoutes);
   
   // Configurar rutas de capturados (hallazgos extraídos)
   app.use('/api/capturados', capturadosRoutes);

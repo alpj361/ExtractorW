@@ -1,6 +1,7 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { createClient } = require('@supabase/supabase-js');
 const supabaseUtil = require('../utils/supabase');
+const { analyzeDocument } = require('./documentAnalysis');
 let supabase = supabaseUtil;
 
 // Instanciar Gemini para análisis de texto
@@ -155,17 +156,111 @@ function sanitizeCard(card) {
 }
 
 /**
+ * Analiza automáticamente un documento si no tiene análisis previo
+ * @param {Object} codexItem - Item del codex
+ * @param {string} userId - ID del usuario
+ * @returns {Promise<string|null>} - Análisis del documento o null si no se pudo analizar
+ */
+async function ensureDocumentAnalysis(codexItem, userId) {
+  // Si ya tiene análisis, no hacer nada
+  if (codexItem.document_analysis && codexItem.document_analysis.trim()) {
+    return codexItem.document_analysis;
+  }
+
+  // Solo procesar documentos que tengan storage_path (archivo físico)
+  if (codexItem.tipo !== 'documento' || !codexItem.storage_path) {
+    console.log(`⚠️ Item ${codexItem.id} no es un documento con archivo físico, saltando análisis automático`);
+    return null;
+  }
+
+  console.log(`🔍 Analizando documento automáticamente: ${codexItem.titulo}`);
+
+  try {
+    // Construir ruta completa del archivo desde Supabase Storage
+    const { data: downloadData, error: downloadError } = await supabase.storage
+      .from('digitalstorage')
+      .download(codexItem.storage_path);
+
+    if (downloadError) {
+      console.error(`❌ Error descargando archivo para análisis: ${downloadError.message}`);
+      return null;
+    }
+
+    // Crear archivo temporal para análisis
+    const fs = require('fs');
+    const path = require('path');
+    const tempDir = '/tmp/document_analysis';
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const tempFileName = `${Date.now()}_${codexItem.id}_${codexItem.nombre_archivo || 'documento'}`;
+    const tempFilePath = path.join(tempDir, tempFileName);
+
+    // Escribir archivo temporal
+    const arrayBuffer = await downloadData.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    fs.writeFileSync(tempFilePath, buffer);
+
+    console.log(`📁 Archivo temporal creado: ${tempFilePath}`);
+
+    // Analizar documento
+    const analysisOptions = {
+      titulo: `Análisis automático: ${codexItem.titulo}`,
+      descripcion: `Análisis automático generado durante extracción de hallazgos`,
+      etiquetas: ['analisis-automatico', 'extraccion-hallazgos'],
+      proyecto: codexItem.proyecto || 'Sin proyecto',
+      project_id: codexItem.project_id
+    };
+
+    const analysisResult = await analyzeDocument(tempFilePath, userId, analysisOptions, supabase, codexItem.id);
+
+    // Limpiar archivo temporal
+    try {
+      fs.unlinkSync(tempFilePath);
+    } catch (cleanupError) {
+      console.warn(`⚠️ No se pudo limpiar archivo temporal: ${cleanupError.message}`);
+    }
+
+    if (analysisResult.success) {
+      console.log(`✅ Documento analizado exitosamente: ${analysisResult.analysis.estadisticas.hallazgos_totales} hallazgos encontrados`);
+      
+      // Obtener el análisis actualizado del item
+      const { data: updatedItem, error: updateError } = await supabase
+        .from('codex_items')
+        .select('document_analysis')
+        .eq('id', codexItem.id)
+        .single();
+
+      if (updateError) {
+        console.error(`❌ Error obteniendo análisis actualizado: ${updateError.message}`);
+        return null;
+      }
+
+      return updatedItem.document_analysis;
+    } else {
+      console.error(`❌ Error en análisis de documento: ${analysisResult.error}`);
+      return null;
+    }
+  } catch (error) {
+    console.error(`❌ Error durante análisis automático de documento: ${error.message}`);
+    return null;
+  }
+}
+
+/**
  * Crea registros en la tabla capturado_cards a partir de un codex_item.
  * @param {Object} params
- * @param {string} params.codexItemId - ID del item de Codex (con transcripción)
+ * @param {string} params.codexItemId - ID del item de Codex (con transcripción o análisis de documento)
  * @param {string} params.projectId - ID del proyecto al que pertenece
+ * @param {string} params.userId - ID del usuario (requerido para análisis automático de documentos)
  * @returns {Promise<Array<Object>>} Registros insertados
  */
-async function createCardsFromCodex({ codexItemId, projectId }) {
-  // 1. Obtener transcripción
+async function createCardsFromCodex({ codexItemId, projectId, userId }) {
+  // 1. Obtener información completa del item
   const { data: codexItem, error: codexError } = await supabase
     .from('codex_items')
-    .select('audio_transcription')
+    .select('id, audio_transcription, document_analysis, tipo, titulo, nombre_archivo, storage_path, proyecto, project_id')
     .eq('id', codexItemId)
     .single();
 
@@ -173,12 +268,45 @@ async function createCardsFromCodex({ codexItemId, projectId }) {
     throw new Error(`Error obteniendo codex_item: ${codexError.message}`);
   }
 
-  if (!codexItem || !codexItem.audio_transcription) {
-    throw new Error('El codex_item no contiene audio_transcription');
+  if (!codexItem) {
+    throw new Error('El codex_item no existe');
   }
 
-  // 2. Extraer tarjetas con Gemini
-  const cards = await extractCapturadoCards(codexItem.audio_transcription);
+  // 2. Determinar qué contenido usar para extracción
+  let contentToAnalyze = null;
+  let contentType = 'unknown';
+
+  if (codexItem.audio_transcription && codexItem.audio_transcription.trim()) {
+    contentToAnalyze = codexItem.audio_transcription;
+    contentType = 'audio_transcription';
+    console.log(`📄 Procesando transcripción de audio para item: ${codexItem.titulo}`);
+  } else if (codexItem.document_analysis && codexItem.document_analysis.trim()) {
+    contentToAnalyze = codexItem.document_analysis;
+    contentType = 'document_analysis';
+    console.log(`📋 Procesando análisis de documento existente para item: ${codexItem.titulo}`);
+  } else if (codexItem.tipo === 'documento') {
+    // 3. Intentar análisis automático de documento si no hay análisis previo
+    console.log(`📄 Documento sin análisis detectado, intentando análisis automático...`);
+    if (!userId) {
+      throw new Error('userId es requerido para análisis automático de documentos');
+    }
+    
+    const autoAnalysis = await ensureDocumentAnalysis(codexItem, userId);
+    if (autoAnalysis) {
+      contentToAnalyze = autoAnalysis;
+      contentType = 'document_analysis_auto';
+      console.log(`✅ Análisis automático completado para documento: ${codexItem.titulo}`);
+    } else {
+      throw new Error('No se pudo generar análisis automático del documento');
+    }
+  } else {
+    throw new Error('El codex_item no contiene audio_transcription, document_analysis, ni es un documento analizable');
+  }
+
+  console.log(`🎯 Tipo de contenido detectado: ${contentType} (${contentToAnalyze.length} caracteres)`);
+
+  // 3. Extraer tarjetas con Gemini
+  const cards = await extractCapturadoCards(contentToAnalyze);
 
   if (!cards || cards.length === 0) {
     return [];
@@ -223,10 +351,11 @@ async function createCardsFromCodex({ codexItemId, projectId }) {
 }
 
 /**
- * Procesa todos los codex_items de audio/video con transcripción que aún no tengan capturado_cards
- * @param {string} projectId
+ * Procesa todos los codex_items de audio/video con transcripción o documentos que aún no tengan capturado_cards
+ * @param {string} projectId - ID del proyecto
+ * @param {string} userId - ID del usuario (requerido para análisis automático de documentos)
  */
-async function bulkCreateCardsForProject(projectId) {
+async function bulkCreateCardsForProject(projectId, userId) {
   console.log(`🔍 Iniciando bulk processing para proyecto: ${projectId}`);
   
   // 1. Obtener ids ya capturados
@@ -238,24 +367,33 @@ async function bulkCreateCardsForProject(projectId) {
   const capturedIds = (rowsCaptured || []).map(r => r.codex_item_id);
   console.log(`📋 Items ya capturados: ${capturedIds.length}`);
 
-  // 2. Obtener codex_items pendientes
-  console.log('🔍 Buscando items con transcripción...');
+  // 2. Obtener codex_items pendientes (con transcripción, análisis de documento O documentos sin análisis)
+  console.log('🔍 Buscando items con transcripción, análisis de documento o documentos analizables...');
   const { data: allItems, error: errorAllItems } = await supabase
     .from('codex_items')
-    .select('id, tipo, titulo')
+    .select('id, tipo, titulo, audio_transcription, document_analysis, storage_path')
     .eq('project_id', projectId)
-    .not('audio_transcription', 'is', null);
+    .or('audio_transcription.not.is.null,document_analysis.not.is.null,and(tipo.eq.documento,storage_path.not.is.null)');
   
   if (errorAllItems) {
     console.error('❌ Error obteniendo todos los items:', errorAllItems);
     throw errorAllItems;
   }
   
-  console.log(`📋 Todos los items con transcripción: ${allItems?.length || 0}`);
+  console.log(`📋 Todos los items con contenido analizable: ${allItems?.length || 0}`);
   if (allItems && allItems.length > 0) {
     console.log('📝 Items encontrados:');
     allItems.forEach(item => {
-      console.log(`   - ${item.id} | ${item.titulo} | ${item.tipo}`);
+      const hasTranscription = item.audio_transcription && item.audio_transcription.trim();
+      const hasDocumentAnalysis = item.document_analysis && item.document_analysis.trim();
+      const isAnalyzableDocument = item.tipo === 'documento' && item.storage_path;
+      let contentType = 'sin contenido';
+      
+      if (hasTranscription) contentType = 'transcripción';
+      else if (hasDocumentAnalysis) contentType = 'análisis';
+      else if (isAnalyzableDocument) contentType = 'documento analizable';
+      
+      console.log(`   - ${item.id} | ${item.titulo} | ${item.tipo} | ${contentType}`);
     });
   }
   
@@ -291,8 +429,12 @@ async function bulkCreateCardsForProject(projectId) {
   const processed = [];
   for (const item of pendingItems || []) {
     try {
-      console.log(`⚙️ Procesando item: ${item.id}`);
-      const cards = await createCardsFromCodex({ codexItemId: item.id, projectId });
+      console.log(`⚙️ Procesando item: ${item.id} (${item.tipo})`);
+      const cards = await createCardsFromCodex({ 
+        codexItemId: item.id, 
+        projectId, 
+        userId 
+      });
       totalCards += cards.length;
       processed.push({ codex_item_id: item.id, cards_created: cards.length });
       console.log(`✅ Item ${item.id} procesado: ${cards.length} cards creadas`);

@@ -35,7 +35,8 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
   try {
     const insertedCards = await createCardsFromCodex({
       codexItemId: codex_item_id,
-      projectId: project_id
+      projectId: project_id,
+      userId: req.user.id
     });
 
     // Estimar tokens consumidos (aprox 4 chars por token)
@@ -105,7 +106,7 @@ router.post('/bulk', verifyUserAccess, async (req, res) => {
 
   try {
     const { bulkCreateCardsForProject } = require('../services/capturados');
-    const summary = await bulkCreateCardsForProject(project_id);
+    const summary = await bulkCreateCardsForProject(project_id, req.user.id);
 
     await logUsage(req.user, '/api/capturados/bulk', 0, req);
     req.usage_logged = true;

@@ -306,9 +306,8 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
 
         const ext = path.extname(codexItem.nombre_archivo || '.wav') || '.wav';
         tempFilePath = path.join(tempDir, `${codexItem.id}_${Date.now()}${ext}`);
-        fs.writeFileSync(tempFilePath, response.data);
-        console.log(`✅ Archivo de Drive descargado: ${tempFilePath}`);
-
+        // Temporalmente aún no escribimos hasta validar / potencial confirm
+         
         // ----- DEBUG: inspeccionar respuesta -----
         try {
           const dbgType = response.headers['content-type'] || 'unknown';
@@ -336,8 +335,13 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
             const preview = response.data.toString().slice(0, 200);
             console.log('🔍 Response preview:', preview.replace(/\n/g, ' '));
           }
+          // Después de inspección/posible confirm, escribir archivo final
+          fs.writeFileSync(tempFilePath, response.data);
+          console.log(`✅ Archivo de Drive descargado: ${tempFilePath}`);
         } catch (dbgErr) {
           console.warn('⚠️ No se pudo inspeccionar respuesta:', dbgErr.message);
+          // En caso de error de debug, aún intentamos guardar el archivo
+          fs.writeFileSync(tempFilePath, response.data);
         }
 
       } catch (driveErr) {
