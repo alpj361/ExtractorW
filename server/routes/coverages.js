@@ -740,4 +740,191 @@ router.get('/stats/:project_id', verifyUserAccess, async (req, res) => {
     }
 });
 
+// POST /api/coverages/auto-detect - Detectar coberturas automáticamente desde hallazgos agrupadas por tema
+router.post('/auto-detect', verifyUserAccess, async (req, res) => {
+    try {
+        const { project_id } = req.body;
+
+        if (!project_id) {
+            return res.status(400).json({
+                error: 'project_id es requerido'
+            });
+        }
+
+        // Verificar acceso al proyecto
+        const { data: project, error: projectError } = await supabase
+            .from('projects')
+            .select('id, user_id, collaborators')
+            .eq('id', project_id)
+            .single();
+
+        if (projectError || !project) {
+            return res.status(404).json({ 
+                error: 'Proyecto no encontrado' 
+            });
+        }
+
+        const hasAccess = project.user_id === req.user.id || 
+                         (project.collaborators && project.collaborators.includes(req.user.id));
+
+        if (!hasAccess) {
+            return res.status(403).json({ 
+                error: 'No tienes permisos para detectar coberturas en este proyecto' 
+            });
+        }
+
+        // Obtener todos los hallazgos del proyecto con información geográfica
+        const { data: cards, error: cardsError } = await supabase
+            .from('capturado_cards')
+            .select('id, topic, pais, city, department, entity, discovery, description, created_at')
+            .eq('project_id', project_id)
+            .or('pais.not.is.null,city.not.is.null,department.not.is.null');
+
+        if (cardsError) {
+            console.error('Error fetching cards:', cardsError);
+            return res.status(500).json({ 
+                error: 'Error al obtener hallazgos',
+                details: cardsError.message 
+            });
+        }
+
+        if (!cards || cards.length === 0) {
+            return res.json({
+                success: true,
+                message: 'No se encontraron hallazgos con información geográfica',
+                coverage_groups: [],
+                created_count: 0
+            });
+        }
+
+        // Agrupar por tema y procesar coberturas
+        const coverageGroups = {};
+        const createdCoverages = [];
+        const errors = [];
+
+        for (const card of cards) {
+            const topic = card.topic || 'General';
+            
+            if (!coverageGroups[topic]) {
+                coverageGroups[topic] = {
+                    topic,
+                    cards: [],
+                    countries: new Set(),
+                    departments: new Set(),
+                    cities: new Set(),
+                    coverages_created: []
+                };
+            }
+
+            coverageGroups[topic].cards.push(card);
+
+            // Crear coberturas únicas por tema
+            const coveragesToCreate = [];
+
+            if (card.pais) {
+                coverageGroups[topic].countries.add(card.pais);
+                coveragesToCreate.push({
+                    coverage_type: 'pais',
+                    name: card.pais,
+                    parent_name: null,
+                    relevance: 'high',
+                    topic
+                });
+            }
+
+            if (card.department) {
+                coverageGroups[topic].departments.add(card.department);
+                coveragesToCreate.push({
+                    coverage_type: 'departamento',
+                    name: card.department,
+                    parent_name: card.pais || 'Guatemala',
+                    relevance: 'medium',
+                    topic
+                });
+            }
+
+            if (card.city) {
+                coverageGroups[topic].cities.add(card.city);
+                coveragesToCreate.push({
+                    coverage_type: 'ciudad',
+                    name: card.city,
+                    parent_name: card.department || null,
+                    relevance: 'medium',
+                    topic
+                });
+            }
+
+            // Crear las coberturas evitando duplicados
+            for (const coverageData of coveragesToCreate) {
+                try {
+                    const { data: coverage, error: insertError } = await supabase
+                        .from('project_coverages')
+                        .insert({
+                            project_id,
+                            ...coverageData,
+                            description: `Detectado automáticamente desde hallazgos del tema: ${topic}`,
+                            detection_source: 'ai_detection',
+                            confidence_score: 0.90,
+                            source_card_id: card.id,
+                            discovery_context: `Extraído automáticamente desde: ${card.entity || 'Sin entidad'} - ${card.discovery || card.description || 'Sin descripción'}`,
+                            tags: [topic, 'auto-detectado']
+                        })
+                        .select()
+                        .single();
+
+                    if (insertError) {
+                        if (insertError.code === '23505') {
+                            // Cobertura duplicada, actualizar referencias
+                            console.log(`Cobertura ${coverageData.coverage_type}:${coverageData.name} ya existe para tema ${topic}`);
+                        } else {
+                            throw insertError;
+                        }
+                    } else {
+                        createdCoverages.push(coverage);
+                        coverageGroups[topic].coverages_created.push(coverage);
+                    }
+                } catch (error) {
+                    console.error(`Error creating coverage ${coverageData.name}:`, error);
+                    errors.push(`Error creando ${coverageData.coverage_type}:${coverageData.name} para tema ${topic}`);
+                }
+            }
+        }
+
+        // Convertir Sets a Arrays para respuesta
+        Object.values(coverageGroups).forEach(group => {
+            group.countries = Array.from(group.countries);
+            group.departments = Array.from(group.departments);
+            group.cities = Array.from(group.cities);
+            group.total_cards = group.cards.length;
+            delete group.cards; // No enviar las cards completas en la respuesta
+        });
+
+        // Log de uso
+        await logUsage(req.user.id, 'coverage_auto_detect', {
+            project_id,
+            themes_processed: Object.keys(coverageGroups).length,
+            cards_processed: cards.length,
+            coverages_created: createdCoverages.length,
+            errors_count: errors.length
+        });
+
+        res.json({
+            success: true,
+            coverage_groups: Object.values(coverageGroups),
+            created_count: createdCoverages.length,
+            themes_count: Object.keys(coverageGroups).length,
+            cards_processed: cards.length,
+            errors: errors.length > 0 ? errors : undefined,
+            message: `Se procesaron ${Object.keys(coverageGroups).length} temas y se crearon ${createdCoverages.length} coberturas automáticamente`
+        });
+
+    } catch (error) {
+        console.error('Error in POST /coverages/auto-detect:', error);
+        res.status(500).json({ 
+            error: 'Error interno del servidor',
+            details: error.message 
+        });
+    }
+});
+
 module.exports = router; 
