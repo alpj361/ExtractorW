@@ -7,6 +7,7 @@ const express = require('express');
 const supabase = require('../utils/supabase');
 const { verifyUserAccess } = require('../middlewares/auth');
 const { logUsage } = require('../services/logs');
+const { normalizeGeographicInfo, getDepartmentForCity } = require('../utils/guatemala-geography');
 
 const router = express.Router();
 
@@ -816,39 +817,78 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
                 };
             }
 
-            coverageGroups[topic].cards.push(card);
+            // 🌎 NORMALIZAR INFORMACIÓN GEOGRÁFICA antes de procesar
+            const normalizedGeo = normalizeGeographicInfo({
+                city: card.city,
+                department: card.department,
+                pais: card.pais
+            });
 
-            // Crear coberturas únicas por tema
+            console.log(`🔍 Normalizando geografía para card ${card.id}:`, {
+                original: { city: card.city, department: card.department, pais: card.pais },
+                normalized: normalizedGeo
+            });
+
+            // Usar la información normalizada
+            const geoCard = {
+                ...card,
+                city: normalizedGeo.city,
+                department: normalizedGeo.department,
+                pais: normalizedGeo.pais
+            };
+
+            coverageGroups[topic].cards.push(geoCard);
+
+            // Crear coberturas únicas por tema usando información normalizada
             const coveragesToCreate = [];
 
-            if (card.pais) {
-                coverageGroups[topic].countries.add(card.pais);
+            if (geoCard.pais) {
+                coverageGroups[topic].countries.add(geoCard.pais);
                 coveragesToCreate.push({
                     coverage_type: 'pais',
-                    name: card.pais,
+                    name: geoCard.pais,
                     parent_name: null,
                     relevance: 'high',
                     topic
                 });
             }
 
-            if (card.department) {
-                coverageGroups[topic].departments.add(card.department);
+            if (geoCard.department) {
+                coverageGroups[topic].departments.add(geoCard.department);
                 coveragesToCreate.push({
                     coverage_type: 'departamento',
-                    name: card.department,
-                    parent_name: card.pais || 'Guatemala',
+                    name: geoCard.department,
+                    parent_name: geoCard.pais || 'Guatemala',
                     relevance: 'medium',
                     topic
                 });
             }
 
-            if (card.city) {
-                coverageGroups[topic].cities.add(card.city);
+            if (geoCard.city) {
+                coverageGroups[topic].cities.add(geoCard.city);
+                // Intentar detectar departamento automáticamente si no existe
+                let parentDept = geoCard.department;
+                if (!parentDept) {
+                    parentDept = getDepartmentForCity(geoCard.city);
+                    if (parentDept) {
+                        console.log(`🎯 Departamento detectado para ciudad ${geoCard.city}: ${parentDept}`);
+                        coverageGroups[topic].departments.add(parentDept);
+                        
+                        // Agregar cobertura de departamento detectado
+                        coveragesToCreate.push({
+                            coverage_type: 'departamento',
+                            name: parentDept,
+                            parent_name: geoCard.pais || 'Guatemala',
+                            relevance: 'medium',
+                            topic
+                        });
+                    }
+                }
+                
                 coveragesToCreate.push({
                     coverage_type: 'ciudad',
-                    name: card.city,
-                    parent_name: card.department || null,
+                    name: geoCard.city,
+                    parent_name: parentDept || null,
                     relevance: 'medium',
                     topic
                 });

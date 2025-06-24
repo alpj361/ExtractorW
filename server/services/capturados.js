@@ -2,6 +2,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { createClient } = require('@supabase/supabase-js');
 const supabaseUtil = require('../utils/supabase');
 const { analyzeDocument } = require('./documentAnalysis');
+const { normalizeGeographicInfo, getDepartmentForCity } = require('../utils/guatemala-geography');
 let supabase = supabaseUtil;
 
 // Instanciar Gemini para análisis de texto
@@ -167,6 +168,20 @@ function sanitizeCard(card, codexItem = null) {
     // Fallback a las propiedades originales o General
     sanitized.topic = card.categoria || card.category || card.tipo_tema || 'General';
   }
+
+  // 🌎 NORMALIZACIÓN GEOGRÁFICA AUTOMÁTICA
+  // Detectar departamento automáticamente si solo se menciona ciudad
+  const geoInfo = normalizeGeographicInfo({
+    city: sanitized.city,
+    department: sanitized.department,
+    pais: sanitized.pais
+  });
+
+  // Aplicar información geográfica normalizada
+  sanitized.city = geoInfo.city;
+  sanitized.department = geoInfo.department;
+  sanitized.pais = geoInfo.pais;
+
   return sanitized;
 }
 
