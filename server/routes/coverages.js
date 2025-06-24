@@ -913,7 +913,7 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
                             tags: [topic, 'auto-detectado'],
                             updated_at: new Date().toISOString()
                         }, {
-                            onConflict: 'project_id,coverage_type,name,topic',
+                            onConflict: 'project_id,coverage_type,name,parent_name',
                             ignoreDuplicates: false
                         })
                         .select()
@@ -1027,7 +1027,7 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
                                 tags: [topic, 'fallback-manual'],
                                 updated_at: new Date().toISOString()
                             }, {
-                                onConflict: 'project_id,coverage_type,name,topic',
+                                onConflict: 'project_id,coverage_type,name,parent_name',
                                 ignoreDuplicates: false
                             })
                             .select()
