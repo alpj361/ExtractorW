@@ -896,9 +896,21 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
                     });
                 }
 
-            // Crear o actualizar coberturas
+            // Crear o actualizar coberturas (revisando existentes primero)
             for (const coverageData of coveragesToCreate) {
                 try {
+                    // Primero verificar si la cobertura ya existe
+                    const { data: existingCoverage, error: checkError } = await supabase
+                        .from('project_coverages')
+                        .select('id, updated_at')
+                        .eq('project_id', project_id)
+                        .eq('coverage_type', coverageData.coverage_type)
+                        .eq('name', coverageData.name)
+                        .eq('parent_name', coverageData.parent_name || null)
+                        .single();
+
+                    let isNew = !existingCoverage || checkError;
+                    
                     // Usar UPSERT para insertar o actualizar si existe
                     const { data: coverage, error: upsertError } = await supabase
                         .from('project_coverages')
@@ -923,9 +935,13 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
                         console.error(`Error en upsert para cobertura ${coverageData.name}:`, upsertError);
                         errors.push(`Error procesando ${coverageData.coverage_type}:${coverageData.name} para tema ${topic}`);
                     } else {
-                        createdCoverages.push(coverage);
-                        coverageGroups[topic].coverages_created.push(coverage);
-                        console.log(`✅ Cobertura ${coverageData.coverage_type}:${coverageData.name} procesada para tema ${topic}`);
+                        if (isNew) {
+                            createdCoverages.push(coverage);
+                            console.log(`✅ Nueva cobertura creada: ${coverageData.coverage_type}:${coverageData.name} para tema ${topic}`);
+                        } else {
+                            console.log(`🔄 Cobertura actualizada: ${coverageData.coverage_type}:${coverageData.name} para tema ${topic}`);
+                        }
+                        coverageGroups[topic].coverages_created.push({...coverage, _isNew: isNew});
                     }
                 } catch (error) {
                     console.error(`Error processing coverage ${coverageData.name}:`, error);
@@ -1010,9 +1026,21 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
                     });
                 }
 
-                // Crear o actualizar coberturas con fallback
+                // Crear o actualizar coberturas con fallback (revisando existentes primero)
                 for (const coverageData of coveragesToCreate) {
                     try {
+                        // Primero verificar si la cobertura ya existe
+                        const { data: existingCoverage, error: checkError } = await supabase
+                            .from('project_coverages')
+                            .select('id, updated_at')
+                            .eq('project_id', project_id)
+                            .eq('coverage_type', coverageData.coverage_type)
+                            .eq('name', coverageData.name)
+                            .eq('parent_name', coverageData.parent_name || null)
+                            .single();
+
+                        let isNew = !existingCoverage || checkError;
+
                         // Usar UPSERT para insertar o actualizar si existe
                         const { data: coverage, error: upsertError } = await supabase
                             .from('project_coverages')
@@ -1037,9 +1065,13 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
                             console.error(`Error en upsert fallback para cobertura ${coverageData.name}:`, upsertError);
                             errors.push(`Error procesando ${coverageData.coverage_type}:${coverageData.name} para tema ${topic} (fallback)`);
                         } else {
-                            createdCoverages.push(coverage);
-                            coverageGroups[topic].coverages_created.push(coverage);
-                            console.log(`✅ Cobertura fallback ${coverageData.coverage_type}:${coverageData.name} procesada para tema ${topic}`);
+                            if (isNew) {
+                                createdCoverages.push(coverage);
+                                console.log(`✅ Nueva cobertura creada (fallback): ${coverageData.coverage_type}:${coverageData.name} para tema ${topic}`);
+                            } else {
+                                console.log(`🔄 Cobertura actualizada (fallback): ${coverageData.coverage_type}:${coverageData.name} para tema ${topic}`);
+                            }
+                            coverageGroups[topic].coverages_created.push({...coverage, _isNew: isNew});
                         }
                     } catch (error) {
                         console.error(`Error processing fallback coverage ${coverageData.name}:`, error);
@@ -1058,17 +1090,24 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
             delete group.cards; // No enviar las cards completas en la respuesta
         });
 
+        // Calcular estadísticas finales
+        const totalProcessed = Object.values(coverageGroups).reduce((sum, group) => sum + group.coverages_created.length, 0);
+        const newCoverages = createdCoverages.length;
+        const updatedCoverages = totalProcessed - newCoverages;
+
         // Log de uso
         await logUsage(req.user, 'coverage_auto_detect', 0, req);
 
         res.json({
             success: true,
             coverage_groups: Object.values(coverageGroups),
-            created_count: createdCoverages.length,
+            created_count: newCoverages,
+            updated_count: updatedCoverages,
+            total_processed: totalProcessed,
             themes_count: Object.keys(coverageGroups).length,
             cards_processed: cards.length,
             errors: errors.length > 0 ? errors : undefined,
-            message: `Se procesaron ${Object.keys(coverageGroups).length} temas y se crearon ${createdCoverages.length} coberturas automáticamente`
+            message: `Se procesaron ${Object.keys(coverageGroups).length} temas: ${newCoverages} coberturas nuevas creadas, ${updatedCoverages} existentes actualizadas`
         });
 
     } catch (error) {

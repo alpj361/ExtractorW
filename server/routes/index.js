@@ -4,6 +4,7 @@ const sondeosRoutes = require('./sondeos');
 const projectSuggestionsRoutes = require('./project-suggestions');
 const transcriptionRoutes = require('./transcription');
 const documentAnalysisRoutes = require('./documentAnalysis');
+const mcpRoutes = require('./mcp');
 const path = require('path');
 const capturadosRoutes = require('./capturados');
 const coveragesRoutes = require('./coverages');
@@ -54,6 +55,9 @@ function setupRoutes(app) {
   
   // Configurar rutas de coberturas geográficas
   app.use('/api/coverages', coveragesRoutes);
+  
+  // Configurar rutas del MCP Server
+  app.use('/api/mcp', mcpRoutes);
 }
 
 module.exports = {

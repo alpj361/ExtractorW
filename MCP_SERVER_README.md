@@ -1,0 +1,261 @@
+# MCP SERVER - Micro Command Processor
+
+El MCP Server es un **orquestador de herramientas para agentes IA** integrado en ExtractorW que centraliza y administra el acceso a múltiples servicios especializados.
+
+## 🎯 Concepto
+
+El MCP Server actúa como una **capa de abstracción** que permite a agentes IA acceder de manera unificada a diferentes herramientas de extracción, análisis y procesamiento de datos, sin necesidad de conocer los detalles de implementación de cada servicio.
+
+## 📋 Herramientas Disponibles
+
+### 1. nitter_context
+- **Descripción**: Obtiene contexto social de Twitter/X usando Nitter
+- **Categoría**: social_media
+- **Créditos**: 3 por uso
+- **Parámetros**:
+  - `q` (string, requerido): Término de búsqueda
+  - `location` (string, opcional): Ubicación (default: "guatemala")
+  - `limit` (integer, opcional): Límite de tweets (5-50, default: 10)
+
+## 🚀 Endpoints Disponibles
+
+### Estado y Configuración
+
+#### `GET /api/mcp/status`
+Obtiene el estado general del MCP Server y conectividad con servicios externos.
+
+**Respuesta:**
+```json
+{
+  "success": true,
+  "message": "Estado del MCP Server",
+  "server_status": {
+    "server_name": "ExtractorW MCP Server",
+    "version": "1.0.0",
+    "status": "running",
+    "available_tools": 1,
+    "tools_list": ["nitter_context"],
+    "external_services": {
+      "extractor_t": {
+        "url": "http://localhost:8001",
+        "status": "connected",
+        "response_time": "unknown"
+      }
+    }
+  }
+}
+```
+
+#### `GET /api/mcp/tools`
+Lista todas las herramientas disponibles con su información.
+
+**Respuesta:**
+```json
+{
+  "success": true,
+  "message": "Herramientas MCP disponibles",
+  "tools": [
+    {
+      "name": "nitter_context",
+      "description": "Obtiene contexto social de Twitter/X usando Nitter para un término específico",
+      "category": "social_media",
+      "parameters": { ... },
+      "usage_credits": 3
+    }
+  ],
+  "total_tools": 1
+}
+```
+
+### Ejecución de Herramientas
+
+#### `POST /api/mcp/execute`
+Ejecuta cualquier herramienta de manera genérica.
+
+**Request Body:**
+```json
+{
+  "tool_name": "nitter_context",
+  "parameters": {
+    "q": "elecciones guatemala",
+    "location": "guatemala",
+    "limit": 10
+  }
+}
+```
+
+**Respuesta:**
+```json
+{
+  "success": true,
+  "message": "Herramienta nitter_context ejecutada exitosamente",
+  "tool_name": "nitter_context",
+  "result": {
+    "success": true,
+    "query": "elecciones guatemala",
+    "location": "guatemala",
+    "tweet_count": 8,
+    "tweets": [ ... ],
+    "message": "8 tweets found"
+  }
+}
+```
+
+#### `POST /api/mcp/tools/nitter_context`
+Endpoint específico para nitter_context (acceso directo).
+
+**Request Body:**
+```json
+{
+  "q": "guatemala",
+  "location": "guatemala",
+  "limit": 5
+}
+```
+
+### Información de Herramientas
+
+#### `GET /api/mcp/tools/:tool_name`
+Obtiene información detallada de una herramienta específica.
+
+## 🔧 Configuración
+
+### Variables de Entorno
+
+```bash
+# URL del servicio ExtractorT
+EXTRACTOR_T_URL=http://localhost:8001
+```
+
+### Autenticación
+
+Todas las rutas requieren autenticación mediante el middleware `requireAuth` de ExtractorW.
+
+## 🧪 Pruebas
+
+### Ejecutar Pruebas
+```bash
+cd ExtractorW
+node test-mcp-server.js
+```
+
+### Con Token de Autenticación
+```bash
+TEST_TOKEN=tu_token_jwt node test-mcp-server.js
+```
+
+### Pruebas Incluidas
+1. **Estado del MCP Server**: Verifica conectividad y estado
+2. **Listar herramientas**: Obtiene catálogo completo
+3. **Info herramienta específica**: Detalles de nitter_context
+4. **Nitter Context (directo)**: Endpoint específico
+5. **Ejecutar herramienta (genérico)**: Endpoint universal
+6. **Validación de parámetros**: Manejo de errores
+
+## 📁 Estructura de Archivos
+
+```
+ExtractorW/
+├── server/
+│   ├── routes/
+│   │   └── mcp.js              # Rutas del MCP Server
+│   │   └── mcp.js              # Lógica de orquestación
+│   └── routes/
+│       └── index.js            # Registro de rutas
+├── test-mcp-server.js          # Script de pruebas
+└── MCP_SERVER_README.md        # Esta documentación
+```
+
+## 🔄 Flujo de Ejecución
+
+1. **Cliente envía request** → `/api/mcp/execute` o endpoint específico
+2. **Autenticación** → Middleware `requireAuth` valida usuario
+3. **Validación** → Se verifican parámetros según configuración de herramienta
+4. **Orquestación** → MCP Service ejecuta herramienta específica
+5. **Comunicación** → Se conecta con servicio externo (ExtractorT)
+6. **Respuesta** → Se devuelve resultado unificado al cliente
+
+## 🚀 Agregar Nuevas Herramientas
+
+Para agregar una nueva herramienta al MCP Server:
+
+### 1. Actualizar Configuración
+En `server/services/mcp.js`, agregar a `AVAILABLE_TOOLS`:
+
+```javascript
+nueva_herramienta: {
+  name: 'nueva_herramienta',
+  description: 'Descripción de la herramienta',
+  parameters: {
+    param1: {
+      type: 'string',
+      required: true,
+      description: 'Descripción del parámetro'
+    }
+  },
+  service_endpoint: '/endpoint',
+  service_url: 'http://servicio:puerto',
+  category: 'categoria',
+  usage_credits: 5
+}
+```
+
+### 2. Implementar Ejecutor
+Agregar case en función `executeTool()`:
+
+```javascript
+case 'nueva_herramienta':
+  result = await executeNuevaHerramienta(
+    parameters.param1,
+    user
+  );
+  break;
+```
+
+### 3. Crear Función de Ejecución
+```javascript
+async function executeNuevaHerramienta(param1, user = null) {
+  // Lógica de comunicación con servicio externo
+}
+```
+
+### 4. Agregar Ruta Específica (Opcional)
+En `server/routes/mcp.js`:
+
+```javascript
+router.post('/tools/nueva_herramienta', requireAuth, async (req, res) => {
+  // Endpoint específico para la herramienta
+});
+```
+
+## 🛡️ Seguridad
+
+- ✅ **Autenticación requerida** en todos los endpoints
+- ✅ **Validación de parámetros** antes de ejecución
+- ✅ **Timeout configurado** en comunicaciones externas
+- ✅ **Manejo de errores** robusto
+- ✅ **Logging completo** de operaciones
+
+## 📊 Monitoreo
+
+El MCP Server registra automáticamente:
+- ✅ Ejecución de herramientas con usuario y timestamp
+- ✅ Errores y excepciones con contexto
+- ✅ Tiempo de respuesta de servicios externos
+- ✅ Estado de conectividad con servicios
+
+## 🔗 Integración con Agentes IA
+
+El MCP Server está diseñado para ser consumido por agentes IA que necesitan:
+- **Contexto social** (nitter_context)
+- **Análisis de tendencias** (próximamente)
+- **Extracción de datos** (próximamente)
+- **Procesamiento de documentos** (próximamente)
+
+Los agentes pueden descubrir herramientas dinámicamente usando `/api/mcp/tools` y ejecutarlas según sus necesidades específicas.
+
+---
+
+**Versión**: 1.0.0  
+**Última actualización**: 2024  
+**Mantenedor**: Equipo ExtractorW 
