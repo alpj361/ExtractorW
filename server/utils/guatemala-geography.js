@@ -24,7 +24,8 @@ const GUATEMALA_GEOGRAPHY = {
     'Santo Domingo Xenacoj', 'Santiago Sacatepéquez', 'San Bartolomé Milpas Altas',
     'San Lucas Sacatepéquez', 'Santa Lucía Milpas Altas', 'Magdalena Milpas Altas',
     'Santa María de Jesús', 'Ciudad Vieja', 'San Miguel Dueñas',
-    'Alotenango', 'San Antonio Aguas Calientes', 'Santa Catarina Barahona'
+    'Alotenango', 'San Antonio Aguas Calientes', 'Santa Catarina Barahona',
+    'San Bartolo'
   ],
 
   // Chimaltenango
@@ -65,7 +66,7 @@ const GUATEMALA_GEOGRAPHY = {
   'Totonicapán': [
     'Totonicapán', 'San Cristóbal Totonicapán', 'San Francisco El Alto',
     'San Andrés Xecul', 'Momostenango', 'Santa María Chiquimula',
-    'Santa Lucía La Reforma', 'San Bartolo'
+    'Santa Lucía La Reforma'
   ],
 
   // Quetzaltenango
@@ -200,15 +201,45 @@ function getDepartmentForCity(cityName) {
   if (!cityName || typeof cityName !== 'string') return null;
   
   const normalizedCity = cityName.trim();
+  const possibleMatches = [];
   
+  // Primera pasada: buscar coincidencias exactas
   for (const [department, cities] of Object.entries(GUATEMALA_GEOGRAPHY)) {
-    if (cities.some(city => 
-      city.toLowerCase() === normalizedCity.toLowerCase() ||
-      normalizedCity.toLowerCase().includes(city.toLowerCase()) ||
-      city.toLowerCase().includes(normalizedCity.toLowerCase())
-    )) {
-      return department;
+    for (const city of cities) {
+      if (city.toLowerCase() === normalizedCity.toLowerCase()) {
+        return department; // Coincidencia exacta, retornar inmediatamente
+      }
     }
+  }
+  
+  // Segunda pasada: buscar coincidencias parciales con mayor especificidad
+  for (const [department, cities] of Object.entries(GUATEMALA_GEOGRAPHY)) {
+    for (const city of cities) {
+      const cityLower = city.toLowerCase();
+      const searchLower = normalizedCity.toLowerCase();
+      
+      // Solo buscar si la ciudad contiene la búsqueda completa o viceversa
+      if (cityLower.includes(searchLower) && searchLower.length >= 4) {
+        possibleMatches.push({ department, city, matchType: 'contains_search', similarity: searchLower.length / cityLower.length });
+      } else if (searchLower.includes(cityLower) && cityLower.length >= 4) {
+        possibleMatches.push({ department, city, matchType: 'search_contains', similarity: cityLower.length / searchLower.length });
+      }
+    }
+  }
+  
+  // Si hay coincidencias parciales, elegir la mejor
+  if (possibleMatches.length > 0) {
+    // Ordenar por similitud descendente
+    possibleMatches.sort((a, b) => b.similarity - a.similarity);
+    
+    // Preferir coincidencias donde la búsqueda está contenida en la ciudad (más específico)
+    const containsSearch = possibleMatches.filter(m => m.matchType === 'search_contains');
+    if (containsSearch.length > 0) {
+      return containsSearch[0].department;
+    }
+    
+    // Si no, usar la mejor coincidencia general
+    return possibleMatches[0].department;
   }
   
   return null;

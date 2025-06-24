@@ -2,7 +2,8 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { createClient } = require('@supabase/supabase-js');
 const supabaseUtil = require('../utils/supabase');
 const { analyzeDocument } = require('./documentAnalysis');
-const { normalizeGeographicInfo, getDepartmentForCity } = require('../utils/guatemala-geography');
+const { normalizeGeographicInfoWithAI } = require('../utils/geographic-ai-detector');
+const { normalizeGeographicInfo: manualNormalize } = require('../utils/guatemala-geography');
 let supabase = supabaseUtil;
 
 // Instanciar Gemini para análisis de texto
@@ -169,18 +170,9 @@ function sanitizeCard(card, codexItem = null) {
     sanitized.topic = card.categoria || card.category || card.tipo_tema || 'General';
   }
 
-  // 🌎 NORMALIZACIÓN GEOGRÁFICA AUTOMÁTICA
-  // Detectar departamento automáticamente si solo se menciona ciudad
-  const geoInfo = normalizeGeographicInfo({
-    city: sanitized.city,
-    department: sanitized.department,
-    pais: sanitized.pais
-  });
-
-  // Aplicar información geográfica normalizada
-  sanitized.city = geoInfo.city;
-  sanitized.department = geoInfo.department;
-  sanitized.pais = geoInfo.pais;
+  // 🌎 NORMALIZACIÓN GEOGRÁFICA CON IA
+  // La normalización con IA se hará en el procesamiento en lote para mejor eficiencia
+  // Por ahora se mantiene la información original para procesar después
 
   return sanitized;
 }
@@ -358,7 +350,7 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
   );
 
   // 4. Preparar datos filtrando duplicados
-  const insertData = cards
+  const initialData = cards
     .map(raw => {
       const card = sanitizeCard(raw, codexItem);
       return {
@@ -369,18 +361,101 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
     })
     .filter(c => !existingFingerprints.has(`${c.entity}|${c.city}|${c.department}|${c.discovery}|${c.description}`));
 
-  if (insertData.length === 0) return [];
+  if (initialData.length === 0) return [];
 
-  const { data: inserted, error: insertError } = await supabase
-    .from('capturado_cards')
-    .insert(insertData)
-    .select();
+  // 🌎 NORMALIZACIÓN GEOGRÁFICA CON IA EN LOTE
+  console.log(`🔍 Normalizando geografía con IA para ${initialData.length} hallazgos...`);
+  
+  try {
+    // Extraer información geográfica para normalización
+    const geoData = initialData.map(card => ({
+      city: card.city,
+      department: card.department,
+      pais: card.pais
+    }));
 
-  if (insertError) {
-    throw new Error(`Error insertando capturado_cards: ${insertError.message}`);
+    // Importar y usar función de lote
+    const { batchNormalizeGeography } = require('../utils/geographic-ai-detector');
+    const normalizedGeoData = await batchNormalizeGeography(geoData);
+
+    // Aplicar resultados normalizados a las cards
+    const insertData = initialData.map((card, index) => {
+      const normalized = normalizedGeoData[index];
+      if (normalized) {
+        return {
+          ...card,
+          city: normalized.city,
+          department: normalized.department,
+          pais: normalized.pais,
+          // Agregar metadatos de detección como campos internos (no se guardan en DB)
+          _detection_method: normalized.detection_method,
+          _confidence: normalized.confidence,
+          _reasoning: normalized.reasoning
+        };
+      }
+      return card;
+    });
+
+    console.log(`✅ Normalización geográfica completada para ${insertData.length} hallazgos`);
+    
+    // Log resumen de detecciones
+    const detectionStats = {
+      ai_detections: insertData.filter(c => c._detection_method === 'gemini_ai').length,
+      manual_fallback: insertData.filter(c => c._detection_method === 'manual_fallback').length,
+      original: insertData.filter(c => c._detection_method === 'original').length
+    };
+    
+    console.log(`📊 Estadísticas de detección:`, detectionStats);
+
+    // Limpiar metadatos antes de insertar
+    const cleanInsertData = insertData.map(card => {
+      const { _detection_method, _confidence, _reasoning, ...cleanCard } = card;
+      return cleanCard;
+    });
+
+    const { data: inserted, error: insertError } = await supabase
+      .from('capturado_cards')
+      .insert(cleanInsertData)
+      .select();
+
+    if (insertError) {
+      throw new Error(`Error insertando capturado_cards: ${insertError.message}`);
+    }
+
+    return inserted;
+
+  } catch (geoError) {
+    console.error(`⚠️ Error en normalización geográfica:`, geoError.message);
+    console.log(`🔄 Continuando con fallback manual...`);
+    
+    // Fallback: usar normalización manual para todas las cards
+    const { batchNormalizeGeography: manualBatch } = require('../utils/guatemala-geography');
+    const insertData = initialData.map(card => {
+      const manualNormalized = manualNormalize({
+        city: card.city,
+        department: card.department,
+        pais: card.pais
+      });
+      
+      return {
+        ...card,
+        city: manualNormalized.city,
+        department: manualNormalized.department,
+        pais: manualNormalized.pais
+      };
+    });
+
+    const { data: inserted, error: insertError } = await supabase
+      .from('capturado_cards')
+      .insert(insertData)
+      .select();
+
+    if (insertError) {
+      throw new Error(`Error insertando capturado_cards con fallback: ${insertError.message}`);
+    }
+
+    return inserted;
   }
-
-  return inserted;
 }
 
 /**
