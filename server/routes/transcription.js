@@ -314,6 +314,23 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
           const dbgType = response.headers['content-type'] || 'unknown';
           const dbgSize = response.data?.byteLength || response.data?.length || 0;
           console.log(`📦 Drive download status: ${response.status} (${dbgType}) size=${dbgSize} bytes`);
+          // Si es HTML (aviso de descarga grande), extraer confirm token
+          if (dbgType.startsWith('text/html')) {
+            const html = response.data.toString('utf8');
+            const tokenMatch = /confirm=([0-9A-Za-z_]+)/.exec(html);
+            if (tokenMatch) {
+              const confirmToken = tokenMatch[1];
+              console.log('🔑 Confirm token encontrado:', confirmToken);
+              const confirmUrl = `https://drive.google.com/uc?export=download&id=${drive_file_id}&confirm=${confirmToken}`;
+              response = await axios.get(confirmUrl, {
+                responseType: 'arraybuffer',
+                maxRedirects: 5
+              });
+              console.log('✅ Descarga confirmada, tamaño', response.data?.byteLength || response.data?.length);
+            } else {
+              console.warn('⚠️ No se encontró confirm token en HTML de Drive');
+            }
+          }
           // Si es texto, mostrar primeros 200 caracteres para inspección
           if (dbgType.startsWith('text') && dbgSize < 20000) {
             const preview = response.data.toString().slice(0, 200);
