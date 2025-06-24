@@ -33,12 +33,12 @@ async function logUsage(user, operation, credits, req) {
 
     // Extraer información relevante de la solicitud
     const requestParams = {
-      path: req.path,
-      method: req.method,
-      body: req.body ? JSON.stringify(req.body).substring(0, 1000) : null,
+      path: req?.path || '/unknown',
+      method: req?.method || 'UNKNOWN',
+      body: req?.body ? JSON.stringify(req.body).substring(0, 1000) : null,
       timestamp: new Date().toISOString(),
       success: true,
-      ip: req.ip || req.headers['x-forwarded-for'] || 'unknown'
+      ip: req?.ip || req?.headers?.['x-forwarded-for'] || 'unknown'
     };
 
     // Crear registro de uso completo

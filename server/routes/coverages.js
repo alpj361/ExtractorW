@@ -896,12 +896,13 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
                     });
                 }
 
-            // Crear las coberturas evitando duplicados
+            // Crear o actualizar coberturas
             for (const coverageData of coveragesToCreate) {
                 try {
-                    const { data: coverage, error: insertError } = await supabase
+                    // Usar UPSERT para insertar o actualizar si existe
+                    const { data: coverage, error: upsertError } = await supabase
                         .from('project_coverages')
-                        .insert({
+                        .upsert({
                             project_id,
                             ...coverageData,
                             description: `Detectado automáticamente desde hallazgos del tema: ${topic}`,
@@ -909,25 +910,26 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
                             confidence_score: 0.90,
                             source_card_id: geoCard.id,
                             discovery_context: `Extraído automáticamente desde: ${geoCard.entity || 'Sin entidad'} - ${geoCard.discovery || geoCard.description || 'Sin descripción'}`,
-                            tags: [topic, 'auto-detectado']
+                            tags: [topic, 'auto-detectado'],
+                            updated_at: new Date().toISOString()
+                        }, {
+                            onConflict: 'project_id,coverage_type,name,topic',
+                            ignoreDuplicates: false
                         })
                         .select()
                         .single();
 
-                    if (insertError) {
-                        if (insertError.code === '23505') {
-                            // Cobertura duplicada, actualizar referencias
-                            console.log(`Cobertura ${coverageData.coverage_type}:${coverageData.name} ya existe para tema ${topic}`);
-                        } else {
-                            throw insertError;
-                        }
+                    if (upsertError) {
+                        console.error(`Error en upsert para cobertura ${coverageData.name}:`, upsertError);
+                        errors.push(`Error procesando ${coverageData.coverage_type}:${coverageData.name} para tema ${topic}`);
                     } else {
                         createdCoverages.push(coverage);
                         coverageGroups[topic].coverages_created.push(coverage);
+                        console.log(`✅ Cobertura ${coverageData.coverage_type}:${coverageData.name} procesada para tema ${topic}`);
                     }
                 } catch (error) {
-                    console.error(`Error creating coverage ${coverageData.name}:`, error);
-                    errors.push(`Error creando ${coverageData.coverage_type}:${coverageData.name} para tema ${topic}`);
+                    console.error(`Error processing coverage ${coverageData.name}:`, error);
+                    errors.push(`Error procesando ${coverageData.coverage_type}:${coverageData.name} para tema ${topic}`);
                 }
             }
         }
@@ -1008,12 +1010,13 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
                     });
                 }
 
-                // Crear las coberturas con fallback
+                // Crear o actualizar coberturas con fallback
                 for (const coverageData of coveragesToCreate) {
                     try {
-                        const { data: coverage, error: insertError } = await supabase
+                        // Usar UPSERT para insertar o actualizar si existe
+                        const { data: coverage, error: upsertError } = await supabase
                             .from('project_coverages')
-                            .insert({
+                            .upsert({
                                 project_id,
                                 ...coverageData,
                                 description: `Detectado con fallback manual desde hallazgos del tema: ${topic}`,
@@ -1021,24 +1024,26 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
                                 confidence_score: 0.75,
                                 source_card_id: geoCard.id,
                                 discovery_context: `Extraído con fallback desde: ${geoCard.entity || 'Sin entidad'} - ${geoCard.discovery || geoCard.description || 'Sin descripción'}`,
-                                tags: [topic, 'fallback-manual']
+                                tags: [topic, 'fallback-manual'],
+                                updated_at: new Date().toISOString()
+                            }, {
+                                onConflict: 'project_id,coverage_type,name,topic',
+                                ignoreDuplicates: false
                             })
                             .select()
                             .single();
 
-                        if (insertError) {
-                            if (insertError.code === '23505') {
-                                console.log(`Cobertura ${coverageData.coverage_type}:${coverageData.name} ya existe para tema ${topic}`);
-                            } else {
-                                throw insertError;
-                            }
+                        if (upsertError) {
+                            console.error(`Error en upsert fallback para cobertura ${coverageData.name}:`, upsertError);
+                            errors.push(`Error procesando ${coverageData.coverage_type}:${coverageData.name} para tema ${topic} (fallback)`);
                         } else {
                             createdCoverages.push(coverage);
                             coverageGroups[topic].coverages_created.push(coverage);
+                            console.log(`✅ Cobertura fallback ${coverageData.coverage_type}:${coverageData.name} procesada para tema ${topic}`);
                         }
                     } catch (error) {
-                        console.error(`Error creating fallback coverage ${coverageData.name}:`, error);
-                        errors.push(`Error creando ${coverageData.coverage_type}:${coverageData.name} para tema ${topic} (fallback)`);
+                        console.error(`Error processing fallback coverage ${coverageData.name}:`, error);
+                        errors.push(`Error procesando ${coverageData.coverage_type}:${coverageData.name} para tema ${topic} (fallback)`);
                     }
                 }
             }
@@ -1054,13 +1059,7 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
         });
 
         // Log de uso
-        await logUsage(req.user.id, 'coverage_auto_detect', {
-            project_id,
-            themes_processed: Object.keys(coverageGroups).length,
-            cards_processed: cards.length,
-            coverages_created: createdCoverages.length,
-            errors_count: errors.length
-        });
+        await logUsage(req.user, 'coverage_auto_detect', 0, req);
 
         res.json({
             success: true,
@@ -1219,11 +1218,8 @@ router.post('/update-geography', verifyUserAccess, async (req, res) => {
                 manual_fallback: updateResults.filter(r => r.changes?.detection_method === 'manual_fallback').length
             };
 
-            // Log de uso
-            await logUsage(req.user.id, 'coverage_update_geography', {
-                project_id,
-                ...stats
-            });
+                         // Log de uso
+             await logUsage(req.user, 'coverage_update_geography', 0, req);
 
             res.json({
                 success: true,
