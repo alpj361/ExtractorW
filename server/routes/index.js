@@ -5,6 +5,7 @@ const projectSuggestionsRoutes = require('./project-suggestions');
 const transcriptionRoutes = require('./transcription');
 const documentAnalysisRoutes = require('./documentAnalysis');
 const mcpRoutes = require('./mcp');
+const hybridCoveragesRoutes = require('./hybridCoverages');
 const path = require('path');
 const capturadosRoutes = require('./capturados');
 const coveragesRoutes = require('./coverages');
@@ -53,8 +54,11 @@ function setupRoutes(app) {
   // Configurar rutas de capturados (hallazgos extraídos)
   app.use('/api/capturados', capturadosRoutes);
   
-  // Configurar rutas de coberturas geográficas
+  // Configurar rutas de coberturas geográficas (sistema tradicional)
   app.use('/api/coverages', coveragesRoutes);
+  
+  // Configurar rutas híbridas de coberturas geográficas con IA
+  app.use('/api/hybrid-coverages', hybridCoveragesRoutes);
   
   // Configurar rutas del MCP Server
   app.use('/api/mcp', mcpRoutes);

@@ -1,4 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
+require('dotenv').config();
 
 // ===================================================================
 // SCRIPT DE LIMPIEZA - ELIMINAR COBERTURAS DUPLICADAS
@@ -17,152 +18,261 @@ if (!supabaseUrl || !supabaseServiceKey) {
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 async function cleanupDuplicateCoverages() {
-    console.log('🧹 LIMPIEZA DE COBERTURAS DUPLICADAS');
-    console.log('====================================\n');
+    console.log('🧹 INICIANDO LIMPIEZA DE DUPLICADOS DE COBERTURAS\n');
 
     try {
-        // 1. Obtener todas las coberturas
-        console.log('1️⃣ Obteniendo todas las coberturas...');
-        const { data: allCoverages, error: fetchError } = await supabase
+        // 1. Obtener todas las coberturas agrupadas por proyecto
+        const { data: allCoverages, error: coveragesError } = await supabase
             .from('project_coverages')
             .select('*')
-            .order('created_at', { ascending: true }); // Ordenar por más antiguas primero
+            .order('project_id, created_at');
 
-        if (fetchError) {
-            throw new Error(`Error obteniendo coberturas: ${fetchError.message}`);
+        if (coveragesError) {
+            console.error('Error obteniendo coberturas:', coveragesError);
+            return;
         }
 
-        console.log(`   📊 Total de coberturas encontradas: ${allCoverages.length}`);
+        console.log(`📊 Total de coberturas en base de datos: ${allCoverages.length}`);
 
-        // 2. Agrupar por proyecto + tipo + nombre + parent_name para encontrar duplicados
-        console.log('2️⃣ Identificando duplicados...');
-        const coverageGroups = {};
-        const duplicates = [];
-
+        // 2. Agrupar por proyecto y detectar duplicados
+        const projectGroups = {};
         allCoverages.forEach(coverage => {
-            const key = `${coverage.project_id}|${coverage.coverage_type}|${coverage.name}|${coverage.parent_name || 'null'}`;
-            
-            if (!coverageGroups[key]) {
-                coverageGroups[key] = [];
+            if (!projectGroups[coverage.project_id]) {
+                projectGroups[coverage.project_id] = [];
             }
-            coverageGroups[key].push(coverage);
+            projectGroups[coverage.project_id].push(coverage);
         });
 
-        // Identificar grupos con duplicados
-        Object.entries(coverageGroups).forEach(([key, coverages]) => {
-            if (coverages.length > 1) {
-                // Mantener la primera cobertura (más antigua) y marcar el resto como duplicados
-                const [keep, ...toDelete] = coverages;
-                duplicates.push({
-                    key,
-                    keep,
-                    toDelete,
-                    count: coverages.length
-                });
-            }
-        });
+        let totalDuplicatesFound = 0;
+        let totalDuplicatesRemoved = 0;
 
-        console.log(`   🔍 Grupos de duplicados encontrados: ${duplicates.length}`);
-        
-        if (duplicates.length === 0) {
-            console.log('✅ No se encontraron coberturas duplicadas. ¡Todo está limpio!');
-            return;
-        }
+        // 3. Procesar cada proyecto
+        for (const [projectId, coverages] of Object.entries(projectGroups)) {
+            console.log(`\n📂 Procesando proyecto: ${projectId}`);
+            console.log(`   Coberturas totales: ${coverages.length}`);
 
-        // 3. Mostrar resumen de duplicados
-        console.log('\n3️⃣ Resumen de duplicados encontrados:');
-        let totalToDelete = 0;
-        duplicates.forEach((duplicate, index) => {
-            const [projectId, type, name, parentName] = duplicate.key.split('|');
-            console.log(`   ${index + 1}. ${type}:${name} (parent: ${parentName === 'null' ? 'ninguno' : parentName})`);
-            console.log(`      Proyecto: ${projectId}`);
-            console.log(`      Duplicados: ${duplicate.count} (eliminar ${duplicate.toDelete.length})`);
-            console.log(`      Mantener: ID ${duplicate.keep.id} (creado: ${duplicate.keep.created_at})`);
-            console.log(`      Eliminar: IDs ${duplicate.toDelete.map(c => c.id).join(', ')}\n`);
-            totalToDelete += duplicate.toDelete.length;
-        });
+            // Detectar duplicados usando la misma lógica que el constraint UNIQUE
+            const uniqueGroups = {};
+            const duplicatesToDelete = [];
 
-        console.log(`📊 Total de coberturas a eliminar: ${totalToDelete}`);
-
-        // 4. Confirmar antes de proceder
-        console.log('\n⚠️  ATENCIÓN: Esta operación eliminará las coberturas duplicadas de forma permanente.');
-        console.log('   Se mantendrá la cobertura más antigua de cada grupo.');
-        
-        // En un entorno automatizado, descomenta la siguiente línea para proceder automáticamente
-        // const proceed = true;
-        
-        // Para modo interactivo (requiere readline):
-        const readline = require('readline');
-        const rl = readline.createInterface({
-            input: process.stdin,
-            output: process.stdout
-        });
-
-        const proceed = await new Promise(resolve => {
-            rl.question('\n¿Proceder con la eliminación? (y/N): ', (answer) => {
-                rl.close();
-                resolve(answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes');
-            });
-        });
-
-        if (!proceed) {
-            console.log('❌ Operación cancelada por el usuario.');
-            return;
-        }
-
-        // 5. Eliminar duplicados
-        console.log('\n4️⃣ Eliminando coberturas duplicadas...');
-        let deletedCount = 0;
-        const errors = [];
-
-        for (const duplicate of duplicates) {
-            for (const coverage of duplicate.toDelete) {
-                try {
-                    const { error: deleteError } = await supabase
-                        .from('project_coverages')
-                        .delete()
-                        .eq('id', coverage.id);
-
-                    if (deleteError) {
-                        errors.push(`Error eliminando cobertura ${coverage.id}: ${deleteError.message}`);
-                    } else {
-                        deletedCount++;
-                        console.log(`   ✅ Eliminada cobertura duplicada: ${coverage.coverage_type}:${coverage.name} (ID: ${coverage.id})`);
-                    }
-                } catch (error) {
-                    errors.push(`Error eliminando cobertura ${coverage.id}: ${error.message}`);
+            coverages.forEach(coverage => {
+                // Usar la misma lógica que el constraint: project_id, coverage_type, name, parent_name
+                const key = `${coverage.coverage_type}|||${coverage.name}|||${coverage.parent_name || 'NULL'}`;
+                
+                if (!uniqueGroups[key]) {
+                    uniqueGroups[key] = [];
                 }
+                uniqueGroups[key].push(coverage);
+            });
+
+            // Identificar duplicados (mantener el más reciente, eliminar los demás)
+            Object.entries(uniqueGroups).forEach(([key, group]) => {
+                if (group.length > 1) {
+                    // Ordenar por fecha de creación (más reciente primero)
+                    group.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+                    
+                    const toKeep = group[0]; // El más reciente
+                    const toDelete = group.slice(1); // El resto
+                    
+                    console.log(`\n   🚨 DUPLICADO ENCONTRADO: ${key.replace(/\|\|\|/g, ' | ')}`);
+                    console.log(`      Manteniendo (más reciente): ${toKeep.id} - ${toKeep.created_at}`);
+                    console.log(`      Eliminando ${toDelete.length} duplicado(s):`);
+                    
+                    toDelete.forEach(dup => {
+                        console.log(`         - ${dup.id} - ${dup.created_at}`);
+                        duplicatesToDelete.push(dup.id);
+                    });
+                    
+                    totalDuplicatesFound += toDelete.length;
+                }
+            });
+
+            // 4. Eliminar duplicados de este proyecto
+            if (duplicatesToDelete.length > 0) {
+                console.log(`\n   🗑️ Eliminando ${duplicatesToDelete.length} duplicados...`);
+                
+                const { error: deleteError } = await supabase
+                    .from('project_coverages')
+                    .delete()
+                    .in('id', duplicatesToDelete);
+
+                if (deleteError) {
+                    console.error(`   ❌ Error eliminando duplicados:`, deleteError);
+                } else {
+                    console.log(`   ✅ ${duplicatesToDelete.length} duplicados eliminados exitosamente`);
+                    totalDuplicatesRemoved += duplicatesToDelete.length;
+                }
+            } else {
+                console.log(`   ✅ No se encontraron duplicados en este proyecto`);
             }
         }
 
-        // 6. Resumen final
-        console.log('\n5️⃣ RESUMEN DE LIMPIEZA:');
-        console.log('========================');
-        console.log(`✅ Coberturas eliminadas exitosamente: ${deletedCount}`);
-        console.log(`❌ Errores durante eliminación: ${errors.length}`);
-        
-        if (errors.length > 0) {
-            console.log('\n❌ Errores encontrados:');
-            errors.forEach(error => console.log(`   ${error}`));
-        }
+        // 5. Resumen final
+        console.log(`\n📋 RESUMEN DE LIMPIEZA:`);
+        console.log(`   🚨 Duplicados encontrados: ${totalDuplicatesFound}`);
+        console.log(`   🗑️ Duplicados eliminados: ${totalDuplicatesRemoved}`);
+        console.log(`   ✅ Limpieza completada`);
 
-        // 7. Verificación final
-        const { data: finalCoverages, error: finalFetchError } = await supabase
-            .from('project_coverages')
-            .select('*');
-
-        if (!finalFetchError) {
-            console.log(`📊 Total de coberturas después de limpieza: ${finalCoverages.length}`);
-            console.log(`🧹 Coberturas eliminadas: ${allCoverages.length - finalCoverages.length}`);
-        }
-
-        console.log('\n🎉 LIMPIEZA COMPLETADA');
+        // 6. Verificar que no quedaron duplicados
+        console.log(`\n🔍 VERIFICACIÓN POST-LIMPIEZA:`);
+        await verifyNoDuplicates();
 
     } catch (error) {
-        console.error('❌ ERROR DURANTE LA LIMPIEZA:', error.message);
-        process.exit(1);
+        console.error('❌ Error en limpieza de duplicados:', error);
     }
 }
+
+// Función auxiliar para verificar que no hay duplicados
+async function verifyNoDuplicates() {
+    try {
+        const { data: remainingCoverages } = await supabase
+            .from('project_coverages')
+            .select('project_id, coverage_type, name, parent_name');
+
+        const duplicateCheck = {};
+        let duplicatesFound = 0;
+
+        remainingCoverages.forEach(coverage => {
+            const key = `${coverage.project_id}|||${coverage.coverage_type}|||${coverage.name}|||${coverage.parent_name || 'NULL'}`;
+            
+            if (duplicateCheck[key]) {
+                duplicatesFound++;
+                console.log(`   🚨 DUPLICADO RESTANTE: ${key.replace(/\|\|\|/g, ' | ')}`);
+            } else {
+                duplicateCheck[key] = true;
+            }
+        });
+
+        if (duplicatesFound === 0) {
+            console.log(`   ✅ Verificación exitosa: No se encontraron duplicados restantes`);
+            console.log(`   📊 Total de coberturas únicas: ${Object.keys(duplicateCheck).length}`);
+        } else {
+            console.log(`   ❌ ADVERTENCIA: Se encontraron ${duplicatesFound} duplicados restantes`);
+        }
+
+    } catch (error) {
+        console.error('Error en verificación:', error);
+    }
+}
+
+// 7. Función para probar el comportamiento del UPSERT
+async function testUpsertBehavior() {
+    console.log('\n🧪 PROBANDO COMPORTAMIENTO DEL UPSERT\n');
+
+    // Datos de prueba
+    const testData = {
+        project_id: 'b36e711c-6206-4258-83b6-6a566f7b2766', // Proyecto real del output
+        coverage_type: 'pais',
+        name: 'Guatemala',
+        parent_name: null,
+        description: 'Prueba de UPSERT',
+        detection_source: 'test',
+        confidence_score: 0.95
+    };
+
+    try {
+        console.log('1. Intentando UPSERT con datos de prueba...');
+        console.log('   Datos:', JSON.stringify(testData, null, 2));
+
+        // Primer UPSERT
+        const { data: result1, error: error1 } = await supabase
+            .from('project_coverages')
+            .upsert(testData, {
+                onConflict: 'project_id,coverage_type,name,parent_name',
+                ignoreDuplicates: false
+            })
+            .select()
+            .single();
+
+        if (error1) {
+            console.log('   ❌ Error en primer UPSERT:', error1);
+        } else {
+            console.log('   ✅ Primer UPSERT exitoso:', result1.id);
+        }
+
+        // Segundo UPSERT (debería actualizar, no crear nuevo)
+        console.log('\n2. Segundo UPSERT con los mismos datos...');
+        
+        const { data: result2, error: error2 } = await supabase
+            .from('project_coverages')
+            .upsert({
+                ...testData,
+                description: 'Prueba de UPSERT - ACTUALIZADA',
+                updated_at: new Date().toISOString()
+            }, {
+                onConflict: 'project_id,coverage_type,name,parent_name',
+                ignoreDuplicates: false
+            })
+            .select()
+            .single();
+
+        if (error2) {
+            console.log('   ❌ Error en segundo UPSERT:', error2);
+        } else {
+            console.log('   ✅ Segundo UPSERT exitoso:', result2.id);
+            console.log('   🔍 ¿Mismo ID?', result1?.id === result2?.id ? 'SÍ (actualización)' : 'NO (nuevo registro)');
+        }
+
+        // Verificar cuántos registros hay con estos datos
+        const { data: duplicateCheck, count } = await supabase
+            .from('project_coverages')
+            .select('id, created_at, description', { count: 'exact' })
+            .eq('project_id', testData.project_id)
+            .eq('coverage_type', testData.coverage_type)
+            .eq('name', testData.name)
+            .is('parent_name', null);
+
+        console.log(`\n3. Verificación de duplicados:`);
+        console.log(`   Registros encontrados: ${count}`);
+        
+        if (duplicateCheck && duplicateCheck.length > 0) {
+            duplicateCheck.forEach((record, index) => {
+                console.log(`   [${index + 1}] ID: ${record.id}`);
+                console.log(`       Descripción: ${record.description}`);
+                console.log(`       Creado: ${record.created_at}`);
+            });
+        }
+
+        // Limpiar datos de prueba
+        console.log(`\n4. Limpiando datos de prueba...`);
+        if (result2?.id) {
+            const { error: deleteError } = await supabase
+                .from('project_coverages')
+                .delete()
+                .eq('id', result2.id);
+
+            if (deleteError) {
+                console.log('   ❌ Error eliminando datos de prueba:', deleteError);
+            } else {
+                console.log('   ✅ Datos de prueba eliminados');
+            }
+        }
+
+    } catch (error) {
+        console.error('❌ Error en prueba de UPSERT:', error);
+    }
+}
+
+// Ejecutar funciones
+async function main() {
+    console.log('='.repeat(60));
+    console.log('🛠️  HERRAMIENTAS DE MANTENIMIENTO DE COBERTURAS');
+    console.log('='.repeat(60));
+
+    // Opción 1: Solo verificar duplicados
+    console.log('\n🔍 VERIFICANDO DUPLICADOS ACTUALES...');
+    await verifyNoDuplicates();
+
+    // Opción 2: Limpiar duplicados
+    console.log('\n🧹 INICIANDO LIMPIEZA...');
+    await cleanupDuplicateCoverages();
+
+    // Opción 3: Probar comportamiento del UPSERT
+    console.log('\n🧪 PROBANDO UPSERT...');
+    await testUpsertBehavior();
+}
+
+main().catch(console.error);
 
 // Función de ayuda para modo automatizado
 function showUsageInstructions() {
@@ -185,5 +295,5 @@ function showUsageInstructions() {
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
     showUsageInstructions();
 } else {
-    cleanupDuplicateCoverages();
+    main();
 } 

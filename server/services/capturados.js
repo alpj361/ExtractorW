@@ -413,6 +413,118 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
       return cleanCard;
     });
 
+    // =============================================
+    // VINCULAR CADA CARD A SU COVERAGE (coverage_id)
+    // =============================================
+
+    async function getOrCreateCoverage({ projectId, city, department, pais }) {
+      // Prioridad: ciudad > departamento > país
+      let coverageRow = null;
+      if (city) {
+        const { data } = await supabase
+          .from('project_coverages')
+          .select('id')
+          .eq('project_id', projectId)
+          .eq('coverage_type', 'ciudad')
+          .eq('name', city.trim())
+          .eq('parent_name', department ? department.trim() : null)
+          .single();
+        coverageRow = data || null;
+        if (!coverageRow && department) {
+          // Crear ciudad bajo departamento existente o país
+          const newCoverage = {
+            project_id: projectId,
+            coverage_type: 'ciudad',
+            name: city.trim(),
+            parent_name: department.trim(),
+            description: `Cobertura municipal generada al crear tarjeta capturado`,
+            detection_source: 'capturado_auto',
+            confidence_score: 0.9,
+            local_name: 'Municipio'
+          };
+          const { data: inserted } = await supabase
+            .from('project_coverages')
+            .upsert(newCoverage, { onConflict: 'project_id,coverage_type,name,parent_name', ignoreDuplicates: false })
+            .select('id')
+            .single();
+          coverageRow = inserted;
+        }
+      }
+
+      if (!coverageRow && department) {
+        const { data } = await supabase
+          .from('project_coverages')
+          .select('id')
+          .eq('project_id', projectId)
+          .eq('coverage_type', 'departamento')
+          .eq('name', department.trim())
+          .single();
+        coverageRow = data || null;
+        if (!coverageRow) {
+          const newCoverage = {
+            project_id: projectId,
+            coverage_type: 'departamento',
+            name: department.trim(),
+            parent_name: pais || 'Guatemala',
+            description: `Cobertura departamental generada al crear tarjeta capturado`,
+            detection_source: 'capturado_auto',
+            confidence_score: 0.85,
+            local_name: 'Departamento'
+          };
+          const { data: inserted } = await supabase
+            .from('project_coverages')
+            .upsert(newCoverage, { onConflict: 'project_id,coverage_type,name,parent_name', ignoreDuplicates: false })
+            .select('id')
+            .single();
+          coverageRow = inserted;
+        }
+      }
+
+      if (!coverageRow && pais) {
+        const { data } = await supabase
+          .from('project_coverages')
+          .select('id')
+          .eq('project_id', projectId)
+          .eq('coverage_type', 'pais')
+          .eq('name', pais.trim())
+          .single();
+        coverageRow = data || null;
+        if (!coverageRow) {
+          const newCoverage = {
+            project_id: projectId,
+            coverage_type: 'pais',
+            name: pais.trim(),
+            description: `Cobertura nacional generada al crear tarjeta capturado`,
+            detection_source: 'capturado_auto',
+            confidence_score: 1.0,
+            local_name: 'País'
+          };
+          const { data: inserted } = await supabase
+            .from('project_coverages')
+            .upsert(newCoverage, { onConflict: 'project_id,coverage_type,name,parent_name', ignoreDuplicates: false })
+            .select('id')
+            .single();
+          coverageRow = inserted;
+        }
+      }
+      return coverageRow ? coverageRow.id : null;
+    }
+
+    // Añadir coverage_id a cada card antes de insertar
+    for (const card of cleanInsertData) {
+      try {
+        const coverageId = await getOrCreateCoverage({
+          projectId,
+          city: card.city,
+          department: card.department,
+          pais: card.pais
+        });
+        card.coverage_id = coverageId;
+      } catch (covErr) {
+        console.error('⚠️ No se pudo vincular coverage para card:', covErr.message);
+      }
+    }
+
     const { data: inserted, error: insertError } = await supabase
       .from('capturado_cards')
       .insert(cleanInsertData)
