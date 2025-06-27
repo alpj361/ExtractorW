@@ -605,14 +605,14 @@ function setupTrendsRoutes(app) {
       
       console.log(`✅ Se encontraron ${trends.length} tendencias para procesar`);
       
-      // 3. PROCESAMIENTO BÁSICO (SÍNCRONO) - igual que el endpoint principal
-      console.log('Iniciando procesamiento de datos básicos');
+            // 3. PROCESAMIENTO COMPLETO CON PERPLEXITY (igual que el endpoint principal)
+      console.log('🤖 [CRON] Iniciando procesamiento completo con Perplexity...');
       
-      // Procesar datos básicos
+      // Procesar los datos básicos primero
       const basicProcessedTrends = trends.map(trend => {
         const trendName = trend.name || trend.keyword || trend.text || 'Tendencia sin nombre';
-                 const rawCategory = detectarCategoriaLocal(trendName);
-         const normalizedCategory = normalizarCategoria(rawCategory);
+        const rawCategory = detectarCategoriaLocal(trendName);
+        const normalizedCategory = normalizarCategoria(rawCategory);
         
         return {
           name: trendName,
@@ -620,7 +620,7 @@ function setupTrendsRoutes(app) {
           category: normalizedCategory,
           original: trend,
           about: {
-            summary: 'Procesamiento automatizado por cron job',
+            summary: 'Procesando información detallada...',
             tipo: 'trend',
             relevancia: 'media',
             contexto_local: true,
@@ -628,61 +628,90 @@ function setupTrendsRoutes(app) {
           }
         };
       });
-      
-      // Generar estadísticas básicas con categorías normalizadas
-      const basicStatistics = {
-        total: basicProcessedTrends.length,
-        categorias: {},
-        timestamp: new Date().toISOString()
-      };
-      
-      // Contar categorías normalizadas
-      basicProcessedTrends.forEach(trend => {
-        const category = trend.category || 'Otros';
-        basicStatistics.categorias[category] = (basicStatistics.categorias[category] || 0) + 1;
-      });
-      
-      // Preparar datos para la nube de palabras con categorías normalizadas
-      const wordCloudData = basicProcessedTrends.map(trend => ({
-        text: trend.name,
-        value: trend.volume || 1,
+
+      // Usar la misma lógica que el endpoint principal - procesamiento con Perplexity
+      console.log('🤖 [CRON] Procesando con Perplexity Individual...');
+      const top10 = basicProcessedTrends.slice(0, 10).map(trend => ({
+        name: trend.name,
+        volume: trend.volume,
         category: trend.category
       }));
       
-      // Datos de categorías normalizadas
-      const categoryData = Object.entries(basicStatistics.categorias).map(([name, count]) => ({
-        name,
-        value: count
-      }));
+      // Procesar con Perplexity Individual (igual que el endpoint principal)
+      const processedAbout = await processWithPerplexityIndividual(top10, 'Guatemala');
+      
+      console.log(`🤖 [CRON] processWithPerplexityIndividual completado. Items procesados: ${processedAbout?.length || 0}`);
+      
+      // Generar estadísticas (igual que el endpoint principal)
+      const rawStatistics = generateStatistics(processedAbout);
 
-      // Top keywords (estructura consistente con el frontend)
-      let topKeywords = basicProcessedTrends
-        .sort((a, b) => (b.volume || 0) - (a.volume || 0))
+      // Sanitizar estadísticas para evitar problemas de serialización
+      const statistics = {
+        relevancia: {
+          alta: Number(rawStatistics.relevancia?.alta) || 0,
+          media: Number(rawStatistics.relevancia?.media) || 0,
+          baja: Number(rawStatistics.relevancia?.baja) || 0
+        },
+        contexto: {
+          local: Number(rawStatistics.contexto?.local) || 0,
+          global: Number(rawStatistics.contexto?.global) || 0
+        },
+        timestamp: new Date().toISOString(),
+        total_procesados: processedAbout.length
+      };
+
+      // Mapear correctamente desde processedAbout al formato AboutInfo que espera el frontend
+      const ultraSimplifiedAboutArray = processedAbout.map((item, index) => {
+        const about = item.about || {};
+        const trendName = item.name || `Tendencia ${index + 1}`;
+        
+        return {
+          nombre: sanitizeForJSON(trendName, 100),
+          tipo: sanitizeForJSON(about.tipo || 'hashtag', 30),
+          relevancia: about.relevancia || 'Media',
+          razon_tendencia: sanitizeForJSON(about.razon_tendencia || '', 300),
+          fecha_evento: sanitizeForJSON(about.fecha_evento || '', 50),
+          palabras_clave: Array.isArray(about.palabras_clave) ? 
+            about.palabras_clave.slice(0, 5).map(palabra => sanitizeForJSON(palabra, 30)) : [],
+          categoria: normalizarCategoria(item.category || about.categoria || 'Otros'),
+          contexto_local: Boolean(about.contexto_local),
+          source: sanitizeForJSON(about.source || 'perplexity-individual', 20),
+          model: sanitizeForJSON(about.model || 'sonar', 20)
+        };
+      });
+
+      console.log(`🤖 [CRON] AboutArray simplificado creado con ${ultraSimplifiedAboutArray.length} items`);
+
+      // Crear topKeywords enriquecidos con información de Perplexity
+      const enrichedTopKeywords = processedAbout
         .slice(0, 10)
-        .map(trend => ({
-          keyword: trend.name,
-          count: trend.volume || 1,
-          category: trend.category,
-          about: {
-            nombre: trend.name,
-            resumen: 'Procesamiento automatizado por cron job',
-            categoria: trend.category,
-            tipo: 'trend',
-            relevancia: 'media',
-            contexto_local: true,
-            source: 'cron-automated',
-            model: 'basic'
-          }
-        }));
+        .map((trend, index) => {
+          const aboutInfo = ultraSimplifiedAboutArray[index];
+          return {
+            keyword: trend.name,
+            count: trend.volume || (1000 - index * 10),
+            category: aboutInfo ? aboutInfo.categoria : normalizarCategoria(trend.category || 'Otros'),
+            about: aboutInfo || {
+              nombre: trend.name,
+              resumen: 'Procesamiento automatizado por cron job',
+              categoria: normalizarCategoria(trend.category || 'Otros'),
+              tipo: 'trend',
+              relevancia: 'media',
+              contexto_local: true,
+              source: 'cron-automated',
+              model: 'basic'
+            }
+          };
+        });
 
       // Asegurar que siempre haya 10 keywords
-      while (topKeywords.length < 10) {
-        topKeywords.push({
-          keyword: `Tendencia ${topKeywords.length + 1}`,
+      while (enrichedTopKeywords.length < 10) {
+        enrichedTopKeywords.push({
+          keyword: `Tendencia ${enrichedTopKeywords.length + 1}`,
           count: 1,
           category: 'Otros',
           about: {
-            nombre: `Tendencia ${topKeywords.length + 1}`,
+            nombre: `Tendencia ${enrichedTopKeywords.length + 1}`,
             resumen: 'Generado automáticamente',
             categoria: 'Otros',
             tipo: 'trend',
@@ -693,34 +722,55 @@ function setupTrendsRoutes(app) {
           }
         });
       }
+
+      // Generar categoryData usando las categorías normalizadas y enriquecidas
+      const enrichedCategoryMap = {};
+      ultraSimplifiedAboutArray.forEach(about => {
+        const cat = normalizarCategoria(about.categoria || 'Otros');
+        enrichedCategoryMap[cat] = (enrichedCategoryMap[cat] || 0) + 1;
+      });
+      
+      const categoryData = Object.entries(enrichedCategoryMap)
+        .map(([name, count]) => ({
+          name: normalizarCategoria(name),
+          value: count
+        }))
+        .sort((a, b) => b.value - a.value);
+
+      // WordCloud data con categorías enriquecidas
+      const wordCloudData = enrichedTopKeywords.map(keyword => ({
+        text: keyword.keyword,
+        value: keyword.count,
+        category: keyword.category
+      }));
       
       // Generar timestamp único para este procesamiento
       const processingTimestamp = new Date().toISOString();
       
-      // 4. GUARDAR RESULTADOS EN SUPABASE
-      let recordId = null;
-      if (supabase) {
-        try {
-          console.log('💾 Guardando resultados en la tabla trends...');
-          const { data, error } = await supabase
-            .from('trends')
-            .insert([{
-              timestamp: processingTimestamp,
-              word_cloud_data: wordCloudData,
-              top_keywords: topKeywords,
-              category_data: categoryData,
-              about: [], // Se puede llenar más tarde con background processing
-              statistics: basicStatistics,
-              processing_status: 'complete', // Marcamos como completo para cron jobs
-              raw_data: {
-                trends: basicProcessedTrends,
-                statistics: basicStatistics,
-                location: 'guatemala',
-                processing_time: (Date.now() - startTime) / 1000,
-                source: 'cron-automated'
-              }
-            }])
-            .select();
+              // 4. GUARDAR RESULTADOS COMPLETOS EN SUPABASE
+        let recordId = null;
+        if (supabase) {
+          try {
+            console.log('💾 Guardando resultados completos en la tabla trends...');
+            const { data, error } = await supabase
+              .from('trends')
+              .insert([{
+                timestamp: processingTimestamp,
+                word_cloud_data: wordCloudData,
+                top_keywords: enrichedTopKeywords,
+                category_data: categoryData,
+                about: ultraSimplifiedAboutArray, // Array completo con información de Perplexity
+                statistics: statistics, // Estadísticas completas
+                processing_status: 'complete', // Marcamos como completo para cron jobs
+                raw_data: {
+                  trends: basicProcessedTrends,
+                  statistics: statistics,
+                  location: 'guatemala',
+                  processing_time: (Date.now() - startTime) / 1000,
+                  source: 'cron-automated'
+                }
+              }])
+              .select();
           
           if (error) {
             console.error('❌ Error guardando resultados:', error);
@@ -736,22 +786,22 @@ function setupTrendsRoutes(app) {
       const executionTime = Date.now() - startTime;
       console.log('🤖 [CRON] ✅ Procesamiento automatizado completado exitosamente');
 
-      res.json({
-        success: true,
-        message: 'Tendencias procesadas automáticamente',
-        source: 'cron_job_automated',
-        timestamp: processingTimestamp,
-        data: {
-          wordCloudData,
-          topKeywords,
-          categoryData,
-          about: [],
-          statistics: basicStatistics
-        },
-        record_id: recordId,
-        execution_time: `${executionTime}ms`,
-        note: 'Procesamiento automatizado del sistema - Sin costo de créditos'
-      });
+              res.json({
+          success: true,
+          message: 'Tendencias procesadas automáticamente con Perplexity',
+          source: 'cron_job_automated',
+          timestamp: processingTimestamp,
+          data: {
+            wordCloudData,
+            topKeywords: enrichedTopKeywords,
+            categoryData,
+            about: ultraSimplifiedAboutArray,
+            statistics: statistics
+          },
+          record_id: recordId,
+          execution_time: `${executionTime}ms`,
+          note: 'Procesamiento automatizado completo del sistema - Sin costo de créditos'
+        });
 
     } catch (error) {
       const executionTime = Date.now() - startTime;
