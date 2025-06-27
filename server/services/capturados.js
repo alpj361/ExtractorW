@@ -121,6 +121,110 @@ async function extractCapturadoCards(transcription) {
   }
 }
 
+/**
+ * Fragmenta texto largo en chunks y extrae tarjetas de cada fragmento
+ * @param {string} fullText - Texto completo a procesar
+ * @returns {Promise<Array<Object>>} - Array consolidado de tarjetas
+ */
+async function extractCapturadoCardsInChunks(fullText) {
+  console.log(`🔄 Iniciando procesamiento en chunks para ${fullText.length} caracteres...`);
+  
+  // Función de fragmentación (reutilizada de documentAnalysis.js)
+  function fragmentText(text, maxChunkSize = 8000) {
+    if (text.length <= maxChunkSize) {
+      return [text];
+    }
+    
+    const chunks = [];
+    const paragraphs = text.split(/\n\s*\n/); // Dividir por párrafos vacíos
+    let currentChunk = '';
+    
+    for (const paragraph of paragraphs) {
+      // Si el párrafo solo ya es muy largo, dividirlo por oraciones
+      if (paragraph.length > maxChunkSize) {
+        const sentences = paragraph.split(/[.!?]+/);
+        for (const sentence of sentences) {
+          if (currentChunk.length + sentence.length > maxChunkSize) {
+            if (currentChunk.trim()) {
+              chunks.push(currentChunk.trim());
+            }
+            currentChunk = sentence + '.';
+          } else {
+            currentChunk += sentence + '.';
+          }
+        }
+      } else {
+        // Verificar si podemos agregar el párrafo al chunk actual
+        if (currentChunk.length + paragraph.length > maxChunkSize) {
+          if (currentChunk.trim()) {
+            chunks.push(currentChunk.trim());
+          }
+          currentChunk = paragraph;
+        } else {
+          currentChunk += (currentChunk ? '\n\n' : '') + paragraph;
+        }
+      }
+    }
+    
+    // Agregar el último chunk si tiene contenido
+    if (currentChunk.trim()) {
+      chunks.push(currentChunk.trim());
+    }
+    
+    return chunks;
+  }
+
+  // Fragmentar el texto
+  const chunks = fragmentText(fullText, 8000);
+  console.log(`📄 Texto fragmentado en ${chunks.length} chunks (promedio: ${Math.round(fullText.length / chunks.length)} chars por chunk)`);
+  
+  // Procesar cada chunk individualmente
+  const allCards = [];
+  for (let i = 0; i < chunks.length; i++) {
+    try {
+      console.log(`🔍 Procesando chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)...`);
+      
+      const chunkCards = await extractCapturadoCards(chunks[i]);
+      
+      if (chunkCards && Array.isArray(chunkCards)) {
+        allCards.push(...chunkCards);
+        console.log(`✅ Chunk ${i + 1}: ${chunkCards.length} tarjetas extraídas`);
+      } else {
+        console.log(`⚠️ Chunk ${i + 1}: sin tarjetas extraídas`);
+      }
+      
+      // Pausa breve entre chunks para evitar rate limiting
+      if (i < chunks.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      
+    } catch (error) {
+      console.error(`❌ Error procesando chunk ${i + 1}:`, error.message);
+      // Continuar con el siguiente chunk en lugar de fallar completamente
+    }
+  }
+  
+  console.log(`✅ Procesamiento en chunks completado: ${allCards.length} tarjetas totales de ${chunks.length} chunks`);
+  
+  // Eliminar duplicados potenciales basados en criterios similares
+  const uniqueCards = [];
+  const seen = new Set();
+  
+  for (const card of allCards) {
+    const fingerprint = `${card.entity || ''}|${card.city || ''}|${card.department || ''}|${card.discovery || ''}|${(card.description || '').substring(0, 50)}`;
+    if (!seen.has(fingerprint)) {
+      seen.add(fingerprint);
+      uniqueCards.push(card);
+    }
+  }
+  
+  if (uniqueCards.length < allCards.length) {
+    console.log(`🔄 Eliminados ${allCards.length - uniqueCards.length} duplicados, quedando ${uniqueCards.length} tarjetas únicas`);
+  }
+  
+  return uniqueCards;
+}
+
 function isValidISODate(dateStr) {
   return /^\d{4}-\d{2}-\d{2}$/.test(dateStr) && !isNaN(Date.parse(dateStr));
 }
@@ -337,8 +441,16 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
 
   console.log(`🎯 Tipo de contenido detectado: ${contentType} (${contentToAnalyze.length} caracteres)`);
 
-  // 3. Extraer tarjetas con Gemini
-  const cards = await extractCapturadoCards(contentToAnalyze);
+  // 3. Extraer tarjetas con Gemini (usando chunks para documentos largos)
+  let cards = [];
+  
+  if (contentToAnalyze.length > 10000) {
+    console.log(`📄 Contenido largo detectado (${contentToAnalyze.length} chars), procesando en chunks...`);
+    cards = await extractCapturadoCardsInChunks(contentToAnalyze);
+  } else {
+    console.log(`📄 Contenido corto, procesando directamente...`);
+    cards = await extractCapturadoCards(contentToAnalyze);
+  }
 
   if (!cards || cards.length === 0) {
     return [];
