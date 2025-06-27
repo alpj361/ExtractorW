@@ -503,12 +503,205 @@ console.log('OPENAI_ORG_ID configurada:', !!process.env.OPENAI_ORG_ID);
 console.log('SUPABASE_URL configurada:', !!process.env.SUPABASE_URL);
 console.log('SUPABASE_ANON_KEY configurada:', !!process.env.SUPABASE_ANON_KEY);
 
+// ============ ENDPOINT GRATUITO PARA CRON JOBS AUTOMATIZADOS ============
+
+// Endpoint específico para cron jobs automatizados del sistema (SIN autenticación, SIN créditos)
+app.post('/api/cron/processTrends', async (req, res) => {
+  const startTime = Date.now();
+  console.log(`🤖 [CRON JOB] Solicitud automatizada de procesamiento de tendencias - ${new Date().toISOString()}`);
+
+  try {
+    // 1. Obtener datos crudos
+    let rawData = req.body.rawData;
+
+    if (!rawData) {
+      console.log('🤖 [CRON] Generando datos mock para procesamiento automatizado');
+      rawData = { 
+        twitter_trends: Array(15).fill().map((_, i) => `${i+1}. Tendencia Auto ${i+1} ${100-i*5}k`)
+      };
+    }
+
+    // 2. Procesar los datos usando las funciones existentes
+    console.log('🤖 [CRON] Iniciando procesamiento automático...');
+    
+    // Extraer tendencias del formato de datos
+    let trends = [];
+    
+    if (rawData.twitter_trends && Array.isArray(rawData.twitter_trends)) {
+      trends = rawData.twitter_trends.map((trendString, index) => {
+        // Extraer número de tendencia y volumen si está presente
+        const match = trendString.match(/^(\d+)\.\s*([^0-9]*)(\d+[kK])?/);
+        
+        if (match) {
+          const position = parseInt(match[1]) || 0;
+          const name = match[2].trim();
+          let volume = 1000 - (position * 10); // Valor por defecto basado en la posición
+          
+          // Si hay un número con K al final, usarlo como volumen
+          if (match[3]) {
+            const volStr = match[3].replace(/[kK]$/, '');
+            volume = parseInt(volStr) * 1000;
+          }
+          
+          return {
+            name: name,
+            volume: volume,
+            position: position
+          };
+        }
+        
+        return {
+          name: trendString.replace(/^\d+\.\s*/, '').trim(),
+          volume: 1000 - (index * 10),
+          position: index + 1
+        };
+      });
+    } else {
+      trends = Array(10).fill().map((_, i) => ({
+        name: `Tendencia ${i+1}`,
+        volume: 1000 - (i * 100)
+      }));
+    }
+
+    console.log(`✅ Se encontraron ${trends.length} tendencias para procesar`);
+
+    // 3. Procesar con Perplexity Individual
+    const processedTrends = await processWithPerplexityIndividual(trends.slice(0, 10), 'Guatemala');
+    
+    // 4. Generar estadísticas
+    const statistics = generateStatistics(processedTrends);
+    
+    // 5. Preparar datos para respuesta
+    const processingTimestamp = new Date().toISOString();
+    
+    // Generar wordCloud data
+    const wordCloudData = processedTrends.map(trend => ({
+      text: trend.name,
+      value: trend.volume || 1,
+      category: trend.category
+    }));
+    
+    // Top keywords
+    const topKeywords = processedTrends.map(trend => ({
+      keyword: trend.name,
+      count: trend.volume || 1,
+      category: trend.category,
+      about: {
+        nombre: trend.name,
+        resumen: trend.about.summary,
+        categoria: trend.category,
+        tipo: trend.about.tipo,
+        relevancia: trend.about.relevancia,
+        contexto_local: trend.about.contexto_local,
+        source: trend.about.source,
+        model: trend.about.model
+      }
+    }));
+    
+    // Category data
+    const categoryData = Object.entries(statistics.categorias).map(([name, count]) => ({
+      name,
+      value: count
+    }));
+
+    // About array simplificado
+    const aboutArray = processedTrends.map((trend) => {
+      const about = trend.about || {};
+      
+      return {
+        nombre: trend.name,
+        tipo: about.tipo || 'hashtag',
+        relevancia: about.relevancia || 'Media',
+        razon_tendencia: about.razon_tendencia || '',
+        fecha_evento: about.fecha_evento || '',
+        palabras_clave: about.palabras_clave || [],
+        categoria: trend.category,
+        contexto_local: Boolean(about.contexto_local),
+        source: about.source || 'perplexity-individual',
+        model: about.model || 'sonar'
+      };
+    });
+
+    // 6. Guardar en Supabase si está disponible
+    let recordId = null;
+    if (supabase) {
+      try {
+        console.log('🤖 [CRON] Guardando datos en Supabase...');
+        const { data, error } = await supabase
+          .from('trends')
+          .insert([{
+            timestamp: processingTimestamp,
+            word_cloud_data: wordCloudData,
+            top_keywords: topKeywords,
+            category_data: categoryData,
+            about: aboutArray,
+            statistics: statistics,
+            processing_status: 'complete',
+            raw_data: {
+              trends: trends,
+              statistics: statistics,
+              location: 'guatemala',
+              processing_time: (Date.now() - startTime) / 1000,
+              source: 'cron-automated'
+            }
+          }])
+          .select();
+
+        if (error) {
+          console.error('🤖 [CRON] Error guardando en Supabase:', error);
+        } else {
+          console.log('🤖 [CRON] Datos guardados exitosamente');
+          recordId = data && data[0] ? data[0].id : null;
+        }
+      } catch (err) {
+        console.error('🤖 [CRON] Error al guardar en Supabase:', err);
+      }
+    }
+
+    const executionTime = Date.now() - startTime;
+    console.log('🤖 [CRON] ✅ Procesamiento automatizado completado exitosamente');
+
+    res.json({
+      success: true,
+      message: 'Tendencias procesadas automáticamente',
+      source: 'cron_job_automated',
+      timestamp: processingTimestamp,
+      data: {
+        wordCloudData,
+        topKeywords,
+        categoryData,
+        about: aboutArray,
+        statistics
+      },
+      record_id: recordId,
+      execution_time: `${executionTime}ms`,
+      note: 'Procesamiento automatizado del sistema - Sin costo de créditos'
+    });
+
+  } catch (error) {
+    const executionTime = Date.now() - startTime;
+    console.error('🤖 [CRON] ❌ Error en procesamiento automatizado:', error);
+
+    res.status(500).json({ 
+      success: false,
+      error: 'Error en procesamiento automatizado', 
+      message: error.message,
+      source: 'cron_job_automated',
+      execution_time: `${executionTime}ms`,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// ============ FIN ENDPOINT CRON JOBS ============
+
 // Iniciar el servidor
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`[${new Date().toISOString()}] Servidor iniciado en puerto ${PORT}`);
   console.log(`📊 Endpoints de tendencias disponibles:`);
   console.log(`   - POST /api/processTrends`);
+  console.log(`   - POST /api/cron/processTrends (GRATUITO)`);
   console.log(`   - POST /api/sondeo`);
   if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY && supabase) {
     console.log(`- Supabase configurado: ${process.env.SUPABASE_URL}`);
