@@ -371,7 +371,7 @@ async function analyzeTextChunkWithGemini(textChunk, options = {}) {
     const consolidatedTables = [];
     if (analysis.tablas && Array.isArray(analysis.tablas)) {
       analysis.tablas.forEach(tabla => {
-        consolidatedTables.push({ ...tabla, fragmento_numero: index + 1 });
+        consolidatedTables.push({ ...tabla, fragmento_numero: options.fragmentNumber || 1 });
       });
     }
     
