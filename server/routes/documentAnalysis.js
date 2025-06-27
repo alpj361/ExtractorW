@@ -279,6 +279,40 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
 
       console.log(`✅ Análisis de documento completado para usuario ${userId} (${charactersAnalyzed} caracteres, ${creditsNeeded} créditos)`);
 
+      // ============================================================================
+      // INTEGRACIÓN COMPLETA: EXTRAER HALLAZGOS AUTOMÁTICAMENTE DESPUÉS DEL ANÁLISIS
+      // ============================================================================
+      let extractedCards = [];
+      let cardsError = null;
+      
+      if (project_id || codexItem.project_id) {
+        const targetProjectId = project_id || codexItem.project_id;
+        
+        try {
+          console.log(`🔍 Extrayendo hallazgos automáticamente del análisis de documento...`);
+          
+          // Importar servicio de capturados
+          const { createCardsFromCodex } = require('../services/capturados');
+          
+          // Extraer hallazgos del documento analizado
+          extractedCards = await createCardsFromCodex({
+            codexItemId: codexItemId,
+            projectId: targetProjectId,
+            userId: userId
+          });
+          
+          console.log(`✅ Hallazgos extraídos automáticamente: ${extractedCards.length} tarjetas creadas`);
+          
+        } catch (extractError) {
+          console.error('⚠️ Error extrayendo hallazgos automáticamente:', extractError.message);
+          cardsError = extractError.message;
+          // No fallar todo el proceso si la extracción falla
+        }
+      } else {
+        console.log(`⚠️ No se pudo extraer hallazgos: falta project_id`);
+        cardsError = 'No se especificó project_id para extracción de hallazgos';
+      }
+
       res.json({
         success: true,
         message: result.message,
@@ -288,7 +322,14 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
           originalItem: codexItem,
           creditsUsed: creditsNeeded,
           tokensConsumed,
-          charactersAnalyzed
+          charactersAnalyzed,
+          // Datos de la extracción automática de hallazgos
+          automaticExtraction: {
+            enabled: !!(project_id || codexItem.project_id),
+            cardsExtracted: extractedCards.length,
+            cards: extractedCards,
+            error: cardsError
+          }
         }
       });
     } else {
@@ -410,6 +451,38 @@ router.post('/upload', verifyUserAccess, upload.single('document'), async (req, 
 
       await logUsage(req.user, req.path, creditsNeeded, req);
 
+      // ============================================================================
+      // INTEGRACIÓN COMPLETA: EXTRAER HALLAZGOS AUTOMÁTICAMENTE DESPUÉS DEL ANÁLISIS
+      // ============================================================================
+      let extractedCards = [];
+      let cardsError = null;
+      
+      if (project_id && result.codexItem) {
+        try {
+          console.log(`🔍 Extrayendo hallazgos automáticamente del documento subido...`);
+          
+          // Importar servicio de capturados
+          const { createCardsFromCodex } = require('../services/capturados');
+          
+          // Extraer hallazgos del documento analizado
+          extractedCards = await createCardsFromCodex({
+            codexItemId: result.codexItem.id,
+            projectId: project_id,
+            userId: userId
+          });
+          
+          console.log(`✅ Hallazgos extraídos automáticamente: ${extractedCards.length} tarjetas creadas`);
+          
+        } catch (extractError) {
+          console.error('⚠️ Error extrayendo hallazgos automáticamente:', extractError.message);
+          cardsError = extractError.message;
+          // No fallar todo el proceso si la extracción falla
+        }
+      } else {
+        console.log(`⚠️ No se pudo extraer hallazgos: falta project_id o codex item`);
+        cardsError = 'No se especificó project_id para extracción de hallazgos';
+      }
+
       res.json({
         success: true,
         message: result.message,
@@ -419,7 +492,14 @@ router.post('/upload', verifyUserAccess, upload.single('document'), async (req, 
           fileName: req.file.originalname,
           creditsUsed: creditsNeeded,
           tokensConsumed,
-          charactersAnalyzed
+          charactersAnalyzed,
+          // Datos de la extracción automática de hallazgos
+          automaticExtraction: {
+            enabled: !!(project_id && result.codexItem),
+            cardsExtracted: extractedCards.length,
+            cards: extractedCards,
+            error: cardsError
+          }
         }
       });
     } else {

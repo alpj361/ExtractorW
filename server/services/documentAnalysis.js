@@ -324,6 +324,12 @@ async function analyzeTextChunkWithGemini(textChunk, options = {}) {
       ],
       "resumen": "Resumen ejecutivo del fragmento analizado (máximo 300 caracteres)",
       "palabras_clave": ["lista", "de", "palabras", "clave", "extraídas"],
+      "tablas": [
+        {
+          "headers": ["col1", "col2"],
+          "rows": [["val1", "val2"]]
+        }
+      ],
       "metadatos": {
         "fragmento_numero": 1,
         "caracteres_analizados": ${textChunk.length},
@@ -361,6 +367,13 @@ async function analyzeTextChunkWithGemini(textChunk, options = {}) {
     }
     
     console.log(`✅ Análisis completado: ${analysis.hallazgos?.length || 0} hallazgos encontrados`);
+    
+    const consolidatedTables = [];
+    if (analysis.tablas && Array.isArray(analysis.tablas)) {
+      analysis.tablas.forEach(tabla => {
+        consolidatedTables.push({ ...tabla, fragmento_numero: index + 1 });
+      });
+    }
     
     return {
       analysis: analysis,
