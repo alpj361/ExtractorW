@@ -127,6 +127,11 @@ function isValidISODate(dateStr) {
 
 // Ensure cards fields are clean
 function sanitizeCard(card, codexItem = null) {
+  // Log de datos originales para debug
+  if (card.duration_days !== null && card.duration_days !== undefined) {
+    console.log(`🔍 Datos originales duration_days: "${card.duration_days}" (tipo: ${typeof card.duration_days})`);
+  }
+  
   const sanitized = { ...card };
   // title
   if (!sanitized.title || sanitized.title.trim() === '') {
@@ -150,10 +155,12 @@ function sanitizeCard(card, codexItem = null) {
       sanitized.currency = null;
     }
   }
-  // duration_days numeric
+  // duration_days numeric - manejo más robusto para evitar errores de tipo
   if (sanitized.duration_days !== null && sanitized.duration_days !== undefined) {
-    const num = parseInt(sanitized.duration_days, 10);
-    sanitized.duration_days = isNaN(num) ? null : num;
+    const numFloat = parseFloat(sanitized.duration_days);
+    const numInt = Math.floor(numFloat);
+    sanitized.duration_days = isNaN(numInt) ? null : numInt;
+    console.log(`🔢 Convertir duration_days: "${sanitized.duration_days}" → ${numInt}`);
   }
   // Nueva lógica: usar el título del archivo/documento como topic
   if (codexItem && codexItem.titulo) {
@@ -525,12 +532,21 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
       }
     }
 
+    // Log de los datos antes de insertar para debug
+    console.log(`🔍 Insertando ${cleanInsertData.length} cards con datos:`, cleanInsertData.slice(0, 2).map(card => ({
+      coverage_id: card.coverage_id,
+      duration_days: card.duration_days,
+      item_count: card.item_count,
+      amount: card.amount
+    })));
+
     const { data: inserted, error: insertError } = await supabase
       .from('capturado_cards')
       .insert(cleanInsertData)
       .select();
 
     if (insertError) {
+      console.error(`❌ Error en inserción - Datos problemáticos:`, cleanInsertData.slice(0, 2));
       throw new Error(`Error insertando capturado_cards: ${insertError.message}`);
     }
 
@@ -557,12 +573,131 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
       };
     });
 
+    // =============================================
+    // AGREGAR COVERAGE_ID TAMBIÉN EN EL FALLBACK
+    // =============================================
+    async function getOrCreateCoverageFallback({ projectId, city, department, pais }) {
+      // Misma lógica que la función principal
+      let coverageRow = null;
+      if (city) {
+        const { data } = await supabase
+          .from('project_coverages')
+          .select('id')
+          .eq('project_id', projectId)
+          .eq('coverage_type', 'ciudad')
+          .eq('name', city.trim())
+          .eq('parent_name', department ? department.trim() : null)
+          .single();
+        coverageRow = data || null;
+        if (!coverageRow && department) {
+          const newCoverage = {
+            project_id: projectId,
+            coverage_type: 'ciudad',
+            name: city.trim(),
+            parent_name: department.trim(),
+            description: `Cobertura municipal generada al crear tarjeta capturado (fallback)`,
+            detection_source: 'capturado_auto',
+            confidence_score: 0.9,
+            local_name: 'Municipio'
+          };
+          const { data: inserted } = await supabase
+            .from('project_coverages')
+            .upsert(newCoverage, { onConflict: 'project_id,coverage_type,name,parent_name', ignoreDuplicates: false })
+            .select('id')
+            .single();
+          coverageRow = inserted;
+        }
+      }
+
+      if (!coverageRow && department) {
+        const { data } = await supabase
+          .from('project_coverages')
+          .select('id')
+          .eq('project_id', projectId)
+          .eq('coverage_type', 'departamento')
+          .eq('name', department.trim())
+          .single();
+        coverageRow = data || null;
+        if (!coverageRow) {
+          const newCoverage = {
+            project_id: projectId,
+            coverage_type: 'departamento',
+            name: department.trim(),
+            parent_name: pais || 'Guatemala',
+            description: `Cobertura departamental generada al crear tarjeta capturado (fallback)`,
+            detection_source: 'capturado_auto',
+            confidence_score: 0.85,
+            local_name: 'Departamento'
+          };
+          const { data: inserted } = await supabase
+            .from('project_coverages')
+            .upsert(newCoverage, { onConflict: 'project_id,coverage_type,name,parent_name', ignoreDuplicates: false })
+            .select('id')
+            .single();
+          coverageRow = inserted;
+        }
+      }
+
+      if (!coverageRow && pais) {
+        const { data } = await supabase
+          .from('project_coverages')
+          .select('id')
+          .eq('project_id', projectId)
+          .eq('coverage_type', 'pais')
+          .eq('name', pais.trim())
+          .single();
+        coverageRow = data || null;
+        if (!coverageRow) {
+          const newCoverage = {
+            project_id: projectId,
+            coverage_type: 'pais',
+            name: pais.trim(),
+            description: `Cobertura nacional generada al crear tarjeta capturado (fallback)`,
+            detection_source: 'capturado_auto',
+            confidence_score: 1.0,
+            local_name: 'País'
+          };
+          const { data: inserted } = await supabase
+            .from('project_coverages')
+            .upsert(newCoverage, { onConflict: 'project_id,coverage_type,name,parent_name', ignoreDuplicates: false })
+            .select('id')
+            .single();
+          coverageRow = inserted;
+        }
+      }
+      return coverageRow ? coverageRow.id : null;
+    }
+
+    // Añadir coverage_id a cada card en el fallback también
+    for (const card of insertData) {
+      try {
+        const coverageId = await getOrCreateCoverageFallback({
+          projectId,
+          city: card.city,
+          department: card.department,
+          pais: card.pais
+        });
+        card.coverage_id = coverageId;
+      } catch (covErr) {
+        console.error('⚠️ No se pudo vincular coverage para card en fallback:', covErr.message);
+      }
+    }
+
+    // Log de los datos antes de insertar en fallback para debug
+    console.log(`🔍 Fallback insertando ${insertData.length} cards con datos:`, insertData.slice(0, 2).map(card => ({
+      coverage_id: card.coverage_id,
+      duration_days: card.duration_days,
+      item_count: card.item_count,
+      amount: card.amount
+    })));
+
     const { data: inserted, error: insertError } = await supabase
       .from('capturado_cards')
       .insert(insertData)
       .select();
 
     if (insertError) {
+      console.error(`❌ Error en inserción fallback - Datos problemáticos:`, insertData.slice(0, 2));
       throw new Error(`Error insertando capturado_cards con fallback: ${insertError.message}`);
     }
 
