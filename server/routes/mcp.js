@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const mcpService = require('../services/mcp');
-const { requireAuth } = require('../middlewares/auth');
+const { verifyUserAccess } = require('../middlewares/auth');
 
 // ===================================================================
 // MCP SERVER ROUTES - Micro Command Processor
@@ -12,7 +12,7 @@ const { requireAuth } = require('../middlewares/auth');
  * GET /api/mcp/tools
  * Lista todas las herramientas disponibles en el MCP Server
  */
-router.get('/tools', requireAuth, async (req, res) => {
+router.get('/tools', async (req, res) => {
   try {
     const tools = await mcpService.listAvailableTools();
     
@@ -36,7 +36,7 @@ router.get('/tools', requireAuth, async (req, res) => {
  * GET /api/mcp/tools/:tool_name
  * Obtiene información detallada de una herramienta específica
  */
-router.get('/tools/:tool_name', requireAuth, async (req, res) => {
+router.get('/tools/:tool_name', async (req, res) => {
   try {
     const { tool_name } = req.params;
     const toolInfo = await mcpService.getToolInfo(tool_name);
@@ -67,7 +67,7 @@ router.get('/tools/:tool_name', requireAuth, async (req, res) => {
  * POST /api/mcp/execute
  * Ejecutor universal de herramientas MCP
  */
-router.post('/execute', requireAuth, async (req, res) => {
+router.post('/execute', async (req, res) => {
   try {
     const { tool_name, parameters = {} } = req.body;
     
@@ -78,7 +78,7 @@ router.post('/execute', requireAuth, async (req, res) => {
       });
     }
     
-    const result = await mcpService.executeTool(tool_name, parameters, req.user);
+    const result = await mcpService.executeTool(tool_name, parameters, null);
     
     res.json({
       success: true,
@@ -102,7 +102,7 @@ router.post('/execute', requireAuth, async (req, res) => {
  * POST /api/mcp/nitter_context
  * Endpoint directo para herramienta nitter_context
  */
-router.post('/nitter_context', requireAuth, async (req, res) => {
+router.post('/nitter_context', async (req, res) => {
   try {
     const { q, location = 'guatemala', limit = 10 } = req.body;
     
@@ -113,7 +113,7 @@ router.post('/nitter_context', requireAuth, async (req, res) => {
       });
     }
     
-    const result = await mcpService.executeTool('nitter_context', { q, location, limit }, req.user);
+    const result = await mcpService.executeTool('nitter_context', { q, location, limit }, null);
     
     res.json({
       success: true,
