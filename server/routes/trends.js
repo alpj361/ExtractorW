@@ -5,6 +5,35 @@ const { logError, logUsage } = require('../services/logs');
 const supabase = require('../utils/supabase');
 
 /**
+ * Detecta una categoría basada en palabras clave presentes en el nombre de la tendencia
+ * @param {string} trendName - Nombre de la tendencia
+ * @param {string} context - Contexto adicional (opcional)
+ * @returns {string} - Categoría detectada
+ */
+function detectarCategoriaLocal(trendName, context = '') {
+  const text = (trendName + ' ' + context).toLowerCase();
+  
+  const categorias = {
+    'Política': ['presidente', 'congreso', 'gobierno', 'ministro', 'alcalde', 'elección', 'política', 'giammattei', 'aguirre', 'diputado'],
+    'Deportes': ['fútbol', 'liga', 'serie a', 'napoli', 'mctominay', 'deporte', 'equipo', 'partido', 'futbol', 'uefa', 'champions', 'jugador', 'futbolista', 'retiro', 'transferencia', 'lukita'],
+    'Música': ['cantante', 'banda', 'concierto', 'música', 'morat', 'álbum', 'canción', 'pop', 'rock'],
+    'Entretenimiento': ['actor', 'película', 'serie', 'tv', 'famoso', 'celebridad', 'lilo', 'disney', 'cine', 'estreno'],
+    'Justicia': ['corte', 'juez', 'tribunal', 'legal', 'derecho', 'satterthwaite', 'onu', 'derechos humanos'],
+    'Sociedad': ['comunidad', 'social', 'cultural', 'santa maría', 'jesús', 'municipio', 'tradición'],
+    'Internacional': ['mundial', 'internacional', 'global', 'extranjero', 'europa', 'italia'],
+    'Religión': ['iglesia', 'religioso', 'santo', 'santa', 'dios', 'jesús', 'maría']
+  };
+
+  for (const [categoria, palabras] of Object.entries(categorias)) {
+    if (palabras.some(palabra => text.includes(palabra))) {
+      return categoria;
+    }
+  }
+
+  return 'Otros';
+}
+
+/**
  * Configura las rutas relacionadas con tendencias
  * @param {Express} app - La aplicación Express
  */
@@ -489,6 +518,257 @@ function setupTrendsRoutes(app) {
       });
     }
   });
+  
+  // ============ ENDPOINT GRATUITO PARA CRON JOBS AUTOMATIZADOS ============
+  
+  // Endpoint específico para cron jobs automatizados del sistema (SIN autenticación, SIN créditos)
+  app.post('/api/cron/processTrends', async (req, res) => {
+    const startTime = Date.now();
+    console.log(`🤖 [CRON JOB] Solicitud automatizada de procesamiento de tendencias - ${new Date().toISOString()}`);
+
+    try {
+      // 1. Obtener datos crudos
+      let rawData = req.body.rawData;
+
+      if (!rawData) {
+        console.log('🤖 [CRON] Generando datos mock para procesamiento automatizado');
+        rawData = { 
+          twitter_trends: Array(15).fill().map((_, i) => `${i+1}. Tendencia Auto ${i+1} ${100-i*5}k`)
+        };
+      }
+
+      // 2. Procesar los datos usando la lógica del endpoint principal
+      console.log('🤖 [CRON] Iniciando procesamiento automático...');
+      
+      // Extraer tendencias del formato de datos (igual que en el endpoint principal)
+      let trends = [];
+      
+      try {
+        // Verificar si es el formato de ExtractorT
+        if (rawData.twitter_trends) {
+          console.log('Detectado formato de ExtractorT con prefijos numéricos');
+          
+          // Verificar si twitter_trends es un array de strings
+          if (Array.isArray(rawData.twitter_trends) && typeof rawData.twitter_trends[0] === 'string') {
+            console.log('Procesando formato de array de strings con prefijos numéricos');
+            
+            trends = rawData.twitter_trends.map(trendString => {
+              // Extraer número de tendencia y volumen si está presente
+              const match = trendString.match(/^(\d+)\.\s*([^0-9]*)(\d+[kK])?/);
+              
+              if (match) {
+                const position = parseInt(match[1]) || 0;
+                const name = match[2].trim();
+                let volume = 1000 - (position * 10); // Valor por defecto basado en la posición
+                
+                // Si hay un número con K al final, usarlo como volumen
+                if (match[3]) {
+                  const volStr = match[3].replace(/[kK]$/, '');
+                  volume = parseInt(volStr) * 1000;
+                }
+                
+                return {
+                  name: name,
+                  volume: volume,
+                  position: position
+                };
+              }
+              
+              // Si no coincide con el patrón esperado, devolver con valores predeterminados
+              return {
+                name: trendString.replace(/^\d+\.\s*/, '').trim(),
+                volume: 1,
+                position: 0
+              };
+            });
+          }
+        } else {
+          trends = Array(10).fill().map((_, i) => ({
+            name: `Tendencia Automatizada ${i+1}`,
+            volume: 1000 - (i * 100)
+          }));
+        }
+      } catch (parseError) {
+        console.error('❌ Error parseando datos:', parseError);
+        trends = Array(10).fill().map((_, i) => ({
+          name: `Tendencia Auto ${i+1}`,
+          volume: 1000 - (i * 100)
+        }));
+      }
+
+      if (trends.length === 0) {
+        trends = Array(10).fill().map((_, i) => ({
+          name: `Tendencia Default ${i+1}`,
+          volume: 1000 - (i * 100)
+        }));
+      }
+      
+      console.log(`✅ Se encontraron ${trends.length} tendencias para procesar`);
+      
+      // 3. PROCESAMIENTO BÁSICO (SÍNCRONO) - igual que el endpoint principal
+      console.log('Iniciando procesamiento de datos básicos');
+      
+      // Procesar datos básicos
+      const basicProcessedTrends = trends.map(trend => {
+        const trendName = trend.name || trend.keyword || trend.text || 'Tendencia sin nombre';
+                 const rawCategory = detectarCategoriaLocal(trendName);
+         const normalizedCategory = normalizarCategoria(rawCategory);
+        
+        return {
+          name: trendName,
+          volume: trend.volume || trend.count || 1,
+          category: normalizedCategory,
+          original: trend,
+          about: {
+            summary: 'Procesamiento automatizado por cron job',
+            tipo: 'trend',
+            relevancia: 'media',
+            contexto_local: true,
+            categoria: normalizedCategory
+          }
+        };
+      });
+      
+      // Generar estadísticas básicas con categorías normalizadas
+      const basicStatistics = {
+        total: basicProcessedTrends.length,
+        categorias: {},
+        timestamp: new Date().toISOString()
+      };
+      
+      // Contar categorías normalizadas
+      basicProcessedTrends.forEach(trend => {
+        const category = trend.category || 'Otros';
+        basicStatistics.categorias[category] = (basicStatistics.categorias[category] || 0) + 1;
+      });
+      
+      // Preparar datos para la nube de palabras con categorías normalizadas
+      const wordCloudData = basicProcessedTrends.map(trend => ({
+        text: trend.name,
+        value: trend.volume || 1,
+        category: trend.category
+      }));
+      
+      // Datos de categorías normalizadas
+      const categoryData = Object.entries(basicStatistics.categorias).map(([name, count]) => ({
+        name,
+        value: count
+      }));
+
+      // Top keywords (estructura consistente con el frontend)
+      let topKeywords = basicProcessedTrends
+        .sort((a, b) => (b.volume || 0) - (a.volume || 0))
+        .slice(0, 10)
+        .map(trend => ({
+          keyword: trend.name,
+          count: trend.volume || 1,
+          category: trend.category,
+          about: {
+            nombre: trend.name,
+            resumen: 'Procesamiento automatizado por cron job',
+            categoria: trend.category,
+            tipo: 'trend',
+            relevancia: 'media',
+            contexto_local: true,
+            source: 'cron-automated',
+            model: 'basic'
+          }
+        }));
+
+      // Asegurar que siempre haya 10 keywords
+      while (topKeywords.length < 10) {
+        topKeywords.push({
+          keyword: `Tendencia ${topKeywords.length + 1}`,
+          count: 1,
+          category: 'Otros',
+          about: {
+            nombre: `Tendencia ${topKeywords.length + 1}`,
+            resumen: 'Generado automáticamente',
+            categoria: 'Otros',
+            tipo: 'trend',
+            relevancia: 'baja',
+            contexto_local: true,
+            source: 'cron-automated',
+            model: 'basic'
+          }
+        });
+      }
+      
+      // Generar timestamp único para este procesamiento
+      const processingTimestamp = new Date().toISOString();
+      
+      // 4. GUARDAR RESULTADOS EN SUPABASE
+      let recordId = null;
+      if (supabase) {
+        try {
+          console.log('💾 Guardando resultados en la tabla trends...');
+          const { data, error } = await supabase
+            .from('trends')
+            .insert([{
+              timestamp: processingTimestamp,
+              word_cloud_data: wordCloudData,
+              top_keywords: topKeywords,
+              category_data: categoryData,
+              about: [], // Se puede llenar más tarde con background processing
+              statistics: basicStatistics,
+              processing_status: 'complete', // Marcamos como completo para cron jobs
+              raw_data: {
+                trends: basicProcessedTrends,
+                statistics: basicStatistics,
+                location: 'guatemala',
+                processing_time: (Date.now() - startTime) / 1000,
+                source: 'cron-automated'
+              }
+            }])
+            .select();
+          
+          if (error) {
+            console.error('❌ Error guardando resultados:', error);
+          } else {
+            console.log('✅ Resultados guardados correctamente');
+            recordId = data && data[0] ? data[0].id : null;
+          }
+        } catch (dbError) {
+          console.error('❌ Error guardando en base de datos:', dbError);
+        }
+      }
+      
+      const executionTime = Date.now() - startTime;
+      console.log('🤖 [CRON] ✅ Procesamiento automatizado completado exitosamente');
+
+      res.json({
+        success: true,
+        message: 'Tendencias procesadas automáticamente',
+        source: 'cron_job_automated',
+        timestamp: processingTimestamp,
+        data: {
+          wordCloudData,
+          topKeywords,
+          categoryData,
+          about: [],
+          statistics: basicStatistics
+        },
+        record_id: recordId,
+        execution_time: `${executionTime}ms`,
+        note: 'Procesamiento automatizado del sistema - Sin costo de créditos'
+      });
+
+    } catch (error) {
+      const executionTime = Date.now() - startTime;
+      console.error('🤖 [CRON] ❌ Error en procesamiento automatizado:', error);
+
+      res.status(500).json({ 
+        success: false,
+        error: 'Error en procesamiento automatizado', 
+        message: error.message,
+        source: 'cron_job_automated',
+        execution_time: `${executionTime}ms`,
+        timestamp: new Date().toISOString()
+      });
+    }
+  });
+  
+  // ============ FIN ENDPOINT CRON JOBS ============
   
   // NOTA: Endpoint de sondeos movido a server/routes/sondeos.js
 }
