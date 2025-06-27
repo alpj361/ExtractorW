@@ -101,7 +101,7 @@ Ejecuta cualquier herramienta de manera genérica.
 }
 ```
 
-#### `POST /api/mcp/tools/nitter_context`
+#### `POST /api/mcp/nitter_context`
 Endpoint específico para nitter_context (acceso directo).
 
 **Request Body:**
@@ -111,6 +111,31 @@ Endpoint específico para nitter_context (acceso directo).
   "location": "guatemala",
   "limit": 5
 }
+```
+
+#### `GET /api/mcp/stream` ⭐ **(Para N8N SSE Trigger)**
+Endpoint de Server-Sent Events para integración con N8N SSE Trigger.
+
+**Headers de Respuesta:**
+- `Content-Type: text/event-stream`
+- `Cache-Control: no-cache`
+- `Connection: keep-alive`
+
+**Eventos Emitidos:**
+- `connected`: Confirmación de conexión inicial
+- `heartbeat`: Señal de vida cada 30 segundos
+- `status`: Estado del servidor cada 60 segundos
+- `tool_available`: Notificación de herramientas disponibles
+- `error`: Errores del servidor
+
+**Ejemplo de evento SSE:**
+```
+event: heartbeat
+data: {"message":"MCP Server activo","timestamp":"2024-01-15T10:30:00.000Z","uptime":3600}
+
+event: status
+data: {"message":"Estado del MCP Server","status":{"server_name":"ExtractorW MCP Server","available_tools":1},"timestamp":"2024-01-15T10:31:00.000Z"}
+
 ```
 
 ### Información de Herramientas

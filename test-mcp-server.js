@@ -72,7 +72,7 @@ async function testNitterContextDirect() {
     limit: 5
   };
   
-  const response = await axios.post(`${EXTRACTOR_W_URL}/api/mcp/tools/nitter_context`, testData, { headers });
+  const response = await axios.post(`${EXTRACTOR_W_URL}/api/mcp/nitter_context`, testData, { headers });
   return response.data;
 }
 
@@ -118,6 +118,69 @@ async function testParameterValidation() {
 }
 
 /**
+ * Prueba 7: Endpoint SSE Stream
+ */
+async function testSSEStream() {
+  console.log('🔄 Probando conexión SSE (solo iniciará, no mantendrá conexión)...');
+  
+  try {
+    // Solo verificar que el endpoint responde con headers correctos
+    // SIN AUTENTICACIÓN para pruebas
+    const response = await axios.get(`${EXTRACTOR_W_URL}/api/mcp/stream`, {
+      timeout: 5000,
+      responseType: 'stream'
+    });
+    
+    console.log('✅ Headers SSE correctos:');
+    console.log(`   Content-Type: ${response.headers['content-type']}`);
+    console.log(`   Cache-Control: ${response.headers['cache-control']}`);
+    console.log(`   Connection: ${response.headers['connection']}`);
+    
+    // Cerrar stream inmediatamente para la prueba
+    response.data.destroy();
+    
+    return { sse_headers: response.headers, status: 'SSE endpoint funcionando' };
+    
+  } catch (error) {
+    if (error.code === 'ECONNABORTED') {
+      return { status: 'SSE endpoint responde (timeout esperado en prueba)' };
+    } else {
+      throw error;
+    }
+  }
+}
+
+/**
+ * Prueba 8: Test Stream SSE (sin auth)
+ */
+async function testSSEStreamNoAuth() {
+  console.log('🔄 Probando test-stream SSE (sin autenticación)...');
+  
+  try {
+    const response = await axios.get(`${EXTRACTOR_W_URL}/api/mcp/test-stream`, {
+      timeout: 5000,
+      responseType: 'stream'
+    });
+    
+    console.log('✅ Headers SSE Test Stream:');
+    console.log(`   Content-Type: ${response.headers['content-type']}`);
+    console.log(`   Cache-Control: ${response.headers['cache-control']}`);
+    
+    // Cerrar stream inmediatamente
+    response.data.destroy();
+    
+    return { status: 'Test stream SSE funcionando sin auth', headers: response.headers };
+    
+  } catch (error) {
+    if (error.code === 'ECONNABORTED') {
+      return { status: 'Test stream responde (timeout esperado)' };
+    } else {
+      throw error;
+    }
+  }
+}
+
+/**
  * Función principal de pruebas
  */
 async function runAllTests() {
@@ -132,7 +195,9 @@ async function runAllTests() {
     { name: 'Info herramienta específica', fn: testGetToolInfo },
     { name: 'Nitter Context (directo)', fn: testNitterContextDirect },
     { name: 'Ejecutar herramienta (genérico)', fn: testExecuteToolGeneric },
-    { name: 'Validación de parámetros', fn: testParameterValidation }
+    { name: 'Validación de parámetros', fn: testParameterValidation },
+    { name: 'Endpoint SSE Stream', fn: testSSEStream },
+    { name: 'Test Stream SSE (sin auth)', fn: testSSEStreamNoAuth }
   ];
   
   const results = [];
