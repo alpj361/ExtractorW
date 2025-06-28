@@ -11,6 +11,58 @@ const supabase = require('../utils/supabase');
 // Endpoints para el chat inteligente con integración MCP
 // ===================================================================
 
+/**
+ * Post-procesa respuestas del chat para asegurar formato consistente
+ */
+function formatChatResponse(response, toolResult = null) {
+  try {
+    // Limpiar respuesta muy larga
+    if (response.length > 2000) {
+      console.log('⚠️ Respuesta muy larga, truncando...');
+      response = response.substring(0, 1800) + '\n\n*[Respuesta truncada para mejor legibilidad]*';
+    }
+
+    // Asegurar que tenga formato markdown básico si no lo tiene
+    if (!response.includes('##') && !response.includes('###')) {
+      const lines = response.split('\n').filter(line => line.trim());
+      
+      if (lines.length > 0) {
+        let formatted = `## 📊 Análisis\n\n`;
+        formatted += lines.join('\n\n');
+        
+        // Agregar resumen de datos si disponible
+        if (toolResult && toolResult.tweets_found) {
+          formatted += `\n\n### 📊 Datos analizados:\n• ${toolResult.tweets_found} tweets encontrados`;
+          if (toolResult.analysis_metadata?.sentiment_distribution) {
+            const sentiments = Object.entries(toolResult.analysis_metadata.sentiment_distribution);
+            if (sentiments.length > 0) {
+              formatted += `\n• Sentimientos: ${sentiments.map(([s, c]) => `${s} (${c})`).join(', ')}`;
+            }
+          }
+        }
+        
+        response = formatted;
+      }
+    }
+
+    // Limpiar texto muy corrido (sin espacios entre párrafos)
+    response = response
+      .replace(/\n{3,}/g, '\n\n') // Máximo 2 saltos de línea consecutivos
+      .replace(/(\w)(\n)(### |## |\*\*)/g, '$1\n\n$3') // Espacios antes de headers
+      .replace(/(\w)(\n)(• )/g, '$1\n\n$3') // Espacios antes de bullets
+      .trim();
+
+    // Asegurar que los emojis tengan espacio después
+    response = response.replace(/([📊📈💭⚡🎯🔍])([A-Za-z])/g, '$1 $2');
+
+    return response;
+
+  } catch (error) {
+    console.error('❌ Error formateando respuesta:', error);
+    return response; // Devolver original si hay error
+  }
+}
+
 // Cargar dependencias de forma condicional
 let OpenAI, openai, uuidv4;
 
@@ -261,13 +313,107 @@ IMPORTANTE: Nunca uses los términos exactos del usuario. Siempre expande y opti
       const toolResult = await mcpService.executeTool(functionName, functionArgs, req.user);
       const executionTime = Date.now() - startTime;
 
-      // Guardar en recent_scrapes si la herramienta devolvió tweets
+      // Generar título automático inteligente basándose en los resultados
+      let generatedTitle = functionArgs.q || message; // fallback al query original
+      
+      if (toolResult.success && toolResult.tweets && toolResult.tweets.length > 0) {
+        try {
+          const titleCompletion = await openai.chat.completions.create({
+            model: 'gpt-4o-mini',
+            messages: [
+              {
+                role: 'system',
+                content: `Eres un experto en crear títulos concisos para monitoreos de redes sociales en Guatemala.
+
+INSTRUCCIONES:
+• Analiza los tweets encontrados y genera un título descriptivo de máximo 50 caracteres
+• El título debe reflejar el TEMA PRINCIPAL de los tweets, no la query original
+• Usa lenguaje guatemalteco cuando sea apropiado
+• Sé específico: en lugar de "Tweets sobre política", usa "Debate Presidencial 2024" 
+• Si hay un evento específico, menciónalo
+• Si detectas una tendencia o hashtag dominante, inclúyelo
+
+EJEMPLOS:
+• Query: "marcha del orgullo" → Título: "Marcha del Orgullo LGBT+ 2025"
+• Query: "bernardo arevalo" → Título: "Gobierno Arévalo - Últimas Noticias"
+• Query: "guatemala futbol" → Título: "Selección Nacional - Copa Oro"
+
+FORMATO: Solo devuelve el título, sin explicaciones.
+
+Tweets analizados: ${JSON.stringify(toolResult.tweets.slice(0, 5), null, 2)}`
+              },
+              {
+                role: 'user',
+                content: `Query original: "${message}"\nQuery expandido: "${functionArgs.q}"\n\nGenera un título inteligente para este monitoreo.`
+              }
+            ],
+            temperature: 0.3,
+            max_tokens: 60
+          });
+
+          const rawTitle = titleCompletion.choices[0].message.content.trim();
+          // Limpiar y validar título
+          generatedTitle = rawTitle.replace(/['"]/g, '').substring(0, 50);
+          console.log(`🏷️ Título generado: "${generatedTitle}" (original: "${message}")`);
+          
+        } catch (titleError) {
+          console.error('⚠️ Error generando título automático:', titleError);
+          // Usar query expandido como fallback mejorado
+          generatedTitle = functionArgs.q || message;
+        }
+      }
+
+      // Detectar tema/grupo para agrupación inteligente
+      let detectedGroup = null;
+      try {
+        const groupCompletion = await openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: `Analiza la búsqueda y clasifícala en una categoría para agrupación inteligente.
+
+CATEGORÍAS DISPONIBLES:
+• "politica-guatemala" - Temas de gobierno, elecciones, políticos guatemaltecos
+• "economia-guatemala" - Temas económicos, precios, empleo, mercado
+• "deportes-guatemala" - Fútbol, olimpiadas, deportes nacionales
+• "cultura-guatemala" - Eventos culturales, festivales, tradiciones
+• "social-guatemala" - Marchas, protestas, movimientos sociales
+• "tecnologia" - Tech, innovación, redes sociales
+• "internacional" - Noticias mundiales, política internacional
+• "entretenimiento" - Música, cine, celebridades
+• "general" - Todo lo demás
+
+INSTRUCCIONES:
+• Devuelve SOLO la categoría, sin explicaciones
+• Si hay duda, usa "general"
+• Prioriza categorías guatemaltecas cuando sea relevante
+
+Query: "${message}"
+Título generado: "${generatedTitle}"`
+            }
+          ],
+          temperature: 0.1,
+          max_tokens: 20
+        });
+
+        detectedGroup = groupCompletion.choices[0].message.content.trim().toLowerCase();
+        console.log(`🏷️ Grupo detectado: "${detectedGroup}"`);
+        
+      } catch (groupError) {
+        console.error('⚠️ Error detectando grupo:', groupError);
+        detectedGroup = 'general';
+      }
+
+      // Guardar en recent_scrapes con título generado y grupo
       if (toolResult.success && toolResult.tweets) {
         await recentScrapesService.saveScrape({
           queryOriginal: message,
           queryClean: functionArgs.q || message,
+          generatedTitle: generatedTitle,
+          detectedGroup: detectedGroup,
           herramienta: functionName,
-          categoria: 'General', // TODO: Implementar categorización automática
+          categoria: 'General',
           tweets: toolResult.tweets,
           userId: userId,
           sessionId: chatSessionId,
@@ -283,13 +429,40 @@ IMPORTANTE: Nunca uses los términos exactos del usuario. Siempre expande y opti
         messages: [
           {
             role: 'system',
-            content: `Eres Vizta, un asistente de investigación. El usuario hizo una consulta y obtuviste datos usando la herramienta ${functionName}. 
+            content: `Eres Vizta, un asistente de investigación especializado en análisis social de Guatemala. El usuario hizo una consulta y obtuviste datos usando la herramienta ${functionName}.
 
-Analiza los datos obtenidos y proporciona:
-1. Un resumen claro de los hallazgos
-2. Insights y patrones relevantes
-3. Contexto sobre la situación en Guatemala
-4. Recomendaciones si es apropiado
+INSTRUCCIONES PARA RESPUESTA:
+• Sé CONCISO y DIRECTO (máximo 300 palabras)
+• Usa formato MARKDOWN para mejor legibilidad
+• Estructura tu respuesta con secciones claras
+• Enfócate en lo MÁS RELEVANTE, no en todo
+• Usa emojis para hacer más visual la información
+
+FORMATO REQUERIDO:
+## 📊 Análisis de [TEMA]
+
+**🔍 Búsqueda realizada:** [explicar brevemente qué se buscó]
+
+### 📈 Hallazgos principales:
+• [máximo 3 puntos clave]
+• [usar bullets para fácil lectura]
+• [incluir datos específicos si son relevantes]
+
+### 💭 Sentimiento general:
+[describir en 1-2 líneas el sentimiento predominante]
+
+### ⚡ Insights clave:
+[máximo 2 insights importantes]
+
+### 🎯 Conclusión:
+[resumen en 1-2 líneas]
+
+REGLAS IMPORTANTES:
+- NO incluyas todos los tweets encontrados
+- NO repitas información del prompt de búsqueda 
+- SÍ menciona los números más relevantes (ej: "En 15 tweets analizados...")
+- SÍ incluye hashtags o términos trending si son relevantes
+- ENFÓCATE en el valor para el usuario, no en el proceso técnico
 
 Datos obtenidos: ${JSON.stringify(toolResult, null, 2)}`
           },
@@ -298,18 +471,21 @@ Datos obtenidos: ${JSON.stringify(toolResult, null, 2)}`
             content: message
           }
         ],
-        temperature: 0.7,
-        max_tokens: 1500
+        temperature: 0.3, // Más determinístico para formato consistente
+        max_tokens: 600   // Limitar longitud de respuesta
       });
 
       const finalResponse = finalCompletion.choices[0].message.content;
+
+      // Formatear respuesta para mejor experiencia de usuario
+      const formattedResponse = formatChatResponse(finalResponse, toolResult);
 
       // 6. Guardar respuesta del asistente en memories
       await memoriesService.saveMessage({
         sessionId: chatSessionId,
         userId: userId,
         role: 'assistant',
-        content: finalResponse,
+        content: formattedResponse,
         messageType: 'message',
         tokensUsed: (completion.usage?.total_tokens || 0) + (finalCompletion.usage?.total_tokens || 0),
         modelUsed: 'gpt-4o-mini',
@@ -319,32 +495,44 @@ Datos obtenidos: ${JSON.stringify(toolResult, null, 2)}`
           requestId: requestId,
           toolArgs: functionArgs,
           executionTime: executionTime,
-          toolResult: toolResult.success ? 'success' : 'error'
+          toolResult: toolResult.success ? 'success' : 'error',
+          responseFormatted: true, // Indicar que se aplicó formato
+          generatedTitle: generatedTitle,
+          detectedGroup: detectedGroup
         }
       });
 
       res.json({
         success: true,
-        response: finalResponse,
+        response: formattedResponse,
         toolUsed: functionName,
         toolArgs: functionArgs,
         toolResult: toolResult,
         sessionId: chatSessionId,
         requestId: requestId,
         executionTime: executionTime,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        responseMetadata: {
+          originalLength: finalResponse.length,
+          formattedLength: formattedResponse.length,
+          formatApplied: true,
+          tweetsAnalyzed: toolResult.tweets_found || 0
+        }
       });
 
     } else {
       // 5. Respuesta directa sin usar herramientas
       const directResponse = assistantMessage.content;
+      
+      // Formatear respuesta directa también
+      const formattedDirectResponse = formatChatResponse(directResponse);
 
       // Guardar respuesta del asistente en memories
       await memoriesService.saveMessage({
         sessionId: chatSessionId,
         userId: userId,
         role: 'assistant',
-        content: directResponse,
+        content: formattedDirectResponse,
         messageType: 'message',
         tokensUsed: completion.usage?.total_tokens || 0,
         modelUsed: 'gpt-4o-mini',
@@ -352,17 +540,24 @@ Datos obtenidos: ${JSON.stringify(toolResult, null, 2)}`
         contextSources: [],
         metadata: { 
           requestId: requestId,
-          responseType: 'direct'
+          responseType: 'direct',
+          responseFormatted: true
         }
       });
 
       res.json({
         success: true,
-        response: directResponse,
+        response: formattedDirectResponse,
         toolUsed: null,
         sessionId: chatSessionId,
         requestId: requestId,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        responseMetadata: {
+          originalLength: directResponse.length,
+          formattedLength: formattedDirectResponse.length,
+          formatApplied: true,
+          responseType: 'direct'
+        }
       });
     }
 
@@ -602,6 +797,159 @@ router.delete('/conversation/:sessionId', verifyUserAccess, async (req, res) => 
     res.status(500).json({
       success: false,
       message: 'Error eliminando conversación',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/vizta-chat/test-expansion
+ * Endpoint de prueba para probar la expansión inteligente de términos
+ */
+router.post('/test-expansion', verifyUserAccess, async (req, res) => {
+  try {
+    const { query } = req.body;
+    
+    if (!query || typeof query !== 'string' || query.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'El parámetro "query" es requerido y debe ser un string no vacío'
+      });
+    }
+
+    // Obtener herramientas disponibles del MCP
+    const availableTools = await mcpService.listAvailableTools();
+    
+    // Simular el proceso de expansión que haría GPT-4o mini
+    const originalQuery = query.trim();
+    
+    // Usar las funciones de expansión del MCP para mostrar cómo funcionarían
+    console.log(`🧪 Prueba de expansión para: "${originalQuery}"`);
+    
+    // Crear un prompt de ejemplo mostrando cómo GPT-4o mini debería procesar
+    const examplePrompt = `USUARIO: "${originalQuery}"
+
+ANÁLISIS ESTRATÉGICO:
+1. Términos detectados: ${originalQuery.toLowerCase().split(' ').join(', ')}
+2. Contexto inferido: Guatemala, redes sociales
+3. Tipo de consulta: ${originalQuery.toLowerCase().includes('sentimiento') || originalQuery.toLowerCase().includes('opinion') ? 'Análisis de sentimiento' : 'Búsqueda de contenido'}
+
+EXPANSIÓN SUGERIDA:
+- Original: "${originalQuery}"
+- Expandido: [Se simularía la expansión aquí]
+- Hashtags probables: #Guatemala, #GuatemalaGt
+- Términos relacionados: [Se agregarían términos específicos]
+- Límite recomendado: ${originalQuery.toLowerCase().includes('sentimiento') ? '20-25 tweets' : '15 tweets'}
+
+HERRAMIENTAS A USAR:
+- nitter_context con parámetros optimizados
+- location: guatemala
+- limit: optimizado según tipo de consulta`;
+
+    res.json({
+      success: true,
+      test_results: {
+        original_query: originalQuery,
+        analysis_type: originalQuery.toLowerCase().includes('sentimiento') || originalQuery.toLowerCase().includes('opinion') ? 'sentiment_analysis' : 'content_search',
+        suggested_improvements: {
+          should_expand_terms: true,
+          should_include_hashtags: true,
+          should_add_guatemalan_context: true,
+          recommended_limit: originalQuery.toLowerCase().includes('sentimiento') ? 20 : 15
+        },
+        example_prompt: examplePrompt,
+        available_tools: availableTools.map(tool => ({
+          name: tool.name,
+          description: tool.description,
+          optimizations_applied: tool.name === 'nitter_context' ? [
+            'Expansión inteligente de términos',
+            'Optimización automática de límites',
+            'Contexto guatemalteco añadido',
+            'Análisis de sentimiento incluido'
+          ] : []
+        }))
+      },
+      instructions: {
+        next_steps: [
+          'El sistema ahora expandirá automáticamente los términos de búsqueda',
+          'GPT-4o mini usará estrategias inteligentes en lugar de términos literales',
+          'Los límites se optimizarán según el tipo de análisis',
+          'Se incluirá contexto guatemalteco automáticamente'
+        ],
+        example_expansions: {
+          'marcha del orgullo': 'Orgullo2025 OR MarchadelOrgullo OR OrguIIoGt OR Pride OR LGBTI OR diversidad',
+          'elecciones': 'EleccionesGt OR TSE OR voto OR candidatos OR Elecciones2025 OR procesoelectoral',
+          'presidente': 'BernardoArevalo OR presidente OR GobiernoGt OR CasaPresidencial OR Presidencia'
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error en test de expansión:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error probando expansión de términos',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/vizta-chat/scrapes/grouped
+ * Obtener scrapes agrupados inteligentemente
+ */
+router.get('/scrapes/grouped', verifyUserAccess, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { limit, offset, detectedGroup, categoria } = req.query;
+
+    const groupedScrapes = await recentScrapesService.getGroupedScrapes(userId, {
+      limit: parseInt(limit) || 20,
+      offset: parseInt(offset) || 0,
+      detectedGroup,
+      categoria
+    });
+
+    res.json({
+      success: true,
+      groups: groupedScrapes,
+      count: groupedScrapes.length,
+      metadata: {
+        totalGroups: groupedScrapes.length,
+        requestedAt: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo scrapes agrupados:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo scrapes agrupados',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/vizta-chat/scrapes/grouped-stats
+ * Obtener estadísticas de agrupación
+ */
+router.get('/scrapes/grouped-stats', verifyUserAccess, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const stats = await recentScrapesService.getGroupedStats(userId);
+
+    res.json({
+      success: true,
+      stats: stats,
+      generatedAt: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo estadísticas agrupadas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas agrupadas',
       error: error.message
     });
   }

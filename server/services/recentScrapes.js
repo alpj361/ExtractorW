@@ -15,6 +15,8 @@ async function saveScrape(scrapeData) {
     const {
       queryOriginal,
       queryClean,
+      generatedTitle,
+      detectedGroup,
       herramienta,
       categoria,
       tweets,
@@ -37,6 +39,8 @@ async function saveScrape(scrapeData) {
     const insertData = {
       query_original: queryOriginal,
       query_clean: queryClean,
+      generated_title: generatedTitle || queryOriginal,
+      detected_group: detectedGroup || 'general',
       herramienta: herramienta,
       categoria: categoria,
       tweet_count: tweetCount,
@@ -51,7 +55,7 @@ async function saveScrape(scrapeData) {
       created_at: new Date().toISOString()
     };
 
-    console.log(`💾 Guardando scrape: ${tweetCount} tweets para query "${queryOriginal}"`);
+    console.log(`💾 Guardando scrape: "${generatedTitle}" con ${tweetCount} tweets (grupo: ${detectedGroup})`);
 
     const { data, error } = await supabase
       .from('recent_scrapes')
@@ -263,10 +267,201 @@ async function cleanupOldScrapes() {
   }
 }
 
+/**
+ * Obtiene scrapes agrupados inteligentemente por tema/grupo
+ * @param {string} userId - ID del usuario
+ * @param {Object} options - Opciones de filtrado
+ * @returns {Array} Lista de grupos con sus scrapes
+ */
+async function getGroupedScrapes(userId, options = {}) {
+  try {
+    const {
+      limit = 20,
+      offset = 0,
+      detectedGroup,
+      categoria
+    } = options;
+
+    console.log(`📋 Obteniendo scrapes agrupados para usuario ${userId}`);
+
+    let query = supabase
+      .from('recent_scrapes')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    // Aplicar filtros opcionales
+    if (detectedGroup) {
+      query = query.eq('detected_group', detectedGroup);
+    }
+    if (categoria) {
+      query = query.eq('categoria', categoria);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      throw new Error(`Error obteniendo scrapes agrupados: ${error.message}`);
+    }
+
+    // Agrupar scrapes por detected_group
+    const groupsMap = {};
+    
+    data.forEach(scrape => {
+      const group = scrape.detected_group || 'general';
+      
+      if (!groupsMap[group]) {
+        groupsMap[group] = {
+          groupName: group,
+          displayName: getGroupDisplayName(group),
+          groupEmoji: getGroupEmoji(group),
+          scrapes: [],
+          totalTweets: 0,
+          totalEngagement: 0,
+          lastActivity: null,
+          uniqueTopics: new Set()
+        };
+      }
+      
+      groupsMap[group].scrapes.push(scrape);
+      groupsMap[group].totalTweets += scrape.tweet_count || 0;
+      groupsMap[group].totalEngagement += scrape.total_engagement || 0;
+      groupsMap[group].uniqueTopics.add(scrape.generated_title || scrape.query_original);
+      
+      // Actualizar última actividad
+      const scrapeDate = new Date(scrape.created_at);
+      if (!groupsMap[group].lastActivity || scrapeDate > new Date(groupsMap[group].lastActivity)) {
+        groupsMap[group].lastActivity = scrape.created_at;
+      }
+    });
+
+    // Convertir a array y agregar métricas finales
+    const groupedScrapes = Object.values(groupsMap).map(group => ({
+      ...group,
+      scrapesCount: group.scrapes.length,
+      avgEngagement: group.totalTweets > 0 ? Math.round(group.totalEngagement / group.totalTweets) : 0,
+      uniqueTopicsCount: group.uniqueTopics.size,
+      topTopics: Array.from(group.uniqueTopics).slice(0, 3) // Mostrar hasta 3 temas principales
+    }));
+
+    // Ordenar grupos por última actividad
+    groupedScrapes.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
+
+    // Aplicar paginación
+    const paginatedGroups = groupedScrapes.slice(offset, offset + limit);
+
+    console.log(`✅ ${paginatedGroups.length} grupos obtenidos de ${groupedScrapes.length} totales`);
+    return paginatedGroups;
+
+  } catch (error) {
+    console.error('❌ Error obteniendo scrapes agrupados:', error);
+    throw error;
+  }
+}
+
+/**
+ * Obtiene nombre de visualización para un grupo
+ */
+function getGroupDisplayName(group) {
+  const displayNames = {
+    'politica-guatemala': 'Política Nacional',
+    'economia-guatemala': 'Economía y Finanzas',
+    'deportes-guatemala': 'Deportes Guatemala',
+    'cultura-guatemala': 'Cultura y Tradiciones',
+    'social-guatemala': 'Movimientos Sociales',
+    'tecnologia': 'Tecnología e Innovación',
+    'internacional': 'Noticias Internacionales',
+    'entretenimiento': 'Entretenimiento y Espectáculos',
+    'general': 'Temas Generales'
+  };
+  return displayNames[group] || group.charAt(0).toUpperCase() + group.slice(1);
+}
+
+/**
+ * Obtiene emoji representativo para un grupo
+ */
+function getGroupEmoji(group) {
+  const emojis = {
+    'politica-guatemala': '🏛️',
+    'economia-guatemala': '💰',
+    'deportes-guatemala': '⚽',
+    'cultura-guatemala': '🎭',
+    'social-guatemala': '✊',
+    'tecnologia': '💻',
+    'internacional': '🌍',
+    'entretenimiento': '🎬',
+    'general': '📱'
+  };
+  return emojis[group] || '📊';
+}
+
+/**
+ * Obtiene estadísticas de agrupación
+ * @param {string} userId - ID del usuario
+ * @returns {Object} Estadísticas de agrupación
+ */
+async function getGroupedStats(userId) {
+  try {
+    console.log(`📊 Obteniendo estadísticas agrupadas para usuario ${userId}`);
+
+    const { data: stats, error } = await supabase
+      .from('recent_scrapes')
+      .select('detected_group, tweet_count, total_engagement, created_at')
+      .eq('user_id', userId);
+
+    if (error) {
+      throw new Error(`Error obteniendo estadísticas agrupadas: ${error.message}`);
+    }
+
+    // Agrupar estadísticas
+    const groupStats = {};
+    let totalGroups = 0;
+    let totalScrapes = 0;
+
+    stats.forEach(s => {
+      const group = s.detected_group || 'general';
+      
+      if (!groupStats[group]) {
+        groupStats[group] = {
+          groupName: group,
+          displayName: getGroupDisplayName(group),
+          emoji: getGroupEmoji(group),
+          scrapesCount: 0,
+          totalTweets: 0,
+          totalEngagement: 0
+        };
+        totalGroups++;
+      }
+      
+      groupStats[group].scrapesCount++;
+      groupStats[group].totalTweets += s.tweet_count || 0;
+      groupStats[group].totalEngagement += s.total_engagement || 0;
+      totalScrapes++;
+    });
+
+    // Convertir a array ordenado por número de scrapes
+    const groupsArray = Object.values(groupStats)
+      .sort((a, b) => b.scrapesCount - a.scrapesCount);
+
+    return {
+      totalGroups,
+      totalScrapes,
+      topGroups: groupsArray.slice(0, 5), // Top 5 grupos
+      allGroups: groupsArray
+    };
+
+  } catch (error) {
+    console.error('❌ Error obteniendo estadísticas agrupadas:', error);
+    throw error;
+  }
+}
+
 module.exports = {
   saveScrape,
   getUserScrapes,
   getUserScrapeStats,
   getSessionScrapes,
-  cleanupOldScrapes
+  cleanupOldScrapes,
+  getGroupedScrapes,
+  getGroupedStats
 }; 
