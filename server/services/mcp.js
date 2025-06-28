@@ -1,6 +1,15 @@
 const axios = require('axios');
 const { processNitterContext } = require('./nitterContext');
 
+// Importar fetch para Node.js
+let fetch;
+try {
+  fetch = require('node-fetch');
+} catch (error) {
+  // Fallback para Node.js 18+ que tiene fetch nativo
+  fetch = global.fetch;
+}
+
 // ===================================================================
 // MCP SERVICE - Micro Command Processor
 // Orquestador central de herramientas para agentes IA
@@ -8,6 +17,107 @@ const { processNitterContext } = require('./nitterContext');
 
 // Configuración de servicios externos
 const EXTRACTOR_T_URL = process.env.EXTRACTOR_T_URL || 'https://api.standatpd.com';
+
+/**
+ * Mejora la expansión de términos usando Perplexity para contexto adicional
+ * @param {string} originalQuery - Query original del usuario
+ * @param {boolean} usePerplexity - Si usar Perplexity para mejorar la expansión
+ * @returns {Promise<string>} - Query expandido con contexto de Perplexity
+ */
+async function enhanceSearchTermsWithPerplexity(originalQuery, usePerplexity = false) {
+  try {
+    if (!usePerplexity) {
+      return expandSearchTerms(originalQuery);
+    }
+
+    console.log(`🔍 Mejorando expansión de términos con Perplexity: "${originalQuery}"`);
+    
+    const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
+    
+    if (!PERPLEXITY_API_KEY) {
+      console.log('⚠️ PERPLEXITY_API_KEY no disponible, usando expansión básica');
+      return expandSearchTerms(originalQuery);
+    }
+
+    // Obtener fecha actual
+    const now = new Date();
+    const currentMonth = now.toLocaleString('es-ES', { month: 'long' });
+    const currentYear = now.getFullYear();
+
+    const enhancementPrompt = `Analiza la consulta "${originalQuery}" y sugiere términos de búsqueda optimizados para Twitter/X en Guatemala.
+
+CONTEXTO: ${currentMonth} ${currentYear}, Guatemala
+OBJETIVO: Optimizar búsqueda para obtener tweets relevantes
+
+INSTRUCCIONES:
+1. Si es sobre una persona, incluye variaciones de su nombre, apodos, y cargos
+2. Si es sobre eventos, incluye hashtags probables y fechas relevantes  
+3. Si es sobre temas políticos, incluye instituciones y términos oficiales
+4. Si es sobre deportes, incluye equipos, competencias y hashtags deportivos
+5. Incluye términos en español que usan los guatemaltecos
+6. Considera abreviaciones comunes (GT, Guate, Chapin)
+7. Incluye hashtags que probablemente estén trending
+
+EJEMPLOS:
+- "marcha del orgullo" → "Orgullo2025 OR MarchadelOrgullo OR Pride OR LGBTI OR diversidad OR #OrguIIoGt"
+- "presidente guatemala" → "BernardoArevalo OR presidente OR GobiernoGt OR CasaPresidencial OR PresidenciaGt"
+
+Responde SOLO con los términos de búsqueda optimizados separados por "OR", sin explicaciones.`;
+
+    const payload = {
+      model: 'sonar',
+      messages: [
+        {
+          role: 'system',
+          content: `Eres un experto en optimización de búsquedas en redes sociales para Guatemala. 
+
+Tu trabajo es convertir consultas generales en términos de búsqueda específicos que capturen las conversaciones reales de los guatemaltecos en Twitter/X.
+
+Características:
+- Conoces los apodos y nombres comunes usados en Guatemala
+- Identificas hashtags que probablemente estén trending
+- Incluyes variaciones de nombres oficiales vs populares
+- Consideras el contexto temporal actual
+- Usas operadores OR para máxima cobertura
+
+FECHA ACTUAL: ${currentMonth} ${currentYear}
+CONTEXTO: Guatemala`
+        },
+        {
+          role: 'user',
+          content: enhancementPrompt
+        }
+      ],
+      temperature: 0.2,
+      max_tokens: 200
+    };
+
+    const response = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      if (data.choices && data.choices[0] && data.choices[0].message) {
+        const enhancedTerms = data.choices[0].message.content.trim();
+        console.log(`🚀 Términos mejorados con Perplexity: "${enhancedTerms}"`);
+        return enhancedTerms;
+      }
+    }
+
+    console.log('⚠️ Error con Perplexity, usando expansión básica');
+    return expandSearchTerms(originalQuery);
+
+  } catch (error) {
+    console.error('❌ Error mejorando términos con Perplexity:', error);
+    return expandSearchTerms(originalQuery);
+  }
+}
 
 /**
  * Expansión inteligente de términos de búsqueda para Twitter
@@ -165,6 +275,48 @@ const AVAILABLE_TOOLS = {
       'Guardado individual en base de datos',
       'Categorización automática'
     ]
+  },
+  
+  perplexity_search: {
+    name: 'perplexity_search',
+    description: 'Realiza búsquedas web inteligentes usando Perplexity AI para obtener información actualizada y contextualizada sobre cualquier tema',
+    parameters: {
+      query: {
+        type: 'string',
+        required: true,
+        description: 'Consulta de búsqueda web para investigar'
+      },
+      location: {
+        type: 'string',
+        required: false,
+        default: 'Guatemala',
+        description: 'Contexto geográfico para la búsqueda (Guatemala, Mexico, etc.)'
+      },
+      focus: {
+        type: 'string',
+        required: false,
+        default: 'general',
+        description: 'Enfoque específico: general, noticias, eventos, deportes, politica, economia, cultura'
+      },
+      improve_nitter_search: {
+        type: 'boolean',
+        required: false,
+        default: false,
+        description: 'Si true, además de la búsqueda web, optimiza términos para mejorar búsquedas en Nitter'
+      }
+    },
+    service_endpoint: '/api/perplexity_search', 
+    service_url: 'internal',
+    category: 'web_research',
+    usage_credits: 3,
+    features: [
+      'Búsqueda web en tiempo real',
+      'Información contextualizada por ubicación',
+      'Análisis de eventos actuales',
+      'Optimización de términos para redes sociales',
+      'Detección de hashtags relevantes',
+      'Contexto guatemalteco especializado'
+    ]
   }
 };
 
@@ -254,6 +406,15 @@ async function executeTool(toolName, parameters = {}, user = null) {
           parameters.location || 'guatemala', 
           parameters.limit || 10,
           parameters.session_id,
+          user
+        );
+        break;
+      case 'perplexity_search':
+        result = await executePerplexitySearch(
+          parameters.query,
+          parameters.location || 'Guatemala',
+          parameters.focus || 'general',
+          parameters.improve_nitter_search || false,
           user
         );
         break;
@@ -365,6 +526,259 @@ ANÁLISIS CONTEXTUAL:
 }
 
 /**
+ * Ejecuta específicamente la herramienta perplexity_search para búsquedas web inteligentes
+ * @param {string} query - Consulta de búsqueda web
+ * @param {string} location - Contexto geográfico
+ * @param {string} focus - Enfoque específico de la búsqueda
+ * @param {boolean} improveNitterSearch - Si también generar términos optimizados para Nitter
+ * @param {Object} user - Usuario autenticado
+ * @returns {Object} Resultado de la búsqueda web con Perplexity
+ */
+async function executePerplexitySearch(query, location = 'Guatemala', focus = 'general', improveNitterSearch = false, user = null) {
+  try {
+    console.log(`🔍 Ejecutando perplexity_search MCP: query="${query}", location="${location}", focus="${focus}", improveNitter=${improveNitterSearch}`);
+    
+    if (!user || !user.id) {
+      throw new Error('Usuario autenticado requerido para ejecutar perplexity_search');
+    }
+
+    // Importar el servicio de Perplexity 
+    const perplexityService = require('./perplexity');
+    
+    // Obtener fecha actual para contexto temporal
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.toLocaleString('es-ES', { month: 'long' });
+    const currentDate = now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
+    
+    // Construir consulta optimizada basada en el enfoque
+    let optimizedQuery = query;
+    let searchContext = '';
+    
+    switch (focus) {
+      case 'noticias':
+        optimizedQuery = `${query} noticias ${location} ${currentMonth} ${currentYear}`;
+        searchContext = 'noticias actuales y eventos recientes';
+        break;
+      case 'eventos':
+        optimizedQuery = `${query} eventos ${location} ${currentMonth} ${currentYear}`;
+        searchContext = 'eventos y actividades actuales';
+        break;
+      case 'deportes':
+        optimizedQuery = `${query} deportes ${location} ${currentMonth} ${currentYear}`;
+        searchContext = 'deportes y competencias actuales';
+        break;
+      case 'politica':
+        optimizedQuery = `${query} política ${location} ${currentMonth} ${currentYear}`;
+        searchContext = 'política y gobierno actual';
+        break;
+      case 'economia':
+        optimizedQuery = `${query} economía ${location} ${currentMonth} ${currentYear}`;
+        searchContext = 'economía y finanzas actuales';
+        break;
+      case 'cultura':
+        optimizedQuery = `${query} cultura ${location} ${currentMonth} ${currentYear}`;
+        searchContext = 'cultura y entretenimiento actual';
+        break;
+      default:
+        optimizedQuery = `${query} ${location} ${currentMonth} ${currentYear}`;
+        searchContext = 'información general actualizada';
+    }
+
+    console.log(`🎯 Consulta optimizada: "${optimizedQuery}"`);
+    
+    // Preparar prompt especializado para búsquedas web generales
+    const webSearchPrompt = `Analiza la consulta "${query}" y proporciona información completa y actualizada.
+
+CONTEXTO TEMPORAL: ${currentDate}
+CONTEXTO GEOGRÁFICO: ${location}
+ENFOQUE: ${searchContext}
+
+INSTRUCCIONES:
+1. Busca información actualizada sobre "${query}" en el contexto de ${location}
+2. Enfócate en ${searchContext}
+3. Proporciona datos concretos, fechas específicas, y detalles relevantes
+4. Si es sobre personas, incluye información biográfica relevante
+5. Si es sobre eventos, incluye fechas, ubicaciones, y participantes
+6. Si es sobre temas actuales, incluye desarrollos recientes
+7. Contextualiza la información para el público de ${location}
+
+${improveNitterSearch ? `
+ADICIONAL - OPTIMIZACIÓN PARA REDES SOCIALES:
+- También sugiere hashtags relevantes que podrían estar trending
+- Identifica términos de búsqueda alternativos para redes sociales
+- Incluye variaciones de nombres o eventos que podrían usarse en Twitter/X
+` : ''}
+
+Responde en formato JSON estructurado:
+{
+  "consulta_original": "${query}",
+  "consulta_optimizada": "${optimizedQuery}",
+  "informacion_principal": "Información principal encontrada",
+  "contexto_local": "Relevancia específica para ${location}",
+  "datos_clave": ["dato1", "dato2", "dato3"],
+  "fechas_relevantes": "Fechas importantes relacionadas",
+  "fuentes_sugeridas": ["fuente1", "fuente2"],
+  ${improveNitterSearch ? `
+  "optimizacion_redes_sociales": {
+    "hashtags_sugeridos": ["#hashtag1", "#hashtag2"],
+    "terminos_alternativos": ["termino1", "termino2"],
+    "busqueda_nitter_optimizada": "términos OR optimizados OR para OR twitter"
+  },` : ''}
+  "relevancia": "alta|media|baja",
+  "categoria": "noticias|eventos|deportes|politica|economia|cultura|general"
+}`;
+
+    // Ejecutar búsqueda con Perplexity
+    const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
+    
+    if (!PERPLEXITY_API_KEY) {
+      throw new Error('PERPLEXITY_API_KEY no configurada');
+    }
+
+    const payload = {
+      model: 'sonar',
+      messages: [
+        {
+          role: 'system',
+          content: `Eres un asistente de investigación especializado en búsquedas web inteligentes para ${location}.
+
+Tu trabajo es encontrar información actualizada, precisa y contextualizada sobre cualquier tema consultado.
+
+Características:
+- Siempre busca información más reciente disponible
+- Contextualiza para el público de ${location}
+- Proporciona datos específicos y fechas exactas
+- Identifica fuentes confiables
+- Analiza relevancia local vs global
+- Sugiere términos relacionados para búsquedas adicionales
+
+FECHA ACTUAL: ${currentDate}
+CONTEXTO: ${location}
+
+Enfócate en información actual, relevante y verificable.`
+        },
+        {
+          role: 'user',
+          content: webSearchPrompt
+        }
+      ],
+      search_context: {
+        search_queries: [optimizedQuery, query + ' ' + location, query + ' ' + currentMonth + ' ' + currentYear]
+      },
+      temperature: 0.3,
+      max_tokens: 800
+    };
+
+    console.log(`📡 Realizando búsqueda web con Perplexity...`);
+    
+    const response = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Error en API de Perplexity: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      throw new Error('Respuesta inválida de Perplexity API');
+    }
+
+    let rawResponse = data.choices[0].message.content;
+    console.log(`✅ Respuesta recibida de Perplexity para: "${query}"`);
+    
+    // Intentar extraer JSON de la respuesta
+    let parsedResult = null;
+    try {
+      const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        parsedResult = JSON.parse(jsonMatch[0]);
+      }
+    } catch (parseError) {
+      console.log(`⚠️ No se pudo parsear JSON, usando respuesta raw`);
+    }
+
+    // Optimizar términos para Nitter si se solicitó
+    let nitterOptimization = null;
+    if (improveNitterSearch && parsedResult?.optimizacion_redes_sociales?.busqueda_nitter_optimizada) {
+      nitterOptimization = {
+        original_query: query,
+        optimized_query: parsedResult.optimizacion_redes_sociales.busqueda_nitter_optimizada,
+        suggested_hashtags: parsedResult.optimizacion_redes_sociales.hashtags_sugeridos || [],
+        alternative_terms: parsedResult.optimizacion_redes_sociales.terminos_alternativos || []
+      };
+    }
+
+    // Formatear respuesta para el agente AI
+    const formattedResponse = parsedResult ? 
+      `BÚSQUEDA WEB COMPLETADA PARA: "${query}"
+
+INFORMACIÓN PRINCIPAL:
+${parsedResult.informacion_principal}
+
+CONTEXTO LOCAL (${location}):
+${parsedResult.contexto_local}
+
+DATOS CLAVE:
+${parsedResult.datos_clave ? parsedResult.datos_clave.map(dato => `• ${dato}`).join('\n') : 'No disponible'}
+
+FECHAS RELEVANTES:
+${parsedResult.fechas_relevantes || 'No especificadas'}
+
+FUENTES SUGERIDAS:
+${parsedResult.fuentes_sugeridas ? parsedResult.fuentes_sugeridas.map(fuente => `• ${fuente}`).join('\n') : 'No disponible'}
+
+${nitterOptimization ? `
+OPTIMIZACIÓN PARA REDES SOCIALES:
+• Búsqueda optimizada para Twitter/X: "${nitterOptimization.optimized_query}"
+• Hashtags sugeridos: ${nitterOptimization.suggested_hashtags.join(', ')}
+• Términos alternativos: ${nitterOptimization.alternative_terms.join(', ')}
+` : ''}
+
+RELEVANCIA: ${parsedResult.relevancia || 'No determinada'}
+CATEGORÍA: ${parsedResult.categoria || 'general'}` 
+    : 
+      `BÚSQUEDA WEB COMPLETADA PARA: "${query}"
+
+${rawResponse}
+
+Consulta optimizada: "${optimizedQuery}"
+Enfoque: ${searchContext}
+Contexto: ${location}`;
+
+    return {
+      success: true,
+      query_original: query,
+      query_optimized: optimizedQuery,
+      location: location,
+      focus: focus,
+      web_search_result: parsedResult || { raw_response: rawResponse },
+      nitter_optimization: nitterOptimization,
+      formatted_response: formattedResponse,
+      metadata: {
+        search_performed: true,
+        perplexity_model: 'sonar',
+        response_length: rawResponse.length,
+        json_parsed: parsedResult !== null,
+        nitter_optimization_included: nitterOptimization !== null,
+        timestamp: new Date().toISOString()
+      }
+    };
+
+  } catch (error) {
+    console.error(`❌ Error ejecutando perplexity_search MCP:`, error);
+    throw error;
+  }
+}
+
+/**
  * Valida los parámetros de una herramienta
  * @param {Object} tool - Configuración de la herramienta
  * @param {Object} parameters - Parámetros a validar
@@ -457,6 +871,9 @@ module.exports = {
   getToolInfo,
   executeTool,
   executeNitterContext,
+  executePerplexitySearch,
   getServerStatus,
+  expandSearchTerms,
+  enhanceSearchTermsWithPerplexity,
   AVAILABLE_TOOLS
 }; 
