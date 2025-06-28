@@ -6,7 +6,7 @@ const axios = require('axios');
 // ===================================================================
 
 // Configuración de servicios externos
-const EXTRACTOR_T_URL = process.env.EXTRACTOR_T_URL || 'http://localhost:8001';
+const EXTRACTOR_T_URL = process.env.EXTRACTOR_T_URL || 'https://api.standatpd.com';
 
 // Registro de herramientas disponibles
 const AVAILABLE_TOOLS = {
