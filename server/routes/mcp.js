@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const mcpService = require('../services/mcp');
-const { verifyUserAccess } = require('../middlewares/auth');
+const { verifyUserAccess, requireAuth } = require('../middlewares/auth');
 
 // ===================================================================
 // MCP SERVER ROUTES - Micro Command Processor
@@ -67,9 +67,10 @@ router.get('/tools/:tool_name', async (req, res) => {
  * POST /api/mcp/execute
  * Ejecutor universal de herramientas MCP
  */
-router.post('/execute', async (req, res) => {
+router.post('/execute', requireAuth, async (req, res) => {
   try {
     const { tool_name, parameters = {} } = req.body;
+    const user = req.user;
     
     if (!tool_name) {
       return res.status(400).json({
@@ -78,7 +79,9 @@ router.post('/execute', async (req, res) => {
       });
     }
     
-    const result = await mcpService.executeTool(tool_name, parameters, null);
+    console.log(`🔧 MCP execute solicitado por usuario ${user.email}: herramienta "${tool_name}"`);
+    
+    const result = await mcpService.executeTool(tool_name, parameters, user);
     
     res.json({
       success: true,
@@ -100,11 +103,12 @@ router.post('/execute', async (req, res) => {
 
 /**
  * POST /api/mcp/nitter_context
- * Endpoint directo para herramienta nitter_context
+ * Endpoint directo para herramienta nitter_context con análisis completo
  */
-router.post('/nitter_context', async (req, res) => {
+router.post('/nitter_context', requireAuth, async (req, res) => {
   try {
-    const { q, location = 'guatemala', limit = 10 } = req.body;
+    const { q, location = 'guatemala', limit = 10, session_id } = req.body;
+    const user = req.user;
     
     if (!q) {
       return res.status(400).json({
@@ -113,22 +117,37 @@ router.post('/nitter_context', async (req, res) => {
       });
     }
     
-    const result = await mcpService.executeTool('nitter_context', { q, location, limit }, null);
+    if (limit && (typeof limit !== 'number' || limit < 5 || limit > 50)) {
+      return res.status(400).json({
+        success: false,
+        message: 'El parámetro limit debe ser un número entre 5 y 50'
+      });
+    }
+    
+    console.log(`🔧 MCP nitter_context solicitado por usuario ${user.email}: "${q}"`);
+    
+    const result = await mcpService.executeTool('nitter_context', { 
+      q, 
+      location, 
+      limit: parseInt(limit),
+      session_id 
+    }, user);
     
     res.json({
       success: true,
-      message: 'Contexto de nitter obtenido exitosamente',
+      message: 'Análisis de tweets completado exitosamente',
       query: q,
       location: location,
-      limit: limit,
+      limit: parseInt(limit),
+      session_id: result.session_id,
       result: result,
       execution_time: new Date().toISOString()
     });
   } catch (error) {
-    console.error('Error ejecutando nitter_context:', error);
+    console.error('Error ejecutando nitter_context MCP:', error);
     res.status(500).json({
       success: false,
-      message: 'Error obteniendo contexto de nitter',
+      message: 'Error procesando tweets con análisis de IA',
       error: error.message
     });
   }
@@ -183,7 +202,7 @@ router.get('/capabilities', async (req, res) => {
       "tools": [
         {
           "name": "nitter_context",
-          "description": "Obtiene contexto social de Twitter/X usando Nitter para un término específico",
+          "description": "Obtiene tweets usando Nitter, los analiza con Gemini AI (sentimiento, intención, entidades) y los guarda en la base de datos",
           "inputSchema": {
             "type": "object",
             "properties": {
@@ -202,10 +221,22 @@ router.get('/capabilities', async (req, res) => {
                 "minimum": 5,
                 "maximum": 50,
                 "default": 10
+              },
+              "session_id": {
+                "type": "string",
+                "description": "ID de sesión del chat (se genera automáticamente si no se proporciona)"
               }
             },
             "required": ["q"]
-          }
+          },
+          "features": [
+            "Extracción de tweets con Nitter",
+            "Análisis de sentimiento con Gemini AI",
+            "Detección de intención comunicativa",
+            "Extracción de entidades mencionadas",
+            "Guardado individual en base de datos",
+            "Categorización automática"
+          ]
         }
       ]
     };
@@ -244,7 +275,8 @@ router.post('/call', async (req, res) => {
             properties: {
               q: { type: "string", description: "Término de búsqueda" },
               location: { type: "string", description: "Ubicación", default: "guatemala" },
-              limit: { type: "number", description: "Límite de tweets", default: 10 }
+              limit: { type: "number", description: "Límite de tweets", default: 10 },
+              session_id: { type: "string", description: "ID de sesión del chat" }
             },
             required: ["q"]
           }
@@ -255,14 +287,10 @@ router.post('/call', async (req, res) => {
       const { name, arguments: toolArgs } = params;
       
       if (name === 'nitter_context') {
-        const result = await mcpService.executeTool('nitter_context', toolArgs, null);
-        res.json({
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
-            }
-          ]
+        // Para N8N, necesitamos crear un usuario dummy o requerir autenticación
+        // Por ahora, retornamos error pidiendo usar endpoint autenticado
+        res.status(401).json({
+          error: 'nitter_context requiere autenticación. Use /api/mcp/nitter_context con token JWT'
         });
       } else {
         res.status(404).json({

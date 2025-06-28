@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { processNitterContext } = require('./nitterContext');
 
 // ===================================================================
 // MCP SERVICE - Micro Command Processor
@@ -12,7 +13,7 @@ const EXTRACTOR_T_URL = process.env.EXTRACTOR_T_URL || 'https://api.standatpd.co
 const AVAILABLE_TOOLS = {
   nitter_context: {
     name: 'nitter_context',
-    description: 'Obtiene contexto social de Twitter/X usando Nitter para un término específico',
+    description: 'Obtiene tweets usando Nitter, los analiza con Gemini AI (sentimiento, intención, entidades) y los guarda en la base de datos',
     parameters: {
       q: {
         type: 'string',
@@ -32,12 +33,25 @@ const AVAILABLE_TOOLS = {
         min: 5,
         max: 50,
         description: 'Número máximo de tweets a obtener'
+      },
+      session_id: {
+        type: 'string',
+        required: false,
+        description: 'ID de sesión del chat (se genera automáticamente si no se proporciona)'
       }
     },
-    service_endpoint: '/nitter_context',
-    service_url: EXTRACTOR_T_URL,
-    category: 'social_media',
-    usage_credits: 3
+    service_endpoint: '/api/nitter_context',
+    service_url: 'internal',
+    category: 'social_media_analysis',
+    usage_credits: 5,
+    features: [
+      'Extracción de tweets con Nitter',
+      'Análisis de sentimiento con Gemini AI',
+      'Detección de intención comunicativa',
+      'Extracción de entidades mencionadas',
+      'Guardado individual en base de datos',
+      'Categorización automática'
+    ]
   }
 };
 
@@ -126,6 +140,7 @@ async function executeTool(toolName, parameters = {}, user = null) {
           parameters.q, 
           parameters.location || 'guatemala', 
           parameters.limit || 10,
+          parameters.session_id,
           user
         );
         break;
@@ -142,51 +157,85 @@ async function executeTool(toolName, parameters = {}, user = null) {
 }
 
 /**
- * Ejecuta específicamente la herramienta nitter_context
+ * Ejecuta específicamente la herramienta nitter_context con análisis completo
  * @param {string} query - Término de búsqueda
  * @param {string} location - Ubicación para filtrar
  * @param {number} limit - Límite de tweets
+ * @param {string} sessionId - ID de sesión del chat
  * @param {Object} user - Usuario autenticado
- * @returns {Object} Resultado de nitter_context
+ * @returns {Object} Resultado de nitter_context con análisis completo
  */
-async function executeNitterContext(query, location = 'guatemala', limit = 10, user = null) {
+async function executeNitterContext(query, location = 'guatemala', limit = 10, sessionId = null, user = null) {
   try {
-    console.log(`🐦 Ejecutando nitter_context: query="${query}", location="${location}", limit=${limit}`);
+    console.log(`🐦 Ejecutando nitter_context MCP: query="${query}", location="${location}", limit=${limit}`);
     
-    const response = await axios.get(`${EXTRACTOR_T_URL}/nitter_context`, {
-      params: {
-        q: query,
-        location: location,
-        limit: limit
-      },
-      timeout: 60000 // 60 segundos timeout
-    });
+    if (!user || !user.id) {
+      throw new Error('Usuario autenticado requerido para ejecutar nitter_context');
+    }
+    
+    // Generar session_id si no se proporciona
+    const finalSessionId = sessionId || `mcp_session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Usar el servicio completo de nitterContext
+    const result = await processNitterContext(
+      query.trim(),
+      user.id,
+      finalSessionId,
+      location,
+      parseInt(limit)
+    );
 
-    if (response.data.status === 'success') {
-      console.log(`✅ Nitter context obtenido: ${response.data.tweet_count} tweets encontrados`);
+    if (result.success) {
+      console.log(`✅ Nitter context procesado exitosamente: ${result.data.tweets_found} tweets analizados`);
       
-      // Formatear tweets para el AI Agent
-      const formattedTweets = response.data.tweets.map(tweet => 
-        `@${tweet.usuario} (${tweet.fecha}): ${tweet.texto} [❤️${tweet.likes} 🔄${tweet.retweets} 💬${tweet.replies}]`
-      ).join('\n\n');
+      // Formatear respuesta para el agente AI
+      const formattedTweets = result.data.tweets.map(tweet => 
+        `@${tweet.usuario} (${tweet.fecha_tweet}): ${tweet.texto}\n` +
+        `   📊 Sentimiento: ${tweet.sentimiento} (${tweet.score_sentimiento}) | ` +
+        `Intención: ${tweet.intencion_comunicativa}\n` +
+        `   💬 Engagement: ❤️${tweet.likes} 🔄${tweet.retweets} 💬${tweet.replies} | ` +
+        `Entidades: ${tweet.entidades_mencionadas.length}\n`
+      ).join('\n');
       
       return {
         success: true,
-        content: `Análisis de ${response.data.tweet_count} tweets sobre "${query}" en ${location}:\n\n${formattedTweets}`,
+        content: `Análisis completo de ${result.data.tweets_found} tweets sobre "${query}" en ${location}:\n\n` +
+                 `📊 Categoría: ${result.data.categoria}\n` +
+                 `💬 Engagement total: ${result.data.total_engagement}\n` +
+                 `📈 Engagement promedio: ${result.data.avg_engagement}\n` +
+                 `⏱️ Tiempo de procesamiento: ${result.data.execution_time}ms\n\n` +
+                 `🐦 Tweets analizados:\n${formattedTweets}\n` +
+                 `📝 ${result.data.summary}`,
         query: query,
         location: location,
-        tweet_count: response.data.tweet_count,
-        tweets: response.data.tweets,
-        message: response.data.message
+        session_id: finalSessionId,
+        categoria: result.data.categoria,
+        tweet_count: result.data.tweets_found,
+        tweets_saved: result.data.tweets_saved,
+        total_engagement: result.data.total_engagement,
+        avg_engagement: result.data.avg_engagement,
+        execution_time: result.data.execution_time,
+        tweets: result.data.tweets,
+        summary: result.data.summary,
+        message: `${result.data.tweets_found} tweets analizados y guardados con Gemini AI`
       };
     } else {
-      throw new Error(`Error en ExtractorT: ${response.data.message}`);
+      throw new Error(result.error || 'Error procesando nitter_context');
     }
   } catch (error) {
-    console.error('❌ Error ejecutando nitter_context:', error);
+    console.error('❌ Error ejecutando nitter_context MCP:', error);
     
-    if (error.code === 'ECONNREFUSED') {
+    // Manejar errores específicos
+    if (error.message.includes('ExtractorT no está disponible')) {
       throw new Error('ExtractorT no está disponible. Verifique que el servicio esté ejecutándose.');
+    }
+    
+    if (error.message.includes('GEMINI_API_KEY')) {
+      throw new Error('Configuración de Gemini AI requerida. Verifique GEMINI_API_KEY.');
+    }
+    
+    if (error.message.includes('SUPABASE')) {
+      throw new Error('Error de base de datos. Verifique configuración de Supabase.');
     }
     
     throw new Error(`Error obteniendo contexto de Nitter: ${error.message}`);

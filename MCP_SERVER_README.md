@@ -9,13 +9,21 @@ El MCP Server actúa como una **capa de abstracción** que permite a agentes IA 
 ## 📋 Herramientas Disponibles
 
 ### 1. nitter_context
-- **Descripción**: Obtiene contexto social de Twitter/X usando Nitter
-- **Categoría**: social_media
-- **Créditos**: 3 por uso
+- **Descripción**: Obtiene tweets usando Nitter, los analiza con Gemini AI (sentimiento, intención, entidades) y los guarda en la base de datos
+- **Categoría**: social_media_analysis
+- **Créditos**: 5 por uso
+- **Características**:
+  - Extracción de tweets con Nitter
+  - Análisis de sentimiento con Gemini AI
+  - Detección de intención comunicativa
+  - Extracción de entidades mencionadas
+  - Guardado individual en base de datos
+  - Categorización automática
 - **Parámetros**:
   - `q` (string, requerido): Término de búsqueda
   - `location` (string, opcional): Ubicación (default: "guatemala")
   - `limit` (integer, opcional): Límite de tweets (5-50, default: 10)
+  - `session_id` (string, opcional): ID de sesión del chat (se genera automáticamente)
 
 ## 🚀 Endpoints Disponibles
 
@@ -101,15 +109,46 @@ Ejecuta cualquier herramienta de manera genérica.
 }
 ```
 
-#### `POST /api/mcp/nitter_context`
-Endpoint específico para nitter_context (acceso directo).
+#### `POST /api/mcp/nitter_context` 🔐
+Endpoint específico para nitter_context con análisis completo (requiere autenticación).
+
+**Headers:**
+```
+Authorization: Bearer YOUR_JWT_TOKEN
+Content-Type: application/json
+```
 
 **Request Body:**
 ```json
 {
-  "q": "guatemala",
+  "q": "elecciones guatemala",
+  "location": "guatemala", 
+  "limit": 10,
+  "session_id": "chat_session_123"
+}
+```
+
+**Respuesta:**
+```json
+{
+  "success": true,
+  "message": "Análisis de tweets completado exitosamente",
+  "query": "elecciones guatemala",
   "location": "guatemala",
-  "limit": 5
+  "limit": 10,
+  "session_id": "chat_session_123",
+  "result": {
+    "success": true,
+    "content": "Análisis completo de 8 tweets sobre...",
+    "categoria": "Política",
+    "tweet_count": 8,
+    "tweets_saved": 8,
+    "total_engagement": 245,
+    "avg_engagement": 31,
+    "execution_time": 12500,
+    "tweets": [...],
+    "summary": "Análisis de sentimiento completado..."
+  }
 }
 ```
 
@@ -150,11 +189,25 @@ Obtiene información detallada de una herramienta específica.
 ```bash
 # URL del servicio ExtractorT
 EXTRACTOR_T_URL=http://localhost:8001
+
+# API de Gemini AI para análisis de sentimiento
+GEMINI_API_KEY=your_gemini_api_key_here
+
+# Supabase para almacenamiento
+SUPABASE_URL=your_supabase_url_here
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
 ```
 
 ### Autenticación
 
-Todas las rutas requieren autenticación mediante el middleware `requireAuth` de ExtractorW.
+Las rutas de ejecución de herramientas (`/execute`, `/nitter_context`) requieren autenticación mediante el middleware `requireAuth` de ExtractorW.
+
+Las rutas de información (`/tools`, `/status`, `/capabilities`) son públicas para permitir discovery desde N8N.
+
+**Token JWT requerido en headers:**
+```
+Authorization: Bearer YOUR_JWT_TOKEN
+```
 
 ## 🧪 Pruebas
 

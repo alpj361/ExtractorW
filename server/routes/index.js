@@ -7,6 +7,7 @@ const documentAnalysisRoutes = require('./documentAnalysis');
 const mcpRoutes = require('./mcp');
 const viztaChatRoutes = require('./viztaChat');
 const hybridCoveragesRoutes = require('./hybridCoverages');
+const nitterContextRoutes = require('./nitterContext');
 const path = require('path');
 const capturadosRoutes = require('./capturados');
 const coveragesRoutes = require('./coverages');
@@ -66,6 +67,9 @@ function setupRoutes(app) {
   
   // Configurar rutas de Vizta Chat
   app.use('/api/vizta-chat', viztaChatRoutes);
+  
+  // Configurar rutas de Nitter Context (herramienta de análisis de tweets)
+  app.use('/api', nitterContextRoutes);
 }
 
 module.exports = {
