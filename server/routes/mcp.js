@@ -260,6 +260,128 @@ router.get('/stream', async (req, res) => {
 });
 
 /**
+ * GET /api/mcp/capabilities
+ * Endpoint para que N8N descubra las capacidades del MCP Server
+ * Formato compatible con N8N MCP Client
+ */
+router.get('/capabilities', async (req, res) => {
+  try {
+    console.log('🔍 N8N solicitando capacidades del MCP Server');
+    
+    const capabilities = {
+      "protocolVersion": "2024-11-05",
+      "capabilities": {
+        "tools": {},
+        "logging": {},
+        "prompts": {}
+      },
+      "serverInfo": {
+        "name": "ExtractorW MCP Server",
+        "version": "1.0.0"
+      },
+      "tools": [
+        {
+          "name": "nitter_context",
+          "description": "Obtiene contexto social de Twitter/X usando Nitter para un término específico",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "q": {
+                "type": "string",
+                "description": "Término de búsqueda para obtener tweets contextuales"
+              },
+              "location": {
+                "type": "string", 
+                "description": "Ubicación para filtrar resultados (guatemala, mexico, us, etc.)",
+                "default": "guatemala"
+              },
+              "limit": {
+                "type": "number",
+                "description": "Número máximo de tweets a obtener",
+                "minimum": 5,
+                "maximum": 50,
+                "default": 10
+              }
+            },
+            "required": ["q"]
+          }
+        }
+      ]
+    };
+    
+    res.json(capabilities);
+  } catch (error) {
+    console.error('❌ Error obteniendo capacidades MCP:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo capacidades del servidor',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/mcp/call
+ * Endpoint para ejecutar herramientas desde N8N MCP Client
+ * Formato compatible con protocolo MCP
+ */
+router.post('/call', async (req, res) => {
+  try {
+    const { method, params } = req.body;
+    
+    console.log(`🔧 N8N llamando método MCP: ${method} con parámetros:`, params);
+    
+    if (method === 'tools/list') {
+      // Listar herramientas disponibles
+      const tools = await mcpService.listAvailableTools();
+      res.json({
+        tools: tools.map(tool => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: {
+            type: "object",
+            properties: {
+              q: { type: "string", description: "Término de búsqueda" },
+              location: { type: "string", description: "Ubicación", default: "guatemala" },
+              limit: { type: "number", description: "Límite de tweets", default: 10 }
+            },
+            required: ["q"]
+          }
+        }))
+      });
+    } else if (method === 'tools/call') {
+      // Ejecutar herramienta específica
+      const { name, arguments: toolArgs } = params;
+      
+      if (name === 'nitter_context') {
+        const result = await mcpService.executeTool('nitter_context', toolArgs, null);
+        res.json({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(result, null, 2)
+            }
+          ]
+        });
+      } else {
+        res.status(404).json({
+          error: `Herramienta '${name}' no encontrada`
+        });
+      }
+    } else {
+      res.status(400).json({
+        error: `Método '${method}' no soportado`
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error en llamada MCP:', error);
+    res.status(500).json({
+      error: error.message
+    });
+  }
+});
+
+/**
  * GET /api/mcp/test-stream
  * Endpoint SSE de prueba sin autenticación para N8N
  * Versión simplificada para testing
@@ -283,12 +405,36 @@ router.get('/test-stream', async (req, res) => {
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    // Evento inicial
+    // Evento inicial con información de herramientas
     sendEvent('connected', {
       message: 'MCP Test Stream conectado',
       mode: 'testing',
       timestamp: new Date().toISOString(),
+      server: {
+        name: 'ExtractorW MCP Server',
+        version: '1.0.0'
+      },
       tools_available: ['nitter_context']
+    });
+
+    // Enviar información de herramientas inmediatamente
+    sendEvent('tools', {
+      tools: [
+        {
+          name: 'nitter_context',
+          description: 'Obtiene contexto social de Twitter/X usando Nitter',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              q: { type: 'string', description: 'Término de búsqueda' },
+              location: { type: 'string', description: 'Ubicación', default: 'guatemala' },
+              limit: { type: 'number', description: 'Límite de tweets', default: 10 }
+            },
+            required: ['q']
+          }
+        }
+      ],
+      timestamp: new Date().toISOString()
     });
 
     // Heartbeat cada 15 segundos (más frecuente para pruebas)
