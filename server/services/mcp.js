@@ -159,13 +159,20 @@ async function executeNitterContext(query, location = 'guatemala', limit = 10, u
         location: location,
         limit: limit
       },
-      timeout: 30000 // 30 segundos timeout
+      timeout: 60000 // 60 segundos timeout
     });
 
     if (response.data.status === 'success') {
       console.log(`✅ Nitter context obtenido: ${response.data.tweet_count} tweets encontrados`);
+      
+      // Formatear tweets para el AI Agent
+      const formattedTweets = response.data.tweets.map(tweet => 
+        `@${tweet.usuario} (${tweet.fecha}): ${tweet.texto} [❤️${tweet.likes} 🔄${tweet.retweets} 💬${tweet.replies}]`
+      ).join('\n\n');
+      
       return {
         success: true,
+        content: `Análisis de ${response.data.tweet_count} tweets sobre "${query}" en ${location}:\n\n${formattedTweets}`,
         query: query,
         location: location,
         tweet_count: response.data.tweet_count,
