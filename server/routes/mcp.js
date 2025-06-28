@@ -383,42 +383,55 @@ router.post('/call', async (req, res) => {
 
 /**
  * GET /api/mcp/test-stream
- * Endpoint SSE optimizado para N8N MCP Client
- * Compatible con proxy y configuraciones de producción
+ * Endpoint SSE robusto para N8N MCP Client
+ * Manejo mejorado de errores y reconexiones
  */
 router.get('/test-stream', (req, res) => {
-  console.log('🧪 Nueva conexión SSE N8N iniciada');
+  const connectionId = Math.random().toString(36).substr(2, 9);
+  console.log(`🧪 Nueva conexión SSE N8N iniciada [${connectionId}]`);
   
-  // Headers SSE optimizados para N8N
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
+  // Headers SSE optimizados para N8N y proxies
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Cache-Control, Accept, Authorization');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('X-Accel-Buffering', 'no'); // Para nginx
+  res.setHeader('Transfer-Encoding', 'chunked');
   
-  // Función mejorada para enviar eventos SSE
+  // Variable para controlar si la conexión está activa
+  let isConnected = true;
+  
+  // Función robusta para enviar eventos SSE
   const sendSSEEvent = (eventType, data, id = null) => {
+    if (!isConnected || res.destroyed || res.writableEnded) {
+      return false;
+    }
+    
     try {
+      let message = '';
       if (id) {
-        res.write(`id: ${id}\n`);
+        message += `id: ${id}\n`;
       }
-      res.write(`event: ${eventType}\n`);
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
+      message += `event: ${eventType}\n`;
+      message += `data: ${JSON.stringify(data)}\n\n`;
       
-      // Flush inmediato para N8N
-      if (res.flush) {
-        res.flush();
-      }
+      res.write(message);
+      return true;
     } catch (error) {
-      console.error('❌ Error enviando evento SSE:', error);
+      console.error(`❌ Error enviando evento SSE [${connectionId}]:`, error.message);
+      isConnected = false;
+      return false;
     }
   };
 
   // Evento inicial inmediato
-  sendSSEEvent('connected', {
+  const initialSuccess = sendSSEEvent('connected', {
     message: 'MCP Server N8N Stream Conectado',
+    connectionId: connectionId,
     timestamp: new Date().toISOString(),
     server: {
       name: 'ExtractorW MCP Server',
@@ -427,90 +440,148 @@ router.get('/test-stream', (req, res) => {
     }
   }, 'connect-1');
 
+  if (!initialSuccess) {
+    console.log(`❌ Conexión inicial fallida [${connectionId}]`);
+    return;
+  }
+
   // Enviar herramientas disponibles inmediatamente
-  sendSSEEvent('tools_available', {
-    tools: [
-      {
-        name: 'nitter_context',
-        description: 'Obtiene contexto social de Twitter/X usando Nitter para análisis de sentimiento',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            q: { 
-              type: 'string', 
-              description: 'Término de búsqueda para obtener tweets contextuales',
-              required: true
+  setTimeout(() => {
+    sendSSEEvent('tools_available', {
+      tools: [
+        {
+          name: 'nitter_context',
+          description: 'Obtiene contexto social de Twitter/X usando Nitter para análisis de sentimiento',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              q: { 
+                type: 'string', 
+                description: 'Término de búsqueda para obtener tweets contextuales'
+              },
+              location: { 
+                type: 'string', 
+                description: 'Ubicación para filtrar resultados',
+                default: 'guatemala'
+              },
+              limit: { 
+                type: 'number', 
+                description: 'Número máximo de tweets a obtener',
+                minimum: 5,
+                maximum: 50,
+                default: 10
+              }
             },
-            location: { 
-              type: 'string', 
-              description: 'Ubicación para filtrar resultados',
-              default: 'guatemala'
-            },
-            limit: { 
-              type: 'number', 
-              description: 'Número máximo de tweets a obtener',
-              minimum: 5,
-              maximum: 50,
-              default: 10
-            }
-          },
-          required: ['q']
+            required: ['q']
+          }
         }
-      }
-    ],
-    count: 1,
-    timestamp: new Date().toISOString()
-  }, 'tools-1');
-
-  // Heartbeat cada 10 segundos para mantener conexión
-  const heartbeatInterval = setInterval(() => {
-    sendSSEEvent('heartbeat', {
-      message: 'Server alive',
-      timestamp: new Date().toISOString(),
-      uptime: Math.floor(process.uptime()),
-      connections: 1
-    }, `heartbeat-${Date.now()}`);
-  }, 10000);
-
-  // Evento de estado cada 30 segundos
-  const statusInterval = setInterval(() => {
-    sendSSEEvent('server_status', {
-      status: 'operational',
-      tools_ready: ['nitter_context'],
-      external_services: {
-        extractor_t: 'connected'
-      },
+      ],
+      count: 1,
+      connectionId: connectionId,
       timestamp: new Date().toISOString()
-    }, `status-${Date.now()}`);
-  }, 30000);
+    }, 'tools-1');
+  }, 500);
 
-  // Evento inicial de herramienta lista
+  // Evento de herramienta lista
   setTimeout(() => {
     sendSSEEvent('tool_ready', {
       tool: 'nitter_context',
       status: 'ready',
       endpoint: '/api/mcp/call',
       method: 'tools/call',
+      connectionId: connectionId,
       timestamp: new Date().toISOString()
     }, 'tool-ready-1');
   }, 1000);
 
-  // Manejo de desconexión
-  const cleanup = () => {
-    console.log('🔌 SSE N8N desconectado');
+  // Heartbeat cada 15 segundos (más espaciado para evitar sobrecarga)
+  const heartbeatInterval = setInterval(() => {
+    if (!isConnected) {
+      clearInterval(heartbeatInterval);
+      return;
+    }
+    
+    const success = sendSSEEvent('heartbeat', {
+      message: 'Server alive',
+      connectionId: connectionId,
+      timestamp: new Date().toISOString(),
+      uptime: Math.floor(process.uptime())
+    }, `heartbeat-${Date.now()}`);
+    
+    if (!success) {
+      clearInterval(heartbeatInterval);
+    }
+  }, 15000);
+
+  // Evento de estado cada 45 segundos
+  const statusInterval = setInterval(() => {
+    if (!isConnected) {
+      clearInterval(statusInterval);
+      return;
+    }
+    
+    const success = sendSSEEvent('server_status', {
+      status: 'operational',
+      tools_ready: ['nitter_context'],
+      external_services: {
+        extractor_t: 'connected'
+      },
+      connectionId: connectionId,
+      timestamp: new Date().toISOString()
+    }, `status-${Date.now()}`);
+    
+    if (!success) {
+      clearInterval(statusInterval);
+    }
+  }, 45000);
+
+  // Manejo robusto de desconexión
+  const cleanup = (reason = 'unknown') => {
+    if (!isConnected) return;
+    
+    isConnected = false;
+    console.log(`🔌 SSE N8N desconectado [${connectionId}] - Razón: ${reason}`);
+    
     clearInterval(heartbeatInterval);
     clearInterval(statusInterval);
+    
+    try {
+      if (!res.destroyed && !res.writableEnded) {
+        res.end();
+      }
+    } catch (error) {
+      // Ignorar errores al cerrar
+    }
   };
 
-  req.on('close', cleanup);
+  // Event listeners con manejo de errores mejorado
+  req.on('close', () => cleanup('client_close'));
   req.on('error', (error) => {
-    console.error('❌ Error en SSE N8N:', error);
-    cleanup();
+    if (error.code === 'ECONNRESET' || error.code === 'EPIPE') {
+      cleanup('connection_reset');
+    } else {
+      console.error(`❌ Error en SSE N8N [${connectionId}]:`, error.message);
+      cleanup('error');
+    }
   });
 
-  // Mantener conexión activa
-  req.socket.setKeepAlive(true);
-  req.socket.setTimeout(0);
+  res.on('error', (error) => {
+    console.error(`❌ Error en response SSE [${connectionId}]:`, error.message);
+    cleanup('response_error');
+  });
+
+  res.on('close', () => cleanup('response_close'));
+
+  // Configuración de socket robusta
+  if (req.socket) {
+    req.socket.setKeepAlive(true, 30000); // 30 segundos
+    req.socket.setTimeout(120000); // 2 minutos timeout
+    
+    req.socket.on('timeout', () => {
+      console.log(`⏰ Timeout en socket SSE [${connectionId}]`);
+      cleanup('socket_timeout');
+    });
+  }
 });
 
 module.exports = router; 
