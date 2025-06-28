@@ -3,6 +3,8 @@ const router = express.Router();
 const { verifyUserAccess } = require('../middlewares/auth');
 const mcpService = require('../services/mcp');
 const recentScrapesService = require('../services/recentScrapes');
+const memoriesService = require('../services/memories');
+const { supabase } = require('../utils/supabase');
 
 // ===================================================================
 // VIZTA CHAT ROUTES
@@ -104,6 +106,21 @@ router.post('/query', verifyUserAccess, async (req, res) => {
     const requestId = uuidv4();
     const chatSessionId = sessionId || uuidv4();
 
+    // 1. Guardar mensaje del usuario en memories
+    await memoriesService.saveMessage({
+      sessionId: chatSessionId,
+      userId: userId,
+      role: 'user',
+      content: message,
+      messageType: 'message',
+      modelUsed: 'gpt-4o-mini',
+      metadata: { requestId: requestId }
+    });
+
+    // 2. Obtener los últimos 10 mensajes de la conversación para contexto
+    const conversationHistory = await memoriesService.getSessionMessages(chatSessionId, 10);
+    const previousMessages = memoriesService.formatMessagesForOpenAI(conversationHistory);
+
     // Obtener herramientas disponibles del MCP
     const availableTools = await mcpService.listAvailableTools();
     
@@ -144,13 +161,10 @@ router.post('/query', verifyUserAccess, async (req, res) => {
 
     console.log('🔍 Esquema de funciones para OpenAI:', JSON.stringify(functions, null, 2));
 
-    // Llamar a GPT-4o mini con function calling
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content: `Eres Vizta, un asistente de investigación especializado en análisis de redes sociales y tendencias en Guatemala. 
+    // 3. Preparar mensajes incluyendo historial de conversación
+    const systemMessage = {
+      role: 'system',
+      content: `Eres Vizta, un asistente de investigación especializado en análisis de redes sociales y tendencias en Guatemala. 
 
 Tu trabajo es ayudar a los usuarios a obtener y analizar información de redes sociales usando las herramientas disponibles.
 
@@ -160,17 +174,36 @@ ${availableTools.map(tool => `- ${tool.name}: ${tool.description}`).join('\n')}
 Cuando el usuario solicite información sobre tweets, tendencias, o análisis social, usa la herramienta nitter_context para obtener datos relevantes.
 
 Instrucciones:
-1. Analiza la consulta del usuario
+1. Analiza la consulta del usuario en el contexto de la conversación anterior
 2. Si necesitas datos de Twitter/X, usa nitter_context con parámetros apropiados
 3. Proporciona análisis contextual y insights útiles
 4. Mantén un tono profesional pero amigable
-5. Enfócate en Guatemala cuando sea relevante`
-        },
-        {
-          role: 'user',
-          content: message
-        }
-      ],
+5. Enfócate en Guatemala cuando sea relevante
+6. Recuerda el contexto de mensajes anteriores para dar respuestas coherentes`
+    };
+
+    // Construir array de mensajes con historial
+    const messagesForAI = [systemMessage];
+    
+    // Agregar historial previo (excluyendo el mensaje actual del usuario que ya está en memories)
+    if (previousMessages.length > 0) {
+      // Filtrar el último mensaje si es del usuario (evitar duplicados)
+      const filteredHistory = previousMessages.slice(0, -1);
+      messagesForAI.push(...filteredHistory);
+    }
+    
+    // Agregar el mensaje actual del usuario
+    messagesForAI.push({
+      role: 'user',
+      content: message
+    });
+
+    console.log(`💭 Enviando ${messagesForAI.length} mensajes a OpenAI (incluyendo ${previousMessages.length} del historial)`);
+
+    // 4. Llamar a GPT-4o mini con function calling y contexto de conversación
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: messagesForAI,
       functions: functions,
       function_call: 'auto',
       temperature: 0.7,
@@ -234,6 +267,25 @@ Datos obtenidos: ${JSON.stringify(toolResult, null, 2)}`
 
       const finalResponse = finalCompletion.choices[0].message.content;
 
+      // 6. Guardar respuesta del asistente en memories
+      await memoriesService.saveMessage({
+        sessionId: chatSessionId,
+        userId: userId,
+        role: 'assistant',
+        content: finalResponse,
+        messageType: 'message',
+        tokensUsed: (completion.usage?.total_tokens || 0) + (finalCompletion.usage?.total_tokens || 0),
+        modelUsed: 'gpt-4o-mini',
+        toolsUsed: [functionName],
+        contextSources: toolResult.tweets ? ['twitter'] : [],
+        metadata: { 
+          requestId: requestId,
+          toolArgs: functionArgs,
+          executionTime: executionTime,
+          toolResult: toolResult.success ? 'success' : 'error'
+        }
+      });
+
       res.json({
         success: true,
         response: finalResponse,
@@ -247,10 +299,29 @@ Datos obtenidos: ${JSON.stringify(toolResult, null, 2)}`
       });
 
     } else {
-      // Respuesta directa sin usar herramientas
+      // 5. Respuesta directa sin usar herramientas
+      const directResponse = assistantMessage.content;
+
+      // Guardar respuesta del asistente en memories
+      await memoriesService.saveMessage({
+        sessionId: chatSessionId,
+        userId: userId,
+        role: 'assistant',
+        content: directResponse,
+        messageType: 'message',
+        tokensUsed: completion.usage?.total_tokens || 0,
+        modelUsed: 'gpt-4o-mini',
+        toolsUsed: [],
+        contextSources: [],
+        metadata: { 
+          requestId: requestId,
+          responseType: 'direct'
+        }
+      });
+
       res.json({
         success: true,
-        response: assistantMessage.content,
+        response: directResponse,
         toolUsed: null,
         sessionId: chatSessionId,
         requestId: requestId,
@@ -370,6 +441,130 @@ router.get('/tools', verifyUserAccess, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error obteniendo herramientas',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/vizta-chat/conversations
+ * Obtener lista de conversaciones del usuario
+ */
+router.get('/conversations', verifyUserAccess, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { limit } = req.query;
+
+    const sessions = await memoriesService.getUserSessions(userId, parseInt(limit) || 20);
+
+    res.json({
+      success: true,
+      conversations: sessions,
+      count: sessions.length
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo conversaciones:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo conversaciones',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/vizta-chat/conversation/:sessionId
+ * Obtener mensajes de una conversación específica
+ */
+router.get('/conversation/:sessionId', verifyUserAccess, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { limit } = req.query;
+
+    const messages = await memoriesService.getSessionMessages(sessionId, parseInt(limit) || 50);
+
+    res.json({
+      success: true,
+      messages: messages,
+      sessionId: sessionId,
+      count: messages.length
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo mensajes de conversación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo mensajes de conversación',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/vizta-chat/memory-stats
+ * Obtener estadísticas de uso de memoria del usuario
+ */
+router.get('/memory-stats', verifyUserAccess, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const stats = await memoriesService.getUserMemoryStats(userId);
+
+    res.json({
+      success: true,
+      stats: stats
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo estadísticas de memoria:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas de memoria',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * DELETE /api/vizta-chat/conversation/:sessionId
+ * Eliminar una conversación completa
+ */
+router.delete('/conversation/:sessionId', verifyUserAccess, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const userId = req.user.id;
+
+    // Verificar que la sesión pertenece al usuario
+    const messages = await memoriesService.getSessionMessages(sessionId, 1);
+    if (messages.length === 0 || messages[0].user_id !== userId) {
+      return res.status(404).json({
+        success: false,
+        message: 'Conversación no encontrada'
+      });
+    }
+
+    // Eliminar todos los mensajes de la sesión
+    const { error } = await supabase
+      .from('memories')
+      .delete()
+      .eq('session_id', sessionId)
+      .eq('user_id', userId);
+
+    if (error) {
+      throw error;
+    }
+
+    res.json({
+      success: true,
+      message: 'Conversación eliminada exitosamente',
+      sessionId: sessionId
+    });
+
+  } catch (error) {
+    console.error('❌ Error eliminando conversación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando conversación',
       error: error.message
     });
   }
