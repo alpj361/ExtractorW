@@ -478,7 +478,54 @@ async function processNitterContext(query, userId, sessionId, location = 'guatem
     
     console.log(`✅ Guardado exitoso en recent_scrapes: ${savedCount}/${tweets.length} tweets, engagement promedio: ${avgEngagement}`);
     
-    // 4. Retornar resultado para el chat
+    // 4. Crear registro de resumen (tweet_id: null) para el frontend
+    try {
+      const summaryData = {
+        query_original: query,
+        query_clean: query.trim(),
+        herramienta: 'nitter_context',
+        categoria: categoria,
+        tweet_count: processedTweets.length,
+        total_engagement: totalEngagement,
+        avg_engagement: avgEngagement,
+        tweet_id: null, // IMPORTANTE: null para registro de resumen
+        usuario: null,
+        fecha_tweet: null,
+        texto: null,
+        enlace: null,
+        likes: null,
+        retweets: null,
+        replies: null,
+        verified: null,
+        // Campos de sesión y metadatos
+        user_id: userId,
+        session_id: sessionId,
+        mcp_request_id: `nitter_summary_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        mcp_execution_time: executionTime,
+        location: location,
+        fecha_captura: new Date().toISOString(),
+        tweets: processedTweets, // Array JSONB con todos los tweets analizados
+        raw_data: { summary: true, total_tweets: processedTweets.length, total_engagement: totalEngagement },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      
+      const { data: summaryRecord, error: summaryError } = await supabase
+        .from('recent_scrapes')
+        .insert(summaryData)
+        .select();
+      
+      if (summaryError) {
+        console.error(`❌ Error guardando registro de resumen:`, summaryError.message);
+      } else {
+        console.log(`✅ Registro de resumen creado exitosamente con ID: ${summaryRecord[0].id}`);
+      }
+      
+    } catch (summaryError) {
+      console.error(`Error creando registro de resumen: ${summaryError.message}`);
+    }
+    
+    // 5. Retornar resultado para el chat
     return {
       success: true,
       data: {
