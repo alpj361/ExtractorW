@@ -3,18 +3,30 @@ const router = express.Router();
 const { verifyUserAccess } = require('../middlewares/auth');
 const mcpService = require('../services/mcp');
 const recentScrapesService = require('../services/recentScrapes');
-const OpenAI = require('openai');
-const { v4: uuidv4 } = require('uuid');
 
 // ===================================================================
 // VIZTA CHAT ROUTES
 // Endpoints para el chat inteligente con integración MCP
 // ===================================================================
 
-// Configurar OpenAI
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+// Cargar dependencias de forma condicional
+let OpenAI, openai, uuidv4;
+
+try {
+  OpenAI = require('openai');
+  const { v4 } = require('uuid');
+  uuidv4 = v4;
+  
+  // Configurar OpenAI
+  openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY
+  });
+  
+  console.log('✅ Dependencias de Vizta Chat cargadas correctamente');
+} catch (error) {
+  console.warn('⚠️ Dependencias de Vizta Chat no disponibles:', error.message);
+  console.warn('📦 Instala las dependencias con: npm install openai uuid');
+}
 
 /**
  * POST /api/vizta-chat/query
@@ -22,6 +34,60 @@ const openai = new OpenAI({
  */
 router.post('/query', verifyUserAccess, async (req, res) => {
   try {
+    // Verificar que las dependencias estén disponibles
+    if (!openai || !uuidv4) {
+      // Fallback temporal sin OpenAI
+      console.log('⚠️ Usando fallback sin OpenAI para Vizta Chat');
+      
+      const fallbackSessionId = sessionId || `fallback_${Date.now()}`;
+      
+      // Usar directamente nitter_context como herramienta por defecto
+      try {
+        const toolResult = await mcpService.executeTool('nitter_context', {
+          q: message,
+          location: 'guatemala',
+          limit: 5
+        }, req.user);
+        
+        if (toolResult.success && toolResult.tweets) {
+          // Guardar en recent_scrapes
+          await recentScrapesService.saveScrape({
+            queryOriginal: message,
+            queryClean: message,
+            herramienta: 'nitter_context',
+            categoria: 'General',
+            tweets: toolResult.tweets,
+            userId: userId,
+            sessionId: fallbackSessionId,
+            mcpRequestId: `fallback_${Date.now()}`,
+            mcpExecutionTime: 0,
+            location: 'guatemala'
+          });
+          
+          return res.json({
+            success: true,
+            response: `He encontrado ${toolResult.tweets.length} tweets relacionados con "${message}". Los datos han sido guardados y están disponibles para análisis.`,
+            toolUsed: 'nitter_context',
+            toolArgs: { q: message, location: 'guatemala', limit: 5 },
+            toolResult: toolResult,
+            sessionId: fallbackSessionId,
+            requestId: `fallback_${Date.now()}`,
+            executionTime: 0,
+            timestamp: new Date().toISOString(),
+            mode: 'fallback'
+          });
+        } else {
+          throw new Error('No se pudieron obtener tweets');
+        }
+      } catch (error) {
+        return res.status(500).json({
+          success: false,
+          message: 'Error en modo fallback: ' + error.message,
+          error: 'Instala las dependencias con: npm run install-vizta'
+        });
+      }
+    }
+
     const { message, sessionId } = req.body;
     const userId = req.user.id;
     
