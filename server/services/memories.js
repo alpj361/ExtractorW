@@ -17,7 +17,7 @@ const supabase = require('../utils/supabase');
  * @param {string} messageData.modelUsed - Modelo utilizado
  * @param {Array} messageData.toolsUsed - Herramientas utilizadas
  * @param {Array} messageData.contextSources - Fuentes de contexto
- * @param {Object} messageData.metadata - Metadatos adicionales
+ * @param {Object} messageData.metadata - Metadatos adicionales (se guarda en conversation_metadata)
  */
 async function saveMessage(messageData) {
   try {
@@ -46,7 +46,7 @@ async function saveMessage(messageData) {
         model_used: modelUsed,
         tools_used: toolsUsed,
         context_sources: contextSources,
-        metadata: metadata
+        conversation_metadata: metadata
       })
       .select()
       .single();
