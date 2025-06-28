@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const mcpService = require('../services/mcp');
-const { verifyUserAccess, requireAuth } = require('../middlewares/auth');
+const { verifyUserAccess } = require('../middlewares/auth');
 
 // ===================================================================
 // MCP SERVER ROUTES - Micro Command Processor
@@ -67,7 +67,7 @@ router.get('/tools/:tool_name', async (req, res) => {
  * POST /api/mcp/execute
  * Ejecutor universal de herramientas MCP
  */
-router.post('/execute', requireAuth, async (req, res) => {
+router.post('/execute', verifyUserAccess, async (req, res) => {
   try {
     const { tool_name, parameters = {} } = req.body;
     const user = req.user;
@@ -105,7 +105,7 @@ router.post('/execute', requireAuth, async (req, res) => {
  * POST /api/mcp/nitter_context
  * Endpoint directo para herramienta nitter_context con análisis completo
  */
-router.post('/nitter_context', requireAuth, async (req, res) => {
+router.post('/nitter_context', verifyUserAccess, async (req, res) => {
   try {
     const { q, location = 'guatemala', limit = 10, session_id } = req.body;
     const user = req.user;
