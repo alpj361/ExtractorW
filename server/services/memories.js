@@ -1,4 +1,4 @@
-const { supabase } = require('../utils/supabase');
+const supabase = require('../utils/supabase');
 
 // ===================================================================
 // SERVICIO DE MEMORIES

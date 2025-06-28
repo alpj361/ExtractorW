@@ -4,7 +4,7 @@ const { verifyUserAccess } = require('../middlewares/auth');
 const mcpService = require('../services/mcp');
 const recentScrapesService = require('../services/recentScrapes');
 const memoriesService = require('../services/memories');
-const { supabase } = require('../utils/supabase');
+const supabase = require('../utils/supabase');
 
 // ===================================================================
 // VIZTA CHAT ROUTES
