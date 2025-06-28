@@ -351,7 +351,7 @@ async function processNitterContext(query, userId, sessionId, location = 'guatem
     console.log(`🔍 Procesando nitter_context: "${query}" para usuario ${userId}`);
     
     // 1. Llamar a ExtractorT para obtener tweets
-    const nitterUrl = `${EXTRACTOR_T_URL}/api/nitter_context?q=${encodeURIComponent(query)}&location=${location}&limit=${limit}`;
+    const nitterUrl = `${EXTRACTOR_T_URL}/nitter_context?q=${encodeURIComponent(query)}&location=${location}&limit=${limit}`;
     console.log(`📡 Llamando a ExtractorT: ${nitterUrl}`);
     
     const nitterResponse = await fetch(nitterUrl);
