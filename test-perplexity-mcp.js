@@ -6,43 +6,61 @@
 require('dotenv').config();
 const mcpService = require('./server/services/mcp');
 
-// Configuración de pruebas
+// Configuración de pruebas - CON ENFOQUE TEMPORAL
 const TEST_CASES = [
   {
-    name: 'Búsqueda Web General',
+    name: 'Búsqueda Web Temporal - Política Actual',
     tool: 'perplexity_search',
     params: {
-      query: 'Bernardo Arévalo presidente Guatemala',
+      query: 'Bernardo Arévalo presidente Guatemala situación actual',
       location: 'Guatemala',
       focus: 'politica'
     }
   },
   {
-    name: 'Búsqueda con Optimización para Nitter',
+    name: 'Búsqueda con Optimización Temporal para Nitter',
     tool: 'perplexity_search',
     params: {
-      query: 'Copa América 2024 Guatemala',
+      query: 'Copa América 2025 Guatemala actualidad',
       location: 'Guatemala',
       focus: 'deportes',
       improve_nitter_search: true
     }
   },
   {
-    name: 'Búsqueda de Eventos Actuales',
+    name: 'Búsqueda de Eventos Actuales con Filtro Temporal',
     tool: 'perplexity_search',
     params: {
-      query: 'Festival de Antigua Guatemala',
+      query: 'Festival Antigua Guatemala enero 2025',
       location: 'Guatemala',
       focus: 'eventos'
     }
   },
   {
-    name: 'Análisis de Tendencias (Nitter)',
+    name: 'Análisis de Tendencias Actuales (Nitter)',
     tool: 'nitter_context',
     params: {
-      q: 'BernardoArevalo OR presidente OR GobiernoGt',
+      q: 'BernardoArevalo OR presidente OR GobiernoGt OR Arevalo2025',
       location: 'guatemala',
       limit: 10
+    }
+  },
+  {
+    name: 'Búsqueda de Noticias Recientes',
+    tool: 'perplexity_search',
+    params: {
+      query: 'noticias Guatemala enero 2025 actualidad',
+      location: 'Guatemala',
+      focus: 'noticias'
+    }
+  },
+  {
+    name: 'Prueba de Expansión Temporal de Términos',
+    tool: 'nitter_context',
+    params: {
+      q: 'marcha del orgullo',  // Se expandirá automáticamente con contexto temporal
+      location: 'guatemala',
+      limit: 5
     }
   }
 ];
@@ -77,19 +95,43 @@ async function runAllTests() {
     }
     console.log('✅ Herramienta perplexity_search disponible');
 
-    // 2. Probar mejora de términos con Perplexity
-    console.log('\n🔍 2. PROBANDO MEJORA DE TÉRMINOS CON PERPLEXITY');
+    // 2. Probar mejora de términos con contexto temporal
+    console.log('\n🔍 2. PROBANDO MEJORA DE TÉRMINOS CON CONTEXTO TEMPORAL');
     try {
       const originalQuery = 'marcha del orgullo';
       const basicExpansion = mcpService.expandSearchTerms(originalQuery);
       console.log(`   Query original: "${originalQuery}"`);
-      console.log(`   Expansión básica: "${basicExpansion}"`);
+      console.log(`   Expansión básica temporal: "${basicExpansion}"`);
       
+      // Verificar que incluye contexto temporal
+      const currentYear = new Date().getFullYear();
+      const hasTemporalContext = basicExpansion.includes(currentYear.toString()) || 
+                                basicExpansion.includes('2025') || 
+                                basicExpansion.includes('Actual');
+      
+      if (hasTemporalContext) {
+        console.log('✅ Contexto temporal incluido en expansión básica');
+      } else {
+        console.log('⚠️ Contexto temporal NO incluido en expansión básica');
+      }
+      
+      // Probar mejora con Perplexity
       const enhancedExpansion = await mcpService.enhanceSearchTermsWithPerplexity(originalQuery, true);
       console.log(`   Expansión con Perplexity: "${enhancedExpansion}"`);
       
       if (enhancedExpansion !== basicExpansion) {
         console.log('✅ Mejora con Perplexity aplicada correctamente');
+        
+        // Verificar contexto temporal en Perplexity
+        const hasTemporalContextPerplexity = enhancedExpansion.includes('2025') || 
+                                           enhancedExpansion.includes('Actual') ||
+                                           enhancedExpansion.includes('enero');
+        
+        if (hasTemporalContextPerplexity) {
+          console.log('✅ Contexto temporal incluido en expansión con Perplexity');
+        } else {
+          console.log('⚠️ Contexto temporal NO incluido en expansión con Perplexity');
+        }
       } else {
         console.log('⚠️ Mejora con Perplexity no aplicada (usando expansión básica)');
       }

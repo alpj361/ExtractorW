@@ -44,23 +44,30 @@ async function enhanceSearchTermsWithPerplexity(originalQuery, usePerplexity = f
     const currentMonth = now.toLocaleString('es-ES', { month: 'long' });
     const currentYear = now.getFullYear();
 
-    const enhancementPrompt = `Analiza la consulta "${originalQuery}" y sugiere términos de búsqueda optimizados para Twitter/X en Guatemala.
+         const enhancementPrompt = `Analiza la consulta "${originalQuery}" y sugiere términos de búsqueda optimizados para Twitter/X en Guatemala.
 
-CONTEXTO: ${currentMonth} ${currentYear}, Guatemala
-OBJETIVO: Optimizar búsqueda para obtener tweets relevantes
+**FECHA ACTUAL: ${currentDate}**
+**CONTEXTO TEMPORAL: ${currentMonth} ${currentYear}, Guatemala**
+**OBJETIVO: Optimizar búsqueda para obtener tweets RECIENTES y relevantes**
+
+⚠️ FILTRO TEMPORAL CRÍTICO:
+- SOLO incluye hashtags y términos que estén siendo usados en ${currentMonth} ${currentYear}
+- Agrega modificadores temporales como "2025", "${currentMonth}", "actual", "ahora"
+- Incluye hashtags que probablemente estén trending HOY
 
 INSTRUCCIONES:
-1. Si es sobre una persona, incluye variaciones de su nombre, apodos, y cargos
-2. Si es sobre eventos, incluye hashtags probables y fechas relevantes  
-3. Si es sobre temas políticos, incluye instituciones y términos oficiales
-4. Si es sobre deportes, incluye equipos, competencias y hashtags deportivos
-5. Incluye términos en español que usan los guatemaltecos
-6. Considera abreviaciones comunes (GT, Guate, Chapin)
-7. Incluye hashtags que probablemente estén trending
+1. Si es sobre una persona, incluye variaciones de su nombre, apodos, cargos Y su estado ACTUAL en ${currentYear}
+2. Si es sobre eventos, incluye hashtags probables CON fechas de ${currentMonth} ${currentYear}
+3. Si es sobre temas políticos, incluye instituciones y términos oficiales CON contexto de ${currentYear}
+4. Si es sobre deportes, incluye equipos, competencias y hashtags deportivos de la temporada ${currentYear}
+5. Incluye términos en español que usan los guatemaltecos ACTUALMENTE
+6. Considera abreviaciones comunes (GT, Guate, Chapin) con contexto temporal
+7. Incluye hashtags que probablemente estén trending en ${currentMonth} ${currentYear}
+8. AGREGA SIEMPRE modificadores temporales: "2025", "${currentMonth}", "actual", "reciente"
 
-EJEMPLOS:
-- "marcha del orgullo" → "Orgullo2025 OR MarchadelOrgullo OR Pride OR LGBTI OR diversidad OR #OrguIIoGt"
-- "presidente guatemala" → "BernardoArevalo OR presidente OR GobiernoGt OR CasaPresidencial OR PresidenciaGt"
+EJEMPLOS ACTUALIZADOS:
+- "marcha del orgullo" → "Orgullo2025 OR MarchadelOrgullo OR Pride OR LGBTI OR diversidad OR #OrguIIoGt OR Orgullo${currentMonth} OR Pride2025 OR OrgulloActual"
+- "presidente guatemala" → "BernardoArevalo OR presidente OR GobiernoGt OR CasaPresidencial OR PresidenciaGt OR Arevalo2025 OR GobiernoActual OR Presidente${currentMonth}"
 
 Responde SOLO con los términos de búsqueda optimizados separados por "OR", sin explicaciones.`;
 
@@ -128,16 +135,16 @@ function expandSearchTerms(originalQuery) {
   
   // Diccionario de expansiones específicas para Guatemala
   const expansions = {
-    // Eventos y marchas
-    'marcha del orgullo': 'Orgullo2025 OR MarchadelOrgullo OR OrguIIoGt OR Pride OR LGBTI OR diversidad',
-    'orgullo': 'Orgullo2025 OR MarchadelOrgullo OR OrguIIoGt OR Pride OR LGBTI OR diversidad',
-    'pride': 'Orgullo2025 OR MarchadelOrgullo OR OrguIIoGt OR Pride OR LGBTI OR diversidad',
+    // Eventos y marchas (con contexto temporal actual)
+    'marcha del orgullo': 'Orgullo2025 OR MarchadelOrgullo OR OrguIIoGt OR Pride OR LGBTI OR diversidad OR OrgulloActual OR Pride2025',
+    'orgullo': 'Orgullo2025 OR MarchadelOrgullo OR OrguIIoGt OR Pride OR LGBTI OR diversidad OR OrgulloActual OR Pride2025',
+    'pride': 'Orgullo2025 OR MarchadelOrgullo OR OrguIIoGt OR Pride OR LGBTI OR diversidad OR OrgulloActual OR Pride2025',
     
-    // Política
-    'elecciones': 'EleccionesGt OR TSE OR voto OR candidatos OR Elecciones2025 OR procesoelectoral',
-    'presidente': 'BernardoArevalo OR presidente OR GobiernoGt OR CasaPresidencial OR Presidencia',
-    'gobierno': 'GobiernoGt OR BernardoArevalo OR CasaPresidencial OR Presidencia OR ejecutivo',
-    'congreso': 'CongresoGt OR diputados OR legislativo OR plenaria OR bancada',
+    // Política (con contexto temporal actual)
+    'elecciones': 'EleccionesGt OR TSE OR voto OR candidatos OR Elecciones2025 OR procesoelectoral OR EleccionesActuales',
+    'presidente': 'BernardoArevalo OR presidente OR GobiernoGt OR CasaPresidencial OR Presidencia OR Arevalo2025 OR PresidenteActual',
+    'gobierno': 'GobiernoGt OR BernardoArevalo OR CasaPresidencial OR Presidencia OR ejecutivo OR GobiernoActual OR Arevalo2025',
+    'congreso': 'CongresoGt OR diputados OR legislativo OR plenaria OR bancada OR Congreso2025 OR LegislativoActual',
     
     // Economía
     'economia': 'economiaGt OR PIB OR inflacion OR empleo OR QuetzalGt OR BancoGuatemala',
@@ -175,11 +182,11 @@ function expandSearchTerms(originalQuery) {
 
   // Búsquedas por palabras clave
   const keywords = [
-    // Política
-    { keys: ['bernardo', 'arevalo'], expansion: 'BernardoArevalo OR presidente OR GobiernoGt OR CasaPresidencial' },
-    { keys: ['giammattei'], expansion: 'Giammattei OR expresidente OR gobiernoanterior' },
-    { keys: ['tse'], expansion: 'TSE OR tribunal OR electoral OR elecciones OR voto' },
-    { keys: ['mp', 'ministerio publico'], expansion: 'MP OR MinisterioPublico OR fiscalia OR ContraCosta' },
+    // Política (con contexto temporal)
+    { keys: ['bernardo', 'arevalo'], expansion: 'BernardoArevalo OR presidente OR GobiernoGt OR CasaPresidencial OR Arevalo2025 OR PresidenteActual' },
+    { keys: ['giammattei'], expansion: 'Giammattei OR expresidente OR gobiernoanterior' }, // Mantener histórico para ex-presidente
+    { keys: ['tse'], expansion: 'TSE OR tribunal OR electoral OR elecciones OR voto OR TSE2025 OR ElectoralActual' },
+    { keys: ['mp', 'ministerio publico'], expansion: 'MP OR MinisterioPublico OR fiscalia OR ContraCosta OR MP2025 OR FiscaliaActual' },
     
     // Eventos específicos
     { keys: ['festival', 'cervantino'], expansion: 'FIC OR CervantinOGuatemala OR festivalcervantino OR cultura' },
@@ -204,9 +211,13 @@ function expandSearchTerms(originalQuery) {
     }
   }
 
-  // Si no hay expansión específica, agregar contexto guatemalteco
-  const contextualizedQuery = `${originalQuery} OR ${originalQuery}Gt OR ${originalQuery}Guatemala`;
-  console.log(`📝 Consulta contextualizada: "${originalQuery}" → "${contextualizedQuery}"`);
+  // Si no hay expansión específica, agregar contexto guatemalteco Y temporal
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.toLocaleString('es-ES', { month: 'long' });
+  
+  const contextualizedQuery = `${originalQuery} OR ${originalQuery}Gt OR ${originalQuery}Guatemala OR ${originalQuery}${currentYear} OR ${originalQuery}Actual OR ${originalQuery}${currentMonth}`;
+  console.log(`📝 Consulta contextualizada temporal: "${originalQuery}" → "${contextualizedQuery}"`);
   
   return contextualizedQuery;
 }
@@ -551,57 +562,68 @@ async function executePerplexitySearch(query, location = 'Guatemala', focus = 'g
     const currentMonth = now.toLocaleString('es-ES', { month: 'long' });
     const currentDate = now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
     
-    // Construir consulta optimizada basada en el enfoque
-    let optimizedQuery = query;
-    let searchContext = '';
-    
-    switch (focus) {
-      case 'noticias':
-        optimizedQuery = `${query} noticias ${location} ${currentMonth} ${currentYear}`;
-        searchContext = 'noticias actuales y eventos recientes';
-        break;
-      case 'eventos':
-        optimizedQuery = `${query} eventos ${location} ${currentMonth} ${currentYear}`;
-        searchContext = 'eventos y actividades actuales';
-        break;
-      case 'deportes':
-        optimizedQuery = `${query} deportes ${location} ${currentMonth} ${currentYear}`;
-        searchContext = 'deportes y competencias actuales';
-        break;
-      case 'politica':
-        optimizedQuery = `${query} política ${location} ${currentMonth} ${currentYear}`;
-        searchContext = 'política y gobierno actual';
-        break;
-      case 'economia':
-        optimizedQuery = `${query} economía ${location} ${currentMonth} ${currentYear}`;
-        searchContext = 'economía y finanzas actuales';
-        break;
-      case 'cultura':
-        optimizedQuery = `${query} cultura ${location} ${currentMonth} ${currentYear}`;
-        searchContext = 'cultura y entretenimiento actual';
-        break;
-      default:
-        optimizedQuery = `${query} ${location} ${currentMonth} ${currentYear}`;
-        searchContext = 'información general actualizada';
-    }
+         // Construir consulta optimizada basada en el enfoque - SIEMPRE CON FILTRO TEMPORAL
+     let optimizedQuery = query;
+     let searchContext = '';
+     
+     // FILTRO TEMPORAL OBLIGATORIO: Agregar contexto temporal actual SIEMPRE
+     const temporalContext = `${currentMonth} ${currentYear} actual reciente`;
+     
+     switch (focus) {
+       case 'noticias':
+         optimizedQuery = `${query} noticias ${location} ${temporalContext} últimas`;
+         searchContext = `noticias actuales y eventos recientes de ${currentMonth} ${currentYear}`;
+         break;
+       case 'eventos':
+         optimizedQuery = `${query} eventos ${location} ${temporalContext} próximos`;
+         searchContext = `eventos y actividades actuales de ${currentMonth} ${currentYear}`;
+         break;
+       case 'deportes':
+         optimizedQuery = `${query} deportes ${location} ${temporalContext} temporada`;
+         searchContext = `deportes y competencias actuales de ${currentMonth} ${currentYear}`;
+         break;
+       case 'politica':
+         optimizedQuery = `${query} política ${location} ${temporalContext} gobierno`;
+         searchContext = `política y gobierno actual de ${currentMonth} ${currentYear}`;
+         break;
+       case 'economia':
+         optimizedQuery = `${query} economía ${location} ${temporalContext} últimas cifras`;
+         searchContext = `economía y finanzas actuales de ${currentMonth} ${currentYear}`;
+         break;
+       case 'cultura':
+         optimizedQuery = `${query} cultura ${location} ${temporalContext} entretenimiento`;
+         searchContext = `cultura y entretenimiento actual de ${currentMonth} ${currentYear}`;
+         break;
+       default:
+         optimizedQuery = `${query} ${location} ${temporalContext} información`;
+         searchContext = `información general actualizada de ${currentMonth} ${currentYear}`;
+     }
 
     console.log(`🎯 Consulta optimizada: "${optimizedQuery}"`);
     
-    // Preparar prompt especializado para búsquedas web generales
-    const webSearchPrompt = `Analiza la consulta "${query}" y proporciona información completa y actualizada.
+         // Preparar prompt especializado para búsquedas web generales - CON ENFOQUE TEMPORAL
+     const webSearchPrompt = `Analiza la consulta "${query}" y proporciona información completa y ACTUALIZADA.
 
-CONTEXTO TEMPORAL: ${currentDate}
-CONTEXTO GEOGRÁFICO: ${location}
-ENFOQUE: ${searchContext}
+**FECHA ACTUAL: ${currentDate}**
+**CONTEXTO TEMPORAL: ${currentMonth} ${currentYear}**
+**CONTEXTO GEOGRÁFICO: ${location}**
+**ENFOQUE: ${searchContext}**
 
-INSTRUCCIONES:
-1. Busca información actualizada sobre "${query}" en el contexto de ${location}
-2. Enfócate en ${searchContext}
-3. Proporciona datos concretos, fechas específicas, y detalles relevantes
-4. Si es sobre personas, incluye información biográfica relevante
-5. Si es sobre eventos, incluye fechas, ubicaciones, y participantes
-6. Si es sobre temas actuales, incluye desarrollos recientes
-7. Contextualiza la información para el público de ${location}
+⚠️ CRÍTICO - FILTRO TEMPORAL:
+- SOLO busca información de ${currentMonth} ${currentYear} o MUY RECIENTE
+- NO incluyas información histórica o de años anteriores
+- Prioriza eventos, noticias y desarrollos ACTUALES
+- Si no hay información reciente, especifica claramente que no hay datos actuales
+
+INSTRUCCIONES ESPECÍFICAS:
+1. Busca información ACTUALIZADA sobre "${query}" en el contexto de ${location} para ${currentMonth} ${currentYear}
+2. Enfócate específicamente en ${searchContext}
+3. Proporciona datos concretos de ${currentMonth} ${currentYear}, fechas específicas recientes
+4. Si es sobre personas, incluye información biográfica Y SU ESTADO ACTUAL en ${currentYear}
+5. Si es sobre eventos, incluye SOLO eventos de ${currentMonth} ${currentYear} o próximos
+6. Si es sobre temas actuales, incluye desarrollos de ${currentMonth} ${currentYear}
+7. Contextualiza la información para el público de ${location} CON ENFOQUE EN LO ACTUAL
+8. RECHAZA información obsoleta o de fechas anteriores a ${currentYear}
 
 ${improveNitterSearch ? `
 ADICIONAL - OPTIMIZACIÓN PARA REDES SOCIALES:
@@ -639,25 +661,33 @@ Responde en formato JSON estructurado:
     const payload = {
       model: 'sonar',
       messages: [
-        {
-          role: 'system',
-          content: `Eres un asistente de investigación especializado en búsquedas web inteligentes para ${location}.
+                 {
+           role: 'system',
+           content: `Eres un asistente de investigación especializado en búsquedas web inteligentes para ${location}.
 
-Tu trabajo es encontrar información actualizada, precisa y contextualizada sobre cualquier tema consultado.
+Tu trabajo es encontrar información ACTUALIZADA, precisa y contextualizada sobre cualquier tema consultado.
 
-Características:
-- Siempre busca información más reciente disponible
-- Contextualiza para el público de ${location}
-- Proporciona datos específicos y fechas exactas
-- Identifica fuentes confiables
-- Analiza relevancia local vs global
-- Sugiere términos relacionados para búsquedas adicionales
+**FECHA ACTUAL: ${currentDate}**
+**CONTEXTO TEMPORAL OBLIGATORIO: ${currentMonth} ${currentYear}**
+**UBICACIÓN: ${location}**
 
-FECHA ACTUAL: ${currentDate}
-CONTEXTO: ${location}
+CARACTERÍSTICAS CRÍTICAS:
+- SIEMPRE busca información de ${currentMonth} ${currentYear} o MUY RECIENTE
+- RECHAZA automáticamente información histórica o obsoleta
+- Contextualiza ESPECÍFICAMENTE para el público de ${location}
+- Proporciona datos específicos CON FECHAS DE ${currentYear}
+- Identifica fuentes confiables Y ACTUALES
+- Analiza relevancia local vs global CON ENFOQUE EN LO ACTUAL
+- Sugiere términos relacionados para búsquedas adicionales ACTUALES
 
-Enfócate en información actual, relevante y verificable.`
-        },
+FILTROS TEMPORALES ESTRICTOS:
+- NO uses información de años anteriores a ${currentYear}
+- Prioriza eventos de ${currentMonth} ${currentYear}
+- Si no hay información actual, dilo explícitamente
+- Enfócate en desarrollos, noticias y eventos RECIENTES
+
+Enfócate EXCLUSIVAMENTE en información actual, relevante y verificable de ${currentMonth} ${currentYear}.`
+         },
         {
           role: 'user',
           content: webSearchPrompt
