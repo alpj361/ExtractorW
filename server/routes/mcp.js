@@ -382,206 +382,278 @@ router.post('/call', async (req, res) => {
 });
 
 /**
- * GET /api/mcp/test-stream
- * Endpoint SSE robusto para N8N MCP Client
- * Manejo mejorado de errores y reconexiones
+ * GET /api/mcp/tools
+ * Endpoint HTTP para discovery de herramientas (alternativa a SSE)
+ * Compatible con N8N cuando SSE falla
  */
-router.get('/test-stream', (req, res) => {
-  const connectionId = Math.random().toString(36).substr(2, 9);
-  console.log(`🧪 Nueva conexión SSE N8N iniciada [${connectionId}]`);
-  
-  // Headers SSE optimizados para N8N y proxies
-  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Cache-Control, Accept, Authorization');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('X-Accel-Buffering', 'no'); // Para nginx
-  res.setHeader('Transfer-Encoding', 'chunked');
-  
-  // Variable para controlar si la conexión está activa
-  let isConnected = true;
-  
-  // Función robusta para enviar eventos SSE
-  const sendSSEEvent = (eventType, data, id = null) => {
-    if (!isConnected || res.destroyed || res.writableEnded) {
-      return false;
+router.get('/tools', async (req, res) => {
+  try {
+    console.log('🔧 N8N solicitando herramientas via HTTP');
+    
+    const tools = await mcpService.listAvailableTools();
+    
+    res.json({
+      success: true,
+      message: 'Herramientas MCP disponibles',
+      tools: tools.map(tool => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: {
+          type: "object",
+          properties: {
+            q: { 
+              type: "string", 
+              description: "Término de búsqueda para obtener tweets contextuales",
+              required: true
+            },
+            location: { 
+              type: "string", 
+              description: "Ubicación para filtrar resultados",
+              default: "guatemala"
+            },
+            limit: { 
+              type: "number", 
+              description: "Número máximo de tweets a obtener",
+              minimum: 5,
+              maximum: 50,
+              default: 10
+            }
+          },
+          required: ["q"]
+        }
+      })),
+      server: {
+        name: 'ExtractorW MCP Server',
+        version: '1.0.0',
+        status: 'ready'
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Error listando herramientas HTTP:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo herramientas',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/mcp/execute
+ * Endpoint HTTP directo para ejecutar herramientas (alternativa a SSE)
+ * Compatible con N8N cuando SSE falla
+ */
+router.post('/execute', async (req, res) => {
+  try {
+    const { tool, arguments: toolArgs } = req.body;
+    
+    console.log(`🔧 N8N ejecutando herramienta via HTTP: ${tool}`);
+    
+    if (!tool) {
+      return res.status(400).json({
+        success: false,
+        message: 'Parámetro "tool" requerido'
+      });
     }
     
-    try {
-      let message = '';
-      if (id) {
-        message += `id: ${id}\n`;
-      }
-      message += `event: ${eventType}\n`;
-      message += `data: ${JSON.stringify(data)}\n\n`;
+    if (tool === 'nitter_context') {
+      const result = await mcpService.executeTool('nitter_context', toolArgs, null);
       
-      res.write(message);
+      res.json({
+        success: true,
+        message: 'Herramienta ejecutada exitosamente',
+        tool: tool,
+        result: result,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: `Herramienta '${tool}' no encontrada`
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error ejecutando herramienta HTTP:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error ejecutando herramienta',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/mcp/stream
+ * Endpoint SSE compatible con N8N MCP Server Trigger
+ * Protocolo MCP estándar para N8N
+ */
+router.get('/stream', (req, res) => {
+  console.log('🔗 Nueva conexión MCP N8N iniciada');
+  
+  // Headers SSE estándar para MCP
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+    'X-Accel-Buffering': 'no'
+  });
+  
+  let isConnected = true;
+  
+  // Función para enviar mensajes MCP
+  const sendMCPMessage = (message) => {
+    if (!isConnected || res.destroyed) return false;
+    
+    try {
+      // Formato MCP estándar para N8N
+      const mcpMessage = {
+        jsonrpc: '2.0',
+        method: message.method,
+        params: message.params || {},
+        id: message.id || Date.now()
+      };
+      
+      res.write(`data: ${JSON.stringify(mcpMessage)}\n\n`);
       return true;
     } catch (error) {
-      console.error(`❌ Error enviando evento SSE [${connectionId}]:`, error.message);
+      console.error('❌ Error enviando mensaje MCP:', error.message);
       isConnected = false;
       return false;
     }
   };
-
-  // Evento inicial inmediato
-  const initialSuccess = sendSSEEvent('connected', {
-    message: 'MCP Server N8N Stream Conectado',
-    connectionId: connectionId,
-    timestamp: new Date().toISOString(),
-    server: {
-      name: 'ExtractorW MCP Server',
-      version: '1.0.0',
-      status: 'ready'
-    }
-  }, 'connect-1');
-
-  if (!initialSuccess) {
-    console.log(`❌ Conexión inicial fallida [${connectionId}]`);
-    return;
-  }
-
-  // Enviar herramientas disponibles inmediatamente
+  
+  // 1. Enviar inicialización MCP
   setTimeout(() => {
-    sendSSEEvent('tools_available', {
-      tools: [
-        {
-          name: 'nitter_context',
-          description: 'Obtiene contexto social de Twitter/X usando Nitter para análisis de sentimiento',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              q: { 
-                type: 'string', 
-                description: 'Término de búsqueda para obtener tweets contextuales'
-              },
-              location: { 
-                type: 'string', 
-                description: 'Ubicación para filtrar resultados',
-                default: 'guatemala'
-              },
-              limit: { 
-                type: 'number', 
-                description: 'Número máximo de tweets a obtener',
-                minimum: 5,
-                maximum: 50,
-                default: 10
-              }
-            },
-            required: ['q']
-          }
+    sendMCPMessage({
+      method: 'initialized',
+      params: {
+        protocolVersion: '2024-11-05',
+        capabilities: {
+          tools: {}
+        },
+        serverInfo: {
+          name: 'ExtractorW MCP Server',
+          version: '1.0.0'
         }
-      ],
-      count: 1,
-      connectionId: connectionId,
-      timestamp: new Date().toISOString()
-    }, 'tools-1');
-  }, 500);
-
-  // Evento de herramienta lista
+      },
+      id: 1
+    });
+  }, 100);
+  
+  // 2. Enviar lista de herramientas disponibles
   setTimeout(() => {
-    sendSSEEvent('tool_ready', {
-      tool: 'nitter_context',
-      status: 'ready',
-      endpoint: '/api/mcp/call',
-      method: 'tools/call',
-      connectionId: connectionId,
-      timestamp: new Date().toISOString()
-    }, 'tool-ready-1');
-  }, 1000);
-
-  // Heartbeat cada 15 segundos (más espaciado para evitar sobrecarga)
+    sendMCPMessage({
+      method: 'tools/list',
+      params: {
+        tools: [
+          {
+            name: 'nitter_context',
+            description: 'Obtiene contexto social de Twitter/X usando Nitter para análisis de sentimiento y tendencias',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                q: {
+                  type: 'string',
+                  description: 'Término de búsqueda para obtener tweets contextuales'
+                },
+                location: {
+                  type: 'string',
+                  description: 'Ubicación para filtrar resultados',
+                  default: 'guatemala'
+                },
+                limit: {
+                  type: 'number',
+                  description: 'Número máximo de tweets a obtener',
+                  minimum: 5,
+                  maximum: 50,
+                  default: 10
+                }
+              },
+              required: ['q']
+            }
+          }
+        ]
+      },
+      id: 2
+    });
+  }, 500);
+  
+  // 3. Heartbeat MCP cada 30 segundos
   const heartbeatInterval = setInterval(() => {
     if (!isConnected) {
       clearInterval(heartbeatInterval);
       return;
     }
     
-    const success = sendSSEEvent('heartbeat', {
-      message: 'Server alive',
-      connectionId: connectionId,
-      timestamp: new Date().toISOString(),
-      uptime: Math.floor(process.uptime())
-    }, `heartbeat-${Date.now()}`);
+    const success = sendMCPMessage({
+      method: 'ping',
+      params: {
+        timestamp: new Date().toISOString()
+      },
+      id: Date.now()
+    });
     
     if (!success) {
       clearInterval(heartbeatInterval);
     }
-  }, 15000);
-
-  // Evento de estado cada 45 segundos
-  const statusInterval = setInterval(() => {
-    if (!isConnected) {
-      clearInterval(statusInterval);
-      return;
-    }
-    
-    const success = sendSSEEvent('server_status', {
-      status: 'operational',
-      tools_ready: ['nitter_context'],
-      external_services: {
-        extractor_t: 'connected'
-      },
-      connectionId: connectionId,
-      timestamp: new Date().toISOString()
-    }, `status-${Date.now()}`);
-    
-    if (!success) {
-      clearInterval(statusInterval);
-    }
-  }, 45000);
-
-  // Manejo robusto de desconexión
-  const cleanup = (reason = 'unknown') => {
+  }, 30000);
+  
+  // Cleanup de conexión
+  const cleanup = () => {
     if (!isConnected) return;
-    
     isConnected = false;
-    console.log(`🔌 SSE N8N desconectado [${connectionId}] - Razón: ${reason}`);
-    
+    console.log('🔌 MCP N8N desconectado');
     clearInterval(heartbeatInterval);
-    clearInterval(statusInterval);
     
     try {
-      if (!res.destroyed && !res.writableEnded) {
+      if (!res.destroyed) {
         res.end();
       }
     } catch (error) {
       // Ignorar errores al cerrar
     }
   };
-
-  // Event listeners con manejo de errores mejorado
-  req.on('close', () => cleanup('client_close'));
+  
+  // Event listeners
+  req.on('close', cleanup);
   req.on('error', (error) => {
-    if (error.code === 'ECONNRESET' || error.code === 'EPIPE') {
-      cleanup('connection_reset');
-    } else {
-      console.error(`❌ Error en SSE N8N [${connectionId}]:`, error.message);
-      cleanup('error');
+    if (error.code !== 'ECONNRESET' && error.code !== 'EPIPE') {
+      console.error('❌ Error en MCP SSE:', error.message);
     }
+    cleanup();
   });
+  
+  res.on('error', cleanup);
+});
 
-  res.on('error', (error) => {
-    console.error(`❌ Error en response SSE [${connectionId}]:`, error.message);
-    cleanup('response_error');
+/**
+ * GET /api/mcp/test-stream
+ * Endpoint SSE simplificado para testing
+ */
+router.get('/test-stream', (req, res) => {
+  console.log('🧪 Nueva conexión SSE test iniciada');
+  
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
   });
-
-  res.on('close', () => cleanup('response_close'));
-
-  // Configuración de socket robusta
-  if (req.socket) {
-    req.socket.setKeepAlive(true, 30000); // 30 segundos
-    req.socket.setTimeout(120000); // 2 minutos timeout
-    
-    req.socket.on('timeout', () => {
-      console.log(`⏰ Timeout en socket SSE [${connectionId}]`);
-      cleanup('socket_timeout');
-    });
-  }
+  
+  // Test simple
+  res.write(`data: ${JSON.stringify({
+    message: 'MCP Test Stream conectado',
+    timestamp: new Date().toISOString()
+  })}\n\n`);
+  
+  const cleanup = () => {
+    console.log('🔌 SSE test desconectado');
+  };
+  
+  req.on('close', cleanup);
+  req.on('error', cleanup);
 });
 
 module.exports = router; 
