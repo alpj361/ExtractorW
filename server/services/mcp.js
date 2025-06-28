@@ -199,25 +199,39 @@ async function executeNitterContext(query, location = 'guatemala', limit = 10, s
       
       return {
         success: true,
-        content: `Análisis completo de ${result.data.tweets_found} tweets sobre "${query}" en ${location}:\n\n` +
-                 `📊 Categoría: ${result.data.categoria}\n` +
-                 `💬 Engagement total: ${result.data.total_engagement}\n` +
-                 `📈 Engagement promedio: ${result.data.avg_engagement}\n` +
-                 `⏱️ Tiempo de procesamiento: ${result.data.execution_time}ms\n\n` +
-                 `🐦 Tweets analizados:\n${formattedTweets}\n` +
-                 `📝 ${result.data.summary}`,
+        message: "Tweet extraction and AI analysis completed successfully",
         query: query,
         location: location,
         session_id: finalSessionId,
-        categoria: result.data.categoria,
-        tweet_count: result.data.tweets_found,
-        tweets_saved: result.data.tweets_saved,
-        total_engagement: result.data.total_engagement,
-        avg_engagement: result.data.avg_engagement,
-        execution_time: result.data.execution_time,
-        tweets: result.data.tweets,
-        summary: result.data.summary,
-        message: `${result.data.tweets_found} tweets analizados y guardados con Gemini AI`
+        data: {
+          tweets_found: result.data.tweets_found,
+          categoria: result.data.categoria,
+          tweets_saved: result.data.tweets_saved,
+          total_engagement: result.data.total_engagement,
+          avg_engagement: result.data.avg_engagement,
+          execution_time: result.data.execution_time,
+          ai_analysis_completed: true,
+          where_to_view: "Monitoreo tab (Recent Activity section)",
+          features_available: [
+            "Individual tweet analysis with sentiment scores",
+            "Entity extraction and mentions", 
+            "Engagement metrics (likes, retweets, replies)",
+            "Communicative intentions detection",
+            "Category classification"
+          ],
+          tweets_sample: result.data.tweets.slice(0, 2).map(tweet => ({
+            user: tweet.usuario,
+            text: tweet.texto.substring(0, 100) + (tweet.texto.length > 100 ? '...' : ''),
+            sentiment: tweet.sentimiento,
+            sentiment_score: tweet.score_sentimiento,
+            intention: tweet.intencion_comunicativa,
+            engagement: {
+              likes: tweet.likes,
+              retweets: tweet.retweets,
+              replies: tweet.replies
+            }
+          }))
+        }
       };
     } else {
       throw new Error(result.error || 'Error procesando nitter_context');
