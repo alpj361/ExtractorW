@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { authenticateToken } = require('../middlewares/auth');
+const { verifyUserAccess } = require('../middlewares/auth');
 const { processNitterContext } = require('../services/nitterContext');
 
 /**
@@ -8,7 +8,7 @@ const { processNitterContext } = require('../services/nitterContext');
  * Herramienta para obtener tweets usando nitter_context de ExtractorT
  * con análisis completo de sentimiento y guardado en recent_scrapes
  */
-router.post('/nitter-context', authenticateToken, async (req, res) => {
+router.post('/nitter-context', verifyUserAccess, async (req, res) => {
   try {
     const { query, location = 'guatemala', limit = 10, session_id } = req.body;
     const userId = req.user.id;
@@ -70,7 +70,7 @@ router.post('/nitter-context', authenticateToken, async (req, res) => {
  * GET /api/nitter-context/test
  * Endpoint de prueba para verificar que el servicio funciona
  */
-router.get('/test', authenticateToken, async (req, res) => {
+router.get('/test', verifyUserAccess, async (req, res) => {
   try {
     const testQuery = 'Guatemala';
     const userId = req.user.id;
