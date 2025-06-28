@@ -9,6 +9,119 @@ const { processNitterContext } = require('./nitterContext');
 // Configuración de servicios externos
 const EXTRACTOR_T_URL = process.env.EXTRACTOR_T_URL || 'https://api.standatpd.com';
 
+/**
+ * Expansión inteligente de términos de búsqueda para Twitter
+ * Convierte consultas generales en búsquedas estratégicas específicas
+ */
+function expandSearchTerms(originalQuery) {
+  const query = originalQuery.toLowerCase().trim();
+  
+  // Diccionario de expansiones específicas para Guatemala
+  const expansions = {
+    // Eventos y marchas
+    'marcha del orgullo': 'Orgullo2025 OR MarchadelOrgullo OR OrguIIoGt OR Pride OR LGBTI OR diversidad',
+    'orgullo': 'Orgullo2025 OR MarchadelOrgullo OR OrguIIoGt OR Pride OR LGBTI OR diversidad',
+    'pride': 'Orgullo2025 OR MarchadelOrgullo OR OrguIIoGt OR Pride OR LGBTI OR diversidad',
+    
+    // Política
+    'elecciones': 'EleccionesGt OR TSE OR voto OR candidatos OR Elecciones2025 OR procesoelectoral',
+    'presidente': 'BernardoArevalo OR presidente OR GobiernoGt OR CasaPresidencial OR Presidencia',
+    'gobierno': 'GobiernoGt OR BernardoArevalo OR CasaPresidencial OR Presidencia OR ejecutivo',
+    'congreso': 'CongresoGt OR diputados OR legislativo OR plenaria OR bancada',
+    
+    // Economía
+    'economia': 'economiaGt OR PIB OR inflacion OR empleo OR QuetzalGt OR BancoGuatemala',
+    'inflación': 'inflacion OR precios OR carestia OR QuetzalGt OR poder OR adquisitivo',
+    'empleo': 'empleo OR trabajo OR desempleo OR MinTrabajo OR OportunidadesGt',
+    
+    // Deportes
+    'futbol': 'SeleccionGt OR GuatemalaFC OR LigaNacional OR Fedefut OR bicolor',
+    'seleccion': 'SeleccionGt OR bicolor OR Fedefut OR eliminatorias OR futbolGt',
+    
+    // Seguridad
+    'seguridad': 'seguridadGt OR PNC OR delincuencia OR violencia OR MinGob',
+    'violencia': 'violencia OR delincuencia OR inseguridad OR crimenes OR PNC',
+    
+    // Educación
+    'educacion': 'educacionGt OR Mineduc OR estudiantes OR maestros OR escuelas',
+    'universidad': 'universidadesGt OR USAC OR URL OR UVG OR estudiantes',
+    
+    // Salud
+    'salud': 'saludGt OR MSPAS OR hospitales OR medicos OR MinSalud',
+    'covid': 'covid OR pandemia OR vacunas OR MinSalud OR CovidGt',
+    
+    // Cultura
+    'cultura': 'culturaGt OR tradiciones OR artesanias OR Micude OR patrimonioGt',
+    'musica': 'musicaGt OR artistas OR conciertos OR cantantes OR chapin'
+  };
+
+  // Buscar coincidencias exactas primero
+  for (const [key, expansion] of Object.entries(expansions)) {
+    if (query.includes(key)) {
+      console.log(`🎯 Expansión exacta encontrada: "${key}" → "${expansion}"`);
+      return expansion;
+    }
+  }
+
+  // Búsquedas por palabras clave
+  const keywords = [
+    // Política
+    { keys: ['bernardo', 'arevalo'], expansion: 'BernardoArevalo OR presidente OR GobiernoGt OR CasaPresidencial' },
+    { keys: ['giammattei'], expansion: 'Giammattei OR expresidente OR gobiernoanterior' },
+    { keys: ['tse'], expansion: 'TSE OR tribunal OR electoral OR elecciones OR voto' },
+    { keys: ['mp', 'ministerio publico'], expansion: 'MP OR MinisterioPublico OR fiscalia OR ContraCosta' },
+    
+    // Eventos específicos
+    { keys: ['festival', 'cervantino'], expansion: 'FIC OR CervantinOGuatemala OR festivalcervantino OR cultura' },
+    { keys: ['independencia'], expansion: 'IndependenciaGt OR 15septiembre OR patria OR antorcha' },
+    { keys: ['navidad'], expansion: 'NavidadGt OR posadas OR aguinaldo OR fiestas' },
+    
+    // Ubicaciones
+    { keys: ['zona viva'], expansion: 'ZonaViva OR zona10 OR entretenimiento OR restaurantes' },
+    { keys: ['antigua'], expansion: 'Antigua OR LaAntigua OR patrimonio OR turismo' },
+    { keys: ['lago atitlan'], expansion: 'Atitlan OR lago OR turismo OR Solola' },
+    
+    // Hashtags comunes
+    { keys: ['guatemala'], expansion: 'Guatemala OR GuatemalaGt OR Guate OR Chapin OR GT' },
+    { keys: ['chapín', 'chapin'], expansion: 'Chapin OR Guatemala OR Guate OR GuatemalaGt' },
+  ];
+
+  // Buscar palabras clave
+  for (const keywordObj of keywords) {
+    if (keywordObj.keys.some(keyword => query.includes(keyword))) {
+      console.log(`🔍 Palabra clave encontrada: ${keywordObj.keys.join('/')} → "${keywordObj.expansion}"`);
+      return keywordObj.expansion;
+    }
+  }
+
+  // Si no hay expansión específica, agregar contexto guatemalteco
+  const contextualizedQuery = `${originalQuery} OR ${originalQuery}Gt OR ${originalQuery}Guatemala`;
+  console.log(`📝 Consulta contextualizada: "${originalQuery}" → "${contextualizedQuery}"`);
+  
+  return contextualizedQuery;
+}
+
+/**
+ * Optimiza límites de tweets basado en el tipo de consulta
+ */
+function optimizeTweetLimit(query, requestedLimit = 10) {
+  const query_lower = query.toLowerCase();
+  
+  // Para análisis de sentimiento o temas controversiales, usar más tweets
+  const needMoreTweets = [
+    'sentimiento', 'opinion', 'que dicen', 'que piensan', 'reaccion',
+    'politica', 'elecciones', 'gobierno', 'presidente', 'congreso',
+    'protestas', 'marchas', 'manifestacion', 'crisis'
+  ];
+  
+  if (needMoreTweets.some(term => query_lower.includes(term))) {
+    return Math.max(requestedLimit, 20); // Mínimo 20 tweets para análisis completo
+  }
+  
+  // Para consultas específicas, 15 tweets es suficiente
+  return Math.max(requestedLimit, 15);
+}
+
 // Registro de herramientas disponibles
 const AVAILABLE_TOOLS = {
   nitter_context: {
@@ -173,22 +286,30 @@ async function executeNitterContext(query, location = 'guatemala', limit = 10, s
       throw new Error('Usuario autenticado requerido para ejecutar nitter_context');
     }
     
+    // MEJORAR: Expansión inteligente de términos de búsqueda
+    const expandedQuery = expandSearchTerms(query);
+    const optimizedLimit = optimizeTweetLimit(query, limit);
+    
+    console.log(`🎯 Query original: "${query}"`);
+    console.log(`🚀 Query expandido: "${expandedQuery}"`);
+    console.log(`📊 Límite optimizado: ${optimizedLimit} tweets`);
+    
     // Generar session_id si no se proporciona
     const finalSessionId = sessionId || `mcp_session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
-    // Usar el servicio completo de nitterContext
+    // Usar el servicio completo de nitterContext con términos mejorados
     const result = await processNitterContext(
-      query.trim(),
+      expandedQuery, // Usar la query expandida en lugar de query original
       user.id,
       finalSessionId,
       location,
-      parseInt(limit)
+      optimizedLimit // Usar el límite optimizado
     );
 
     if (result.success) {
       console.log(`✅ Nitter context procesado exitosamente: ${result.data.tweets_found} tweets analizados`);
       
-      // Formatear respuesta para el agente AI
+      // Formatear respuesta para el agente AI con información adicional sobre la mejora
       const formattedTweets = result.data.tweets.map(tweet => 
         `@${tweet.usuario} (${tweet.fecha_tweet}): ${tweet.texto}\n` +
         `   📊 Sentimiento: ${tweet.sentimiento} (${tweet.score_sentimiento}) | ` +
@@ -199,60 +320,47 @@ async function executeNitterContext(query, location = 'guatemala', limit = 10, s
       
       return {
         success: true,
-        message: "Tweet extraction and AI analysis completed successfully",
-        query: query,
-        location: location,
+        tweets: result.data.tweets,
+        tweets_found: result.data.tweets_found,
+        query_original: query,
+        query_expanded: expandedQuery,
+        limit_requested: limit,
+        limit_used: optimizedLimit,
         session_id: finalSessionId,
-        data: {
-          tweets_found: result.data.tweets_found,
-          categoria: result.data.categoria,
-          tweets_saved: result.data.tweets_saved,
-          total_engagement: result.data.total_engagement,
-          avg_engagement: result.data.avg_engagement,
-          execution_time: result.data.execution_time,
-          ai_analysis_completed: true,
-          where_to_view: "Monitoreo tab (Recent Activity section)",
-          features_available: [
-            "Individual tweet analysis with sentiment scores",
-            "Entity extraction and mentions", 
-            "Engagement metrics (likes, retweets, replies)",
-            "Communicative intentions detection",
-            "Category classification"
-          ],
-          tweets_sample: result.data.tweets.slice(0, 2).map(tweet => ({
-            user: tweet.usuario,
-            text: tweet.texto.substring(0, 100) + (tweet.texto.length > 100 ? '...' : ''),
-            sentiment: tweet.sentimiento,
-            sentiment_score: tweet.score_sentimiento,
-            intention: tweet.intencion_comunicativa,
-            engagement: {
-              likes: tweet.likes,
-              retweets: tweet.retweets,
-              replies: tweet.replies
-            }
-          }))
+        formatted_context: `BÚSQUEDA INTELIGENTE EJECUTADA:
+Query original del usuario: "${query}"
+Query expandida estratégicamente: "${expandedQuery}"
+Tweets analizados: ${result.data.tweets_found}/${optimizedLimit}
+Ubicación: ${location}
+
+TWEETS ENCONTRADOS Y ANALIZADOS:
+${formattedTweets}
+
+ANÁLISIS CONTEXTUAL:
+- Se expandió automáticamente la consulta para obtener mejores resultados
+- Se optimizó el límite basado en el tipo de análisis requerido
+- Todos los tweets incluyen análisis de sentimiento e intención comunicativa
+- Las entidades mencionadas han sido extraídas automáticamente`,
+        analysis_metadata: {
+          query_expansion_applied: expandedQuery !== query,
+          limit_optimization_applied: optimizedLimit !== limit,
+          tweets_analyzed: result.data.tweets_found,
+          sentiment_distribution: result.data.tweets.reduce((acc, tweet) => {
+            acc[tweet.sentimiento] = (acc[tweet.sentimiento] || 0) + 1;
+            return acc;
+          }, {}),
+          average_engagement: result.data.tweets.reduce((sum, tweet) => 
+            sum + (tweet.likes || 0) + (tweet.retweets || 0) + (tweet.replies || 0), 0
+          ) / result.data.tweets.length || 0
         }
       };
     } else {
       throw new Error(result.error || 'Error procesando nitter_context');
     }
+
   } catch (error) {
-    console.error('❌ Error ejecutando nitter_context MCP:', error);
-    
-    // Manejar errores específicos
-    if (error.message.includes('ExtractorT no está disponible')) {
-      throw new Error('ExtractorT no está disponible. Verifique que el servicio esté ejecutándose.');
-    }
-    
-    if (error.message.includes('GEMINI_API_KEY')) {
-      throw new Error('Configuración de Gemini AI requerida. Verifique GEMINI_API_KEY.');
-    }
-    
-    if (error.message.includes('SUPABASE')) {
-      throw new Error('Error de base de datos. Verifique configuración de Supabase.');
-    }
-    
-    throw new Error(`Error obteniendo contexto de Nitter: ${error.message}`);
+    console.error(`❌ Error ejecutando nitter_context MCP:`, error);
+    throw error;
   }
 }
 
