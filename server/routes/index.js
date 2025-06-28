@@ -5,6 +5,7 @@ const projectSuggestionsRoutes = require('./project-suggestions');
 const transcriptionRoutes = require('./transcription');
 const documentAnalysisRoutes = require('./documentAnalysis');
 const mcpRoutes = require('./mcp');
+const viztaChatRoutes = require('./viztaChat');
 const hybridCoveragesRoutes = require('./hybridCoverages');
 const path = require('path');
 const capturadosRoutes = require('./capturados');
@@ -62,6 +63,9 @@ function setupRoutes(app) {
   
   // Configurar rutas del MCP Server
   app.use('/api/mcp', mcpRoutes);
+  
+  // Configurar rutas de Vizta Chat
+  app.use('/api/vizta-chat', viztaChatRoutes);
 }
 
 module.exports = {
