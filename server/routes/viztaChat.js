@@ -108,17 +108,41 @@ router.post('/query', verifyUserAccess, async (req, res) => {
     const availableTools = await mcpService.listAvailableTools();
     
     // Preparar funciones para GPT-4o mini
-    const functions = availableTools.map(tool => ({
-      name: tool.name,
-      description: tool.description,
-      parameters: {
-        type: 'object',
-        properties: tool.parameters,
-        required: Object.keys(tool.parameters).filter(key => 
-          tool.parameters[key].required === true
-        )
-      }
-    }));
+    const functions = availableTools.map(tool => {
+      // Transformar parámetros del formato MCP al formato OpenAI
+      const properties = {};
+      const required = [];
+      
+      Object.keys(tool.parameters).forEach(key => {
+        const param = tool.parameters[key];
+        properties[key] = {
+          type: param.type,
+          description: param.description
+        };
+        
+        // Agregar constrains adicionales si existen
+        if (param.min !== undefined) properties[key].minimum = param.min;
+        if (param.max !== undefined) properties[key].maximum = param.max;
+        if (param.default !== undefined) properties[key].default = param.default;
+        
+        // Agregar a required si es necesario
+        if (param.required === true) {
+          required.push(key);
+        }
+      });
+      
+      return {
+        name: tool.name,
+        description: tool.description,
+        parameters: {
+          type: 'object',
+          properties: properties,
+          required: required
+        }
+      };
+    });
+
+    console.log('🔍 Esquema de funciones para OpenAI:', JSON.stringify(functions, null, 2));
 
     // Llamar a GPT-4o mini con function calling
     const completion = await openai.chat.completions.create({
