@@ -216,6 +216,52 @@ router.post('/query', verifyUserAccess, async (req, res) => {
       };
     });
 
+    // Agregar función especial para crear planes de ejecución multi-step
+    functions.push({
+      name: 'create_execution_plan',
+      description: 'Crear un plan de ejecución multi-step para consultas complejas que requieren múltiples herramientas en secuencia',
+      parameters: {
+        type: 'object',
+        properties: {
+          steps: {
+            type: 'array',
+            description: 'Array de pasos a ejecutar en orden',
+            items: {
+              type: 'object',
+              properties: {
+                step_number: {
+                  type: 'number',
+                  description: 'Número de paso (1, 2, 3, etc.)'
+                },
+                tool: {
+                  type: 'string',
+                  description: 'Nombre de la herramienta a usar'
+                },
+                args: {
+                  type: 'object',
+                  description: 'Argumentos para la herramienta'
+                },
+                description: {
+                  type: 'string',
+                  description: 'Descripción de qué hace este paso'
+                },
+                depends_on_previous: {
+                  type: 'boolean',
+                  description: 'Si este paso depende del resultado del paso anterior'
+                }
+              },
+              required: ['step_number', 'tool', 'args', 'description']
+            }
+          },
+          final_goal: {
+            type: 'string',
+            description: 'Objetivo final del plan de ejecución'
+          }
+        },
+        required: ['steps', 'final_goal']
+      }
+    });
+
     console.log('🔍 Esquema de funciones para OpenAI:', JSON.stringify(functions, null, 2));
 
     // 3. Preparar mensajes incluyendo historial de conversación
@@ -247,10 +293,60 @@ IMPORTANTE: Siempre tienes en mente que HOY es ${currentDate}. Cuando realices b
 TIENES ACCESO TOTAL a los datos personales del usuario autenticado a través de las herramientas user_projects y user_codex. 
 NO digas que no tienes acceso a información privada - ¡SÍ TIENES ACCESO! Usa las herramientas disponibles.
 
+**CAPACIDAD MULTI-STEP:**
+Ahora puedes ejecutar MÚLTIPLES herramientas en secuencia para tareas complejas. Si una consulta requiere varios pasos, puedes crear un PLAN DE EJECUCIÓN.
+
+**DETECCIÓN DE CONSULTAS MULTI-STEP:**
+Detecta automáticamente consultas que requieren múltiples pasos, como:
+- "En base a mi proyecto X, busca reacciones sobre Y"
+- "Combina mis documentos sobre Z con noticias actuales"
+- "Analiza mi proyecto A y luego busca opiniones en Twitter"
+- "Compara mis investigaciones con tendencias actuales"
+- "Busca información sobre X y luego analiza reacciones"
+
+**CREACIÓN DE PLANES MULTI-STEP:**
+Si detectas que una consulta requiere múltiples pasos, puedes usar la función especial 'create_execution_plan' que crea un plan paso a paso:
+
+create_execution_plan({
+  "steps": [
+    {
+      "step_number": 1,
+      "tool": "user_projects",
+      "args": {"status": "active"},
+      "description": "Obtener proyectos activos del usuario"
+    },
+    {
+      "step_number": 2,
+      "tool": "nitter_context", 
+      "args": {"q": "tema_basado_en_paso_1", "limit": 20},
+      "description": "Buscar reacciones en Twitter sobre el tema identificado"
+    }
+  ],
+  "final_goal": "Analizar proyectos del usuario y buscar reacciones sobre el tema principal"
+})
+
+**CUÁNDO USAR MULTI-STEP:**
+- Cuando necesites combinar datos personales con información externa
+- Cuando una consulta tenga múltiples partes conectadas
+- Cuando necesites el resultado de una herramienta para usar otra
+- Cuando hayas mencionado "primero X, luego Y"
+
+**EJEMPLOS DE DETECCIÓN:**
+
+CONSULTA: "En base a mi proyecto de transparencia, busca qué dicen en Twitter"
+→ PLAN: 1) user_codex para buscar proyecto transparencia, 2) nitter_context con términos del proyecto
+
+CONSULTA: "Busca noticias sobre corrupción y luego analiza reacciones"
+→ PLAN: 1) perplexity_search sobre corrupción Guatemala, 2) nitter_context sobre términos encontrados
+
+CONSULTA: "¿Qué proyectos tengo relacionados con gobierno y qué opina la gente?"
+→ PLAN: 1) user_projects filtrar por "gobierno", 2) nitter_context sobre temas de los proyectos
+
 Tu trabajo es ayudar a los usuarios a obtener y analizar información usando las herramientas disponibles de manera inteligente.
 
 Herramientas disponibles:
 ${availableTools.map(tool => `- ${tool.name}: ${tool.description}`).join('\n')}
+- create_execution_plan: Crear plan de ejecución multi-step (NUEVA)
 
 ESTRATEGIA DE SELECCIÓN DE HERRAMIENTAS:
 
@@ -317,14 +413,22 @@ ESTRATEGIA DE SELECCIÓN DE HERRAMIENTAS:
      • "documentos sobre"
      • "busca en mis archivos"
 
-4. **ESTRATEGIA HÍBRIDA:**
-   - Puedes usar ambas herramientas en secuencia:
-     • Primero perplexity_search para obtener contexto
-     • Luego nitter_context para análisis de opinión pública
-   - Usa improve_nitter_search=true en perplexity_search para optimizar búsquedas sociales
-   - Combina datos personales (user_projects, user_codex) con información externa (perplexity_search, nitter_context):
+4. **PARA CREAR PLANES MULTI-STEP:**
+   - Usa create_execution_plan cuando detectes consultas complejas que requieran:
+     • Combinar datos personales con información externa
+     • Ejecutar herramientas en secuencia donde una depende de la otra
+     • Análisis que requiere múltiples fuentes de información
+     • Consultas con múltiples partes conectadas
+
+5. **ESTRATEGIA HÍBRIDA Y MULTI-STEP:**
+   - Detecta automáticamente cuando una consulta requiere múltiples pasos
+   - Crea planes de ejecución inteligentes
+   - Combina datos personales (user_projects, user_codex) con información externa (perplexity_search, nitter_context)
+   - Ejemplos de consultas multi-step:
      • "Compara mis documentos sobre X con las noticias actuales"
      • "¿Cómo se relaciona mi proyecto Y con las tendencias en redes sociales?"
+     • "En base a mi proyecto Z, busca reacciones en Twitter"
+     • "Analiza mis investigaciones y luego busca información actualizada"
 
 ESTRATEGIA INTELIGENTE DE BÚSQUEDA:
 Cuando uses cualquier herramienta, NO uses literalmente las palabras del usuario. En su lugar, piensa estratégicamente:
@@ -352,34 +456,6 @@ Cuando uses cualquier herramienta, NO uses literalmente las palabras del usuario
    - Considerar eventos actuales y fechas relevantes
    - Usar lenguaje chapín cuando sea apropiado
 
-EJEMPLOS DE USO ESTRATÉGICO:
-
-**Búsqueda de información general:**
-Usuario: "Información sobre el nuevo presidente de Guatemala"
-→ Usar: perplexity_search con query="Bernardo Arévalo presidente Guatemala ${currentMonth} ${currentYear}"
-
-**Análisis de opinión pública:**
-Usuario: "¿Qué opina la gente sobre el nuevo presidente?"
-→ Usar: nitter_context con query="BernardoArevalo OR presidente OR GobiernoGt ${currentMonth} ${currentYear}"
-
-**Análisis completo (híbrido):**
-Usuario: "Analiza la situación política actual"
-→ 1. perplexity_search para contexto general (información de ${currentDate})
-→ 2. nitter_context para análisis de opinión (tweets recientes de ${currentMonth})
-
-**Consultas sobre datos personales:**
-Usuario: "¿Cuáles son mis proyectos activos?"
-→ Usar: user_projects con status="active"
-
-Usuario: "Busca en mis documentos información sobre corrupción"
-→ Usar: user_codex con query="corrupción"
-
-**Análisis combinado (personal + externo):**
-Usuario: "Compara mis investigaciones sobre transparencia con las noticias actuales"
-→ 1. user_codex con query="transparencia" para obtener documentos personales
-→ 2. perplexity_search para obtener noticias actuales sobre transparencia en Guatemala
-→ 3. Generar análisis comparativo
-
 **DETECCIÓN OBLIGATORIA DE CONSULTAS PERSONALES:**
 ANTES de responder cualquier consulta, SIEMPRE verifica si contiene estas palabras clave:
 - "mis" / "mi" / "mío" / "mía"
@@ -393,36 +469,22 @@ NO respondas que no tienes acceso - ¡SÍ TIENES ACCESO COMPLETO!
 
 INSTRUCCIONES ADICIONALES:
 1. **DETECCIÓN PERSONAL OBLIGATORIA:** Si la consulta menciona datos personales del usuario, USA las herramientas correspondientes
-2. **CONTEXTO TEMPORAL OBLIGATORIO:** Siempre incluye la fecha actual (${currentDate}) en tus consultas
-3. Analiza la consulta del usuario en el contexto de la conversación anterior Y la fecha actual
-4. Elige la herramienta más apropiada según el tipo de información solicitada Y su actualidad
-5. Usa un límite de 15-25 tweets para análisis más completo en nitter_context (tweets RECIENTES)
-6. Proporciona análisis contextual y insights útiles CON ENFOQUE EN LO ACTUAL
-7. Mantén un tono profesional pero amigable
-8. Enfócate en Guatemala cuando sea relevante Y en información de ${currentMonth} ${currentYear}
-9. Recuerda el contexto de mensajes anteriores para dar respuestas coherentes
-10. **FILTRO TEMPORAL:** Prioriza siempre información de ${currentMonth} ${currentYear} sobre información antigua
-
-**EJEMPLOS ESPECÍFICOS DE DETECCIÓN:**
-
-CONSULTA: "¿Cuáles son mis proyectos?"
-→ DETECTAR: "mis proyectos" → USAR: user_projects
-
-CONSULTA: "Busca en mis documentos sobre corrupción"
-→ DETECTAR: "mis documentos" → USAR: user_codex con query="corrupción"
-
-CONSULTA: "¿Qué archivos tengo del proyecto de transparencia?"
-→ DETECTAR: "mis archivos" + "proyecto" → USAR: user_codex con query="transparencia"
-
-CONSULTA: "Muestra mis transcripciones de audio"
-→ DETECTAR: "mis transcripciones" → USAR: user_codex con type="audio"
-
-CONSULTA: "¿Tengo documentos sobre el gobierno actual?"
-→ DETECTAR: "tengo documentos" → USAR: user_codex con query="gobierno"
+2. **DETECCIÓN MULTI-STEP OBLIGATORIA:** Si la consulta requiere múltiples pasos, USA create_execution_plan
+3. **CONTEXTO TEMPORAL OBLIGATORIO:** Siempre incluye la fecha actual (${currentDate}) en tus consultas
+4. Analiza la consulta del usuario en el contexto de la conversación anterior Y la fecha actual
+5. Elige la herramienta más apropiada según el tipo de información solicitada Y su actualidad
+6. Usa un límite de 15-25 tweets para análisis más completo en nitter_context (tweets RECIENTES)
+7. Proporciona análisis contextual y insights útiles CON ENFOQUE EN LO ACTUAL
+8. Mantén un tono profesional pero amigable
+9. Enfócate en Guatemala cuando sea relevante Y en información de ${currentMonth} ${currentYear}
+10. Recuerda el contexto de mensajes anteriores para dar respuestas coherentes
+11. **FILTRO TEMPORAL:** Prioriza siempre información de ${currentMonth} ${currentYear} sobre información antigua
 
 IMPORTANTE: 
 - SIEMPRE detecta palabras clave personales ANTES de responder
+- SIEMPRE detecta consultas multi-step ANTES de responder
 - Si hay palabras personales, USA las herramientas user_projects o user_codex
+- Si hay consultas complejas, USA create_execution_plan
 - Nunca uses los términos exactos del usuario para búsquedas web. Siempre expande y optimiza.
 - SIEMPRE incluye contexto temporal actual en las búsquedas web (${currentMonth} ${currentYear}).
 - Enfócate en eventos, noticias y tendencias ACTUALES, no históricas.`
@@ -465,7 +527,202 @@ IMPORTANTE:
       
       console.log(`🔧 GPT decidió usar herramienta: ${functionName} con args:`, functionArgs);
 
-      // Ejecutar la herramienta MCP
+      // CASO ESPECIAL: Plan de ejecución multi-step
+      if (functionName === 'create_execution_plan') {
+        console.log('🎯 Ejecutando plan multi-step:', functionArgs);
+        
+        const { steps, final_goal } = functionArgs;
+        const stepResults = [];
+        let combinedContext = '';
+        
+        try {
+          // Ejecutar cada paso en secuencia
+          for (const step of steps) {
+            console.log(`📋 Ejecutando paso ${step.step_number}: ${step.description}`);
+            
+            // Si el paso depende del anterior, modificar los argumentos con contexto
+            let stepArgs = { ...step.args };
+            if (step.depends_on_previous && combinedContext) {
+              // Modificar query o argumentos basándose en resultados anteriores
+              if (stepArgs.q) {
+                stepArgs.q = `${stepArgs.q} ${combinedContext}`;
+              }
+            }
+            
+            const startTime = Date.now();
+            const stepResult = await mcpService.executeTool(step.tool, stepArgs, req.user);
+            const executionTime = Date.now() - startTime;
+            
+            stepResults.push({
+              step_number: step.step_number,
+              tool: step.tool,
+              args: stepArgs,
+              description: step.description,
+              result: stepResult,
+              execution_time: executionTime,
+              success: stepResult.success
+            });
+            
+            // Actualizar contexto para próximos pasos
+            if (stepResult.success) {
+              if (stepResult.tweets) {
+                combinedContext += ` tweets:${stepResult.tweets.length}`;
+              }
+              if (stepResult.projects) {
+                const projectNames = stepResult.projects.map(p => p.name).join(', ');
+                combinedContext += ` proyectos:${projectNames}`;
+              }
+              if (stepResult.documents) {
+                combinedContext += ` documentos:${stepResult.documents.length}`;
+              }
+              if (stepResult.content) {
+                combinedContext += ` contexto_adicional`;
+              }
+            }
+            
+            console.log(`✅ Paso ${step.step_number} completado. Contexto acumulado: "${combinedContext}"`);
+          }
+          
+          // Guardar resultados en recent_scrapes (solo para pasos que tengan tweets)
+          for (const stepResult of stepResults) {
+            if (stepResult.success && stepResult.result.tweets) {
+              await recentScrapesService.saveScrape({
+                queryOriginal: message,
+                queryClean: stepResult.args.q || message,
+                generatedTitle: `Multi-step: ${stepResult.description}`,
+                detectedGroup: 'multi-step',
+                herramienta: stepResult.tool,
+                categoria: 'Multi-step',
+                tweets: stepResult.result.tweets,
+                userId: userId,
+                sessionId: chatSessionId,
+                mcpRequestId: requestId,
+                mcpExecutionTime: stepResult.execution_time,
+                location: stepResult.args.location || 'guatemala'
+              });
+            }
+          }
+          
+          // Generar respuesta final combinando todos los resultados
+          const multiStepCompletion = await openai.chat.completions.create({
+            model: 'gpt-4o-mini',
+            messages: [
+              {
+                role: 'system',
+                content: `Eres Vizta, un asistente de investigación especializado en análisis multi-step. El usuario hizo una consulta compleja y ejecutaste un plan de ${steps.length} pasos.
+
+PLAN EJECUTADO:
+${steps.map(step => `${step.step_number}. ${step.description} (herramienta: ${step.tool})`).join('\n')}
+
+OBJETIVO FINAL: ${final_goal}
+
+INSTRUCCIONES PARA RESPUESTA MULTI-STEP:
+• Sé CONCISO y DIRECTO (máximo 400 palabras)
+• Usa formato MARKDOWN con secciones claras
+• Enfócate en COMBINAR los resultados de todos los pasos
+• Muestra cómo se conectan los hallazgos entre pasos
+• Usa emojis para hacer más visual la información
+
+FORMATO REQUERIDO:
+## 🎯 Análisis Multi-Step: [TEMA PRINCIPAL]
+
+**📋 Plan ejecutado:** ${steps.length} pasos para: ${final_goal}
+
+### 🔄 Resultados por paso:
+${stepResults.map(step => `**Paso ${step.step_number}** (${step.tool}): ${step.success ? '✅ Completado' : '❌ Error'}`).join('\n')}
+
+### 📊 Hallazgos combinados:
+• [combinar insights de todos los pasos]
+• [mostrar conexiones entre resultados]
+• [destacar patrones encontrados]
+
+### 💡 Síntesis final:
+[análisis integrado que combine todos los pasos]
+
+### 🎯 Conclusión:
+[respuesta final al objetivo planteado]
+
+REGLAS IMPORTANTES:
+- COMBINA los resultados, no los listes por separado
+- Muestra las CONEXIONES entre pasos
+- Enfócate en el VALOR AGREGADO del análisis multi-step
+- Menciona cuántos datos se analizaron en total
+
+Resultados de todos los pasos: ${JSON.stringify(stepResults, null, 2)}`
+              },
+              {
+                role: 'user',
+                content: message
+              }
+            ],
+            temperature: 0.3,
+            max_tokens: 800
+          });
+
+          const multiStepResponse = multiStepCompletion.choices[0].message.content;
+
+          // Guardar respuesta del asistente en memories para multi-step
+          await memoriesService.saveMessage({
+            sessionId: chatSessionId,
+            userId: userId,
+            role: 'assistant',
+            content: multiStepResponse,
+            messageType: 'message',
+            tokensUsed: (completion.usage?.total_tokens || 0) + (multiStepCompletion.usage?.total_tokens || 0),
+            modelUsed: 'gpt-4o-mini',
+            toolsUsed: stepResults.map(step => step.tool),
+            contextSources: stepResults.some(step => step.result.tweets) ? ['twitter'] : [],
+            metadata: { 
+              requestId: requestId,
+              executionType: 'multi_step',
+              final_goal: final_goal,
+              steps_completed: stepResults.filter(step => step.success).length,
+              total_steps: steps.length,
+              total_execution_time: stepResults.reduce((sum, step) => sum + step.execution_time, 0),
+              step_results: stepResults.map(step => ({
+                step_number: step.step_number,
+                tool: step.tool,
+                success: step.success,
+                execution_time: step.execution_time
+              }))
+            }
+          });
+
+          // Respuesta exitosa del plan multi-step
+          return res.json({
+            success: true,
+            response: multiStepResponse,
+            toolsUsed: stepResults.map(step => step.tool),
+            executionPlan: {
+              steps: steps,
+              final_goal: final_goal,
+              results: stepResults,
+              total_execution_time: stepResults.reduce((sum, step) => sum + step.execution_time, 0)
+            },
+            sessionId: chatSessionId,
+            requestId: requestId,
+            timestamp: new Date().toISOString(),
+            mode: 'multi_step',
+            steps_completed: stepResults.filter(step => step.success).length,
+            total_steps: steps.length
+          });
+          
+        } catch (error) {
+          console.error('❌ Error ejecutando plan multi-step:', error);
+          return res.status(500).json({
+            success: false,
+            message: 'Error ejecutando plan multi-step: ' + error.message,
+            executionPlan: {
+              steps: steps,
+              final_goal: final_goal,
+              results: stepResults,
+              error: error.message
+            }
+          });
+        }
+      }
+
+      // CASO NORMAL: Herramienta individual (código existente)
       const startTime = Date.now();
       const toolResult = await mcpService.executeTool(functionName, functionArgs, req.user);
       const executionTime = Date.now() - startTime;
