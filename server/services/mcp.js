@@ -552,14 +552,174 @@ async function executeTool(toolName, parameters = {}, user = null) {
 }
 
 /**
- * Ejecuta específicamente la herramienta nitter_context con análisis completo
- * @param {string} query - Término de búsqueda
- * @param {string} location - Ubicación para filtrar
+ * Función de fallback inteligente para búsquedas de Nitter que fallan
+ * Usa Perplexity para generar términos alternativos más amplios
+ * @param {string} originalQuery - Consulta original que falló
+ * @param {string} location - Ubicación geográfica
  * @param {number} limit - Límite de tweets
- * @param {string} sessionId - ID de sesión del chat
- * @param {Object} user - Usuario autenticado
- * @returns {Object} Resultado de nitter_context con análisis completo
+ * @param {string} userId - ID del usuario
+ * @param {string} sessionId - ID de sesión
+ * @returns {Object} Resultado con términos alternativos y nuevos intentos
  */
+async function intelligentNitterFallback(originalQuery, location, limit, userId, sessionId) {
+  console.log(`🔄 Iniciando fallback inteligente para query: "${originalQuery}"`);
+  
+  try {
+    // PASO 1: Usar Perplexity para obtener contexto y términos relacionados
+    const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
+    
+    if (!PERPLEXITY_API_KEY) {
+      console.log('⚠️ PERPLEXITY_API_KEY no disponible, usando fallback básico');
+      return await basicNitterFallback(originalQuery, location, limit, userId, sessionId);
+    }
+
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.toLocaleString('es-ES', { month: 'long' });
+
+    const fallbackPrompt = `La búsqueda específica "${originalQuery}" no encontró resultados en redes sociales. 
+
+Ayuda a generar términos de búsqueda MÁS AMPLIOS y GENERALES que puedan encontrar tweets relacionados en ${location}.
+
+ESTRATEGIA DE AMPLIACIÓN:
+1. Identifica las palabras clave principales de "${originalQuery}"
+2. Sugiere términos más generales y comunes que las personas usarían en redes sociales
+3. Incluye hashtags probables y términos populares relacionados
+4. Considera sinónimos y variaciones que sean MÁS COMUNES
+
+EJEMPLO:
+Query específica: "disturbios Izabal minería"
+Términos amplios: "Izabal OR minería OR protestas OR manifestaciones OR Guatemala"
+
+Responde SOLO con términos de búsqueda optimizados separados por OR, máximo 50 caracteres:`;
+
+    const response = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'sonar-chat',
+        messages: [
+          {
+            role: 'system',
+            content: 'Eres un experto en optimización de búsquedas para redes sociales. Tu trabajo es generar términos más amplios cuando las búsquedas específicas fallan.'
+          },
+          {
+            role: 'user',
+            content: fallbackPrompt
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 100
+      })
+    });
+
+    if (!response.ok) {
+      console.log('⚠️ Error con Perplexity, usando fallback básico');
+      return await basicNitterFallback(originalQuery, location, limit, userId, sessionId);
+    }
+
+    const data = await response.json();
+    const broadTerms = data.choices[0].message.content.trim();
+    
+    console.log(`🎯 Términos ampliados por Perplexity: "${broadTerms}"`);
+
+    // PASO 2: Intentar búsqueda con términos ampliados
+    try {
+      const broadResult = await processNitterContext(broadTerms, userId, sessionId, location, limit);
+      
+      if (broadResult.success && broadResult.data.tweets_found > 0) {
+        console.log(`✅ Éxito con términos ampliados: ${broadResult.data.tweets_found} tweets encontrados`);
+        return {
+          success: true,
+          result: broadResult,
+          fallback_method: 'perplexity_broad',
+          original_query: originalQuery,
+          final_query: broadTerms,
+          message: `Búsqueda específica no encontró resultados. Encontré ${broadResult.data.tweets_found} tweets usando términos más amplios.`
+        };
+      }
+    } catch (error) {
+      console.log(`⚠️ Términos ampliados también fallaron: ${error.message}`);
+    }
+
+    // PASO 3: Fallback básico si Perplexity también falla
+    return await basicNitterFallback(originalQuery, location, limit, userId, sessionId);
+
+  } catch (error) {
+    console.error('❌ Error en fallback inteligente:', error);
+    return await basicNitterFallback(originalQuery, location, limit, userId, sessionId);
+  }
+}
+
+/**
+ * Fallback básico que usa solo las palabras clave principales
+ * @param {string} originalQuery - Consulta original
+ * @param {string} location - Ubicación
+ * @param {number} limit - Límite de tweets
+ * @param {string} userId - ID del usuario
+ * @param {string} sessionId - ID de sesión
+ * @returns {Object} Resultado del fallback básico
+ */
+async function basicNitterFallback(originalQuery, location, limit, userId, sessionId) {
+  console.log(`🔧 Aplicando fallback básico para: "${originalQuery}"`);
+  
+  // Extraer palabras clave principales (eliminar conectores y palabras comunes)
+  const stopWords = ['de', 'del', 'la', 'el', 'en', 'con', 'por', 'para', 'y', 'o', 'un', 'una', 'sobre'];
+  const keywords = originalQuery
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(word => word.length > 2 && !stopWords.includes(word))
+    .slice(0, 3); // Máximo 3 palabras clave principales
+
+  const fallbackQueries = [
+    // Intento 1: Solo palabras clave principales
+    keywords.join(' OR '),
+    // Intento 2: Palabras clave + Guatemala
+    keywords.join(' OR ') + ' OR Guatemala',
+    // Intento 3: Solo la primera palabra clave + Guatemala (más general)
+    keywords[0] + ' Guatemala',
+    // Intento 4: Solo Guatemala (último recurso)
+    'Guatemala'
+  ];
+
+  for (let i = 0; i < fallbackQueries.length; i++) {
+    const query = fallbackQueries[i];
+    console.log(`🎯 Intento ${i + 1}/4 con query: "${query}"`);
+    
+    try {
+      const result = await processNitterContext(query, userId, sessionId, location, Math.min(limit, 15));
+      
+      if (result.success && result.data.tweets_found > 0) {
+        console.log(`✅ Éxito con fallback básico (intento ${i + 1}): ${result.data.tweets_found} tweets`);
+        return {
+          success: true,
+          result: result,
+          fallback_method: `basic_attempt_${i + 1}`,
+          original_query: originalQuery,
+          final_query: query,
+          message: `La búsqueda específica "${originalQuery}" no encontró resultados. Encontré ${result.data.tweets_found} tweets relacionados usando términos más generales.`
+        };
+      }
+    } catch (error) {
+      console.log(`⚠️ Intento ${i + 1} falló: ${error.message}`);
+      continue;
+    }
+  }
+
+  // Si todos los intentos fallan
+  return {
+    success: false,
+    fallback_method: 'all_failed',
+    original_query: originalQuery,
+    final_query: fallbackQueries[fallbackQueries.length - 1],
+    message: `No se encontraron tweets relacionados con "${originalQuery}" usando múltiples estrategias de búsqueda.`,
+    error: 'No tweets found after intelligent fallback attempts'
+  };
+}
+
 async function executeNitterContext(query, location = 'guatemala', limit = 10, sessionId = null, user = null) {
   try {
     console.log(`🐦 Ejecutando nitter_context MCP: query="${query}", location="${location}", limit=${limit}`);
@@ -579,37 +739,39 @@ async function executeNitterContext(query, location = 'guatemala', limit = 10, s
     // Generar session_id si no se proporciona
     const finalSessionId = sessionId || `mcp_session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
-    // Usar el servicio completo de nitterContext con términos mejorados
-    const result = await processNitterContext(
-      expandedQuery, // Usar la query expandida en lugar de query original
-      user.id,
-      finalSessionId,
-      location,
-      optimizedLimit // Usar el límite optimizado
-    );
+    // INTENTO PRINCIPAL: Usar el query expandido
+    try {
+      const result = await processNitterContext(
+        expandedQuery,
+        user.id,
+        finalSessionId,
+        location,
+        optimizedLimit
+      );
 
-    if (result.success) {
-      console.log(`✅ Nitter context procesado exitosamente: ${result.data.tweets_found} tweets analizados`);
-      
-      // Formatear respuesta para el agente AI con información adicional sobre la mejora
-      const formattedTweets = result.data.tweets.map(tweet => 
-        `@${tweet.usuario} (${tweet.fecha_tweet}): ${tweet.texto}\n` +
-        `   📊 Sentimiento: ${tweet.sentimiento} (${tweet.score_sentimiento}) | ` +
-        `Intención: ${tweet.intencion_comunicativa}\n` +
-        `   💬 Engagement: ❤️${tweet.likes} 🔄${tweet.retweets} 💬${tweet.replies} | ` +
-        `Entidades: ${tweet.entidades_mencionadas.length}\n`
-      ).join('\n');
-      
-      return {
-        success: true,
-        tweets: result.data.tweets,
-        tweets_found: result.data.tweets_found,
-        query_original: query,
-        query_expanded: expandedQuery,
-        limit_requested: limit,
-        limit_used: optimizedLimit,
-        session_id: finalSessionId,
-        formatted_context: `BÚSQUEDA INTELIGENTE EJECUTADA:
+      if (result.success && result.data.tweets_found > 0) {
+        console.log(`✅ Nitter context procesado exitosamente: ${result.data.tweets_found} tweets analizados`);
+        
+        // Formatear respuesta para el agente AI con información adicional sobre la mejora
+        const formattedTweets = result.data.tweets.map(tweet => 
+          `@${tweet.usuario} (${tweet.fecha_tweet}): ${tweet.texto}\n` +
+          `   📊 Sentimiento: ${tweet.sentimiento} (${tweet.score_sentimiento}) | ` +
+          `Intención: ${tweet.intencion_comunicativa}\n` +
+          `   💬 Engagement: ❤️${tweet.likes} 🔄${tweet.retweets} 💬${tweet.replies} | ` +
+          `Entidades: ${tweet.entidades_mencionadas.length}\n`
+        ).join('\n');
+        
+        return {
+          success: true,
+          tweets: result.data.tweets,
+          tweets_found: result.data.tweets_found,
+          query_original: query,
+          query_expanded: expandedQuery,
+          limit_requested: limit,
+          limit_used: optimizedLimit,
+          session_id: finalSessionId,
+          search_method: 'standard',
+          formatted_context: `BÚSQUEDA INTELIGENTE EJECUTADA:
 Query original del usuario: "${query}"
 Query expandida estratégicamente: "${expandedQuery}"
 Tweets analizados: ${result.data.tweets_found}/${optimizedLimit}
@@ -623,9 +785,79 @@ ANÁLISIS CONTEXTUAL:
 - Se optimizó el límite basado en el tipo de análisis requerido
 - Todos los tweets incluyen análisis de sentimiento e intención comunicativa
 - Las entidades mencionadas han sido extraídas automáticamente`,
+          analysis_metadata: {
+            query_expansion_applied: expandedQuery !== query,
+            limit_optimization_applied: optimizedLimit !== limit,
+            tweets_analyzed: result.data.tweets_found,
+            sentiment_distribution: result.data.tweets.reduce((acc, tweet) => {
+              acc[tweet.sentimiento] = (acc[tweet.sentimiento] || 0) + 1;
+              return acc;
+            }, {}),
+            average_engagement: result.data.tweets.reduce((sum, tweet) => 
+              sum + (tweet.likes || 0) + (tweet.retweets || 0) + (tweet.replies || 0), 0
+            ) / result.data.tweets.length || 0
+          }
+        };
+      }
+    } catch (initialError) {
+      console.log(`⚠️ Búsqueda principal falló: ${initialError.message}`);
+    }
+
+    // FALLBACK INTELIGENTE: Si la búsqueda principal falla
+    console.log(`🔄 Activando sistema de fallback inteligente...`);
+    
+    const fallbackResult = await intelligentNitterFallback(
+      query, 
+      location, 
+      optimizedLimit, 
+      user.id, 
+      finalSessionId
+    );
+
+    if (fallbackResult.success) {
+      const result = fallbackResult.result;
+      
+      // Formatear respuesta del fallback
+      const formattedTweets = result.data.tweets.map(tweet => 
+        `@${tweet.usuario} (${tweet.fecha_tweet}): ${tweet.texto}\n` +
+        `   📊 Sentimiento: ${tweet.sentimiento} (${tweet.score_sentimiento}) | ` +
+        `Intención: ${tweet.intencion_comunicativa}\n` +
+        `   💬 Engagement: ❤️${tweet.likes} 🔄${tweet.retweets} 💬${tweet.replies} | ` +
+        `Entidades: ${tweet.entidades_mencionadas.length}\n`
+      ).join('\n');
+      
+      return {
+        success: true,
+        tweets: result.data.tweets,
+        tweets_found: result.data.tweets_found,
+        query_original: query,
+        query_final: fallbackResult.final_query,
+        limit_requested: limit,
+        limit_used: optimizedLimit,
+        session_id: finalSessionId,
+        search_method: fallbackResult.fallback_method,
+        fallback_applied: true,
+        fallback_message: fallbackResult.message,
+        formatted_context: `BÚSQUEDA CON FALLBACK INTELIGENTE:
+Query original del usuario: "${query}"
+Query final usada: "${fallbackResult.final_query}"
+Método de fallback: ${fallbackResult.fallback_method}
+Tweets encontrados: ${result.data.tweets_found}/${optimizedLimit}
+Ubicación: ${location}
+
+⚠️ NOTA: ${fallbackResult.message}
+
+TWEETS ENCONTRADOS Y ANALIZADOS:
+${formattedTweets}
+
+ANÁLISIS CONTEXTUAL:
+- Se aplicó fallback inteligente cuando la búsqueda específica no encontró resultados
+- Se usaron términos más amplios para obtener contenido relacionado
+- Todos los tweets incluyen análisis de sentimiento e intención comunicativa
+- Las entidades mencionadas han sido extraídas automáticamente`,
         analysis_metadata: {
-          query_expansion_applied: expandedQuery !== query,
-          limit_optimization_applied: optimizedLimit !== limit,
+          fallback_applied: true,
+          fallback_method: fallbackResult.fallback_method,
           tweets_analyzed: result.data.tweets_found,
           sentiment_distribution: result.data.tweets.reduce((acc, tweet) => {
             acc[tweet.sentimiento] = (acc[tweet.sentimiento] || 0) + 1;
@@ -637,7 +869,8 @@ ANÁLISIS CONTEXTUAL:
         }
       };
     } else {
-      throw new Error(result.error || 'Error procesando nitter_context');
+      // Si incluso el fallback falla, lanzar error con información útil
+      throw new Error(`${fallbackResult.message} Probamos múltiples estrategias de búsqueda sin éxito.`);
     }
 
   } catch (error) {
