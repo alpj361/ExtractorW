@@ -114,80 +114,78 @@ async function getUserProjects(userId, options = {}) {
 async function getUserCodex(userId, options = {}) {
   try {
     const { 
-      projectId, 
-      query: searchQuery,
-      limit = 20,
-      type,
-      tags
+      limit = 20, 
+      project_id = null, 
+      query = null,
+      type = null,
+      tags = null 
     } = options;
 
-    console.log(`📚 Obteniendo codex del usuario: ${userId}`, options);
-
-    let query = supabase
+    let queryBuilder = supabase
       .from('codex_items')
       .select(`
         id,
-        title,
-        content,
-        type,
-        tags,
+        titulo,
+        descripcion,
+        tipo,
+        etiquetas,
+        proyecto,
         project_id,
-        file_name,
-        file_size,
-        mime_type,
-        audio_transcription,
-        document_analysis,
+        storage_path,
+        url,
+        nombre_archivo,
+        tamano,
+        fecha,
         created_at,
-        updated_at,
-        projects!inner(title, status)
+        is_drive,
+        drive_file_id,
+        audio_transcription,
+        document_analysis
       `)
       .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(limit);
+      .order('created_at', { ascending: false });
 
-    // Filtrar por proyecto específico
-    if (projectId) {
-      query = query.eq('project_id', projectId);
+    // Apply filters
+    if (project_id) {
+      queryBuilder = queryBuilder.eq('project_id', project_id);
     }
-
-    // Filtrar por tipo
+    
     if (type) {
-      query = query.eq('type', type);
+      queryBuilder = queryBuilder.eq('tipo', type);
+    }
+    
+    if (tags && tags.length > 0) {
+      queryBuilder = queryBuilder.overlaps('etiquetas', tags);
+    }
+    
+    if (query) {
+      queryBuilder = queryBuilder.or(`titulo.ilike.%${query}%,descripcion.ilike.%${query}%`);
+    }
+    
+    if (limit) {
+      queryBuilder = queryBuilder.limit(limit);
     }
 
-    // Búsqueda por texto (en título, contenido o transcripción)
-    if (searchQuery) {
-      query = query.or(`title.ilike.%${searchQuery}%,content.ilike.%${searchQuery}%,audio_transcription.ilike.%${searchQuery}%`);
-    }
-
-    // Filtrar por tags
-    if (tags && Array.isArray(tags)) {
-      query = query.overlaps('tags', tags);
-    }
-
-    const { data: codexItems, error } = await query;
+    const { data, error } = await queryBuilder;
 
     if (error) {
-      throw new Error(`Error obteniendo codex: ${error.message}`);
+      console.error('Error fetching user codex:', error);
+      throw new Error(`Database error: ${error.message}`);
     }
 
-    // Procesar y enriquecer datos
-    const processedItems = codexItems.map(item => ({
-      ...item,
-      projectTitle: item.projects?.title || 'Sin proyecto',
-      projectStatus: item.projects?.status || 'unknown',
-      hasTranscription: !!item.audio_transcription,
-      hasAnalysis: !!item.document_analysis,
-      contentPreview: item.content ? item.content.substring(0, 200) + '...' : null,
-      transcriptionPreview: item.audio_transcription ? item.audio_transcription.substring(0, 200) + '...' : null
-    }));
-
-    console.log(`✅ ${processedItems.length} items del codex obtenidos`);
-    return processedItems;
+    return {
+      success: true,
+      data: data || [],
+      count: data ? data.length : 0
+    };
 
   } catch (error) {
-    console.error('Error en getUserCodex:', error);
-    throw error;
+    console.error('Error in getUserCodex:', error);
+    return {
+      success: false,
+      error: error.message,
+      data: []
+    };
   }
 }
 
@@ -269,62 +267,91 @@ async function getProjectDecisions(projectId, userId) {
  */
 async function searchUserCodex(searchQuery, userId, options = {}) {
   try {
-    const { limit = 10 } = options;
+    const { limit = 10, project_id = null } = options;
 
-    console.log(`🔍 Búsqueda en codex: "${searchQuery}" para usuario: ${userId}`);
-
-    const { data: results, error } = await supabase
+    let queryBuilder = supabase
       .from('codex_items')
       .select(`
         id,
-        title,
-        content,
-        type,
-        tags,
-        file_name,
-        audio_transcription,
-        document_analysis,
+        titulo,
+        descripcion,
+        tipo,
+        etiquetas,
+        proyecto,
+        project_id,
+        storage_path,
+        url,
+        nombre_archivo,
+        tamano,
+        fecha,
         created_at,
-        projects!inner(title)
+        audio_transcription,
+        document_analysis
       `)
-      .eq('user_id', userId)
-      .or(`title.ilike.%${searchQuery}%,content.ilike.%${searchQuery}%,audio_transcription.ilike.%${searchQuery}%,document_analysis.ilike.%${searchQuery}%`)
+      .eq('user_id', userId);
+
+    // Apply project filter if specified
+    if (project_id) {
+      queryBuilder = queryBuilder.eq('project_id', project_id);
+    }
+
+    // Search in multiple fields
+    queryBuilder = queryBuilder.or(
+      `titulo.ilike.%${searchQuery}%,descripcion.ilike.%${searchQuery}%,audio_transcription.ilike.%${searchQuery}%,document_analysis.ilike.%${searchQuery}%`
+    );
+
+    queryBuilder = queryBuilder
       .order('created_at', { ascending: false })
       .limit(limit);
 
+    const { data, error } = await queryBuilder;
+
     if (error) {
-      throw new Error(`Error en búsqueda: ${error.message}`);
+      console.error('Error searching user codex:', error);
+      throw new Error(`Database error: ${error.message}`);
     }
 
-    // Procesar resultados con relevancia
-    const processedResults = results.map(item => {
+    // Calculate relevance scores (simple implementation)
+    const results = (data || []).map(item => {
       let relevanceScore = 0;
-      const queryLower = searchQuery.toLowerCase();
-
-      // Calcular score de relevancia
-      if (item.title && item.title.toLowerCase().includes(queryLower)) relevanceScore += 3;
-      if (item.content && item.content.toLowerCase().includes(queryLower)) relevanceScore += 2;
-      if (item.audio_transcription && item.audio_transcription.toLowerCase().includes(queryLower)) relevanceScore += 2;
-      if (item.document_analysis && item.document_analysis.toLowerCase().includes(queryLower)) relevanceScore += 1;
-      if (item.tags && item.tags.some(tag => tag.toLowerCase().includes(queryLower))) relevanceScore += 1;
-
+      const lowerQuery = searchQuery.toLowerCase();
+      
+      if (item.titulo && item.titulo.toLowerCase().includes(lowerQuery)) {
+        relevanceScore += 3;
+      }
+      if (item.descripcion && item.descripcion.toLowerCase().includes(lowerQuery)) {
+        relevanceScore += 2;
+      }
+      if (item.audio_transcription && item.audio_transcription.toLowerCase().includes(lowerQuery)) {
+        relevanceScore += 1;
+      }
+      if (item.document_analysis && item.document_analysis.toLowerCase().includes(lowerQuery)) {
+        relevanceScore += 1;
+      }
+      
       return {
         ...item,
-        projectTitle: item.projects?.title || 'Sin proyecto',
-        relevanceScore,
-        contentPreview: item.content ? item.content.substring(0, 150) + '...' : null
+        relevance_score: relevanceScore
       };
     });
 
-    // Ordenar por relevancia
-    processedResults.sort((a, b) => b.relevanceScore - a.relevanceScore);
+    // Sort by relevance score
+    results.sort((a, b) => b.relevance_score - a.relevance_score);
 
-    console.log(`✅ ${processedResults.length} resultados encontrados`);
-    return processedResults;
+    return {
+      success: true,
+      data: results,
+      count: results.length,
+      query: searchQuery
+    };
 
   } catch (error) {
-    console.error('Error en searchUserCodex:', error);
-    throw error;
+    console.error('Error in searchUserCodex:', error);
+    return {
+      success: false,
+      error: error.message,
+      data: []
+    };
   }
 }
 
