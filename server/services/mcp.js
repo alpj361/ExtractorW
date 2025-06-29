@@ -648,7 +648,55 @@ Usa tu razonamiento avanzado para generar la mejor estrategia de búsqueda posib
     }
 
     const data = await response.json();
-    const optimization = JSON.parse(data.choices[0].message.content);
+    
+    // Debug: Imprimir respuesta completa de DeepSeek para diagnosticar
+    console.log('🐛 DeepSeek respuesta completa:', JSON.stringify(data, null, 2));
+    console.log('🐛 Contenido del mensaje:', data.choices?.[0]?.message?.content);
+    
+    if (!data.choices || !data.choices[0] || !data.choices[0].message || !data.choices[0].message.content) {
+      console.log('⚠️ Respuesta de DeepSeek incompleta o malformada');
+      return {
+        optimized: false,
+        final_query: originalQuery,
+        strategy: 'standard_expansion',
+        error: 'DeepSeek response incomplete'
+      };
+    }
+
+    const rawContent = data.choices[0].message.content.trim();
+    console.log('🐛 Contenido a parsear:', rawContent);
+    
+    let optimization;
+    try {
+      optimization = JSON.parse(rawContent);
+    } catch (parseError) {
+      console.log('❌ Error parseando JSON de DeepSeek:', parseError.message);
+      console.log('🐛 Contenido que falló al parsear:', rawContent);
+      
+      // Intentar extraer JSON si está envuelto en otros caracteres
+      const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          optimization = JSON.parse(jsonMatch[0]);
+          console.log('✅ JSON extraído exitosamente del contenido');
+        } catch (secondError) {
+          console.log('❌ Falló segunda tentativa de parsing:', secondError.message);
+          return {
+            optimized: false,
+            final_query: originalQuery,
+            strategy: 'standard_expansion',
+            error: `JSON parse error: ${parseError.message}`
+          };
+        }
+      } else {
+        return {
+          optimized: false,
+          final_query: originalQuery,
+          strategy: 'standard_expansion',
+          error: `No JSON found in response: ${rawContent.substring(0, 100)}...`
+        };
+      }
+    }
     
     console.log(`✅ DeepSeek optimizó: "${originalQuery}" → "${optimization.consulta_optimizada}"`);
     console.log(`🎯 Estrategia: ${optimization.estrategia_aplicada}`);
