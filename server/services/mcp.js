@@ -552,6 +552,132 @@ async function executeTool(toolName, parameters = {}, user = null) {
 }
 
 /**
+ * Función para optimizar términos de búsqueda con DeepSeek ANTES de buscar
+ * @param {string} originalQuery - Consulta original del usuario
+ * @param {string} location - Ubicación geográfica
+ * @param {Object} user - Usuario autenticado
+ * @returns {Object} Términos optimizados por DeepSeek
+ */
+async function optimizeSearchWithDeepSeek(originalQuery, location, user) {
+  try {
+    console.log('🧠 Optimizando búsqueda con DeepSeek antes de ejecutar...');
+    
+    const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+    
+    if (!DEEPSEEK_API_KEY) {
+      console.log('⚠️ DEEPSEEK_API_KEY no configurada, usando términos estándar');
+      return {
+        optimized: false,
+        final_query: originalQuery,
+        strategy: 'standard_expansion'
+      };
+    }
+
+    const now = new Date();
+    const currentMonth = now.toLocaleString('es-ES', { month: 'long' });
+    const currentYear = now.getFullYear();
+
+    const deepSeekPrompt = `Analiza esta consulta de búsqueda para redes sociales y optimízala para maximizar las posibilidades de encontrar tweets relevantes.
+
+**CONSULTA ORIGINAL:** "${originalQuery}"
+**UBICACIÓN:** ${location}
+**FECHA ACTUAL:** ${currentMonth} ${currentYear}
+
+**TU MISIÓN COMO DEEPSEEK:**
+1. **RAZONAMIENTO ESTRATÉGICO:** Analiza profundamente qué busca realmente el usuario
+2. **OPTIMIZACIÓN DE TÉRMINOS:** Genera términos de búsqueda que tengan MÁS PROBABILIDADES de encontrar tweets
+3. **CONTEXTO LOCAL:** Considera el contexto específico de ${location}
+4. **TENDENCIAS ACTUALES:** Incluye términos que podrían estar trending en ${currentMonth} ${currentYear}
+
+**ESTRATEGIAS DE OPTIMIZACIÓN:**
+- Si la consulta es muy específica → Ampliar con términos relacionados
+- Si incluye nombres técnicos → Agregar variaciones populares
+- Si es sobre eventos → Incluir hashtags probables
+- Si es político → Incluir nombres de figuras relevantes
+- Si es social → Incluir términos de movimientos actuales
+
+**EJEMPLOS DE OPTIMIZACIÓN:**
+- "disturbios Izabal minería" → "Izabal OR minería OR protestas OR manifestaciones OR #Guatemala"
+- "elecciones guatemala" → "elecciones OR electoral OR voto OR TSE OR #Guatemala OR BernardoArevalo"
+- "economía guatemala" → "economía OR inflación OR precios OR #EconomíaGt OR Guatemala"
+
+**FORMATO DE RESPUESTA JSON:**
+{
+  "razonamiento": "Por qué la consulta original podría no encontrar resultados y cómo se optimiza",
+  "consulta_optimizada": "términos OR optimizados OR para OR buscar",
+  "hashtags_incluidos": ["#hashtag1", "#hashtag2"],
+  "estrategia_aplicada": "descripción de la estrategia usada",
+  "probabilidad_exito": "alta|media|baja",
+  "terminos_clave_agregados": ["término1", "término2"],
+  "justificacion": "Por qué estos términos deberían funcionar mejor"
+}
+
+Usa tu razonamiento avanzado para generar la mejor estrategia de búsqueda posible.`;
+
+    const response = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'deepseek-reasoner',
+        messages: [
+          {
+            role: 'system',
+            content: 'Eres DeepSeek, un modelo de razonamiento avanzado especializado en optimización de búsquedas para redes sociales. Tu fortaleza es analizar consultas y generar términos de búsqueda que maximicen las posibilidades de encontrar contenido relevante.'
+          },
+          {
+            role: 'user',
+            content: deepSeekPrompt
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 600
+      })
+    });
+
+    if (!response.ok) {
+      console.log(`⚠️ Error llamando a DeepSeek: ${response.status}`);
+      return {
+        optimized: false,
+        final_query: originalQuery,
+        strategy: 'standard_expansion',
+        error: `DeepSeek API error: ${response.status}`
+      };
+    }
+
+    const data = await response.json();
+    const optimization = JSON.parse(data.choices[0].message.content);
+    
+    console.log(`✅ DeepSeek optimizó: "${originalQuery}" → "${optimization.consulta_optimizada}"`);
+    console.log(`🎯 Estrategia: ${optimization.estrategia_aplicada}`);
+    console.log(`📊 Probabilidad de éxito: ${optimization.probabilidad_exito}`);
+    
+    return {
+      optimized: true,
+      original_query: originalQuery,
+      final_query: optimization.consulta_optimizada,
+      strategy: optimization.estrategia_aplicada,
+      hashtags_included: optimization.hashtags_incluidos,
+      key_terms_added: optimization.terminos_clave_agregados,
+      success_probability: optimization.probabilidad_exito,
+      reasoning: optimization.razonamiento,
+      justification: optimization.justificacion
+    };
+
+  } catch (error) {
+    console.error('❌ Error en optimización DeepSeek:', error);
+    return {
+      optimized: false,
+      final_query: originalQuery,
+      strategy: 'standard_expansion',
+      error: error.message
+    };
+  }
+}
+
+/**
  * Ejecuta específicamente la herramienta nitter_context para obtener tweets contextuales
  * @param {string} query - Consulta de búsqueda
  * @param {string} location - Ubicación geográfica
@@ -568,30 +694,44 @@ async function executeNitterContext(query, location = 'guatemala', limit = 10, s
       throw new Error('Usuario autenticado requerido para ejecutar nitter_context');
     }
     
-    // MEJORAR: Expansión inteligente de términos de búsqueda
-    const expandedQuery = expandSearchTerms(query);
+    // PASO 1: OPTIMIZACIÓN INTELIGENTE CON DEEPSEEK
+    const deepSeekOptimization = await optimizeSearchWithDeepSeek(query, location, user);
+    
+    // PASO 2: EXPANSIÓN ESTÁNDAR como backup
+    const standardExpansion = expandSearchTerms(query);
     const optimizedLimit = optimizeTweetLimit(query, limit);
     
+    // Decidir qué query usar: DeepSeek si está optimizada, sino expansión estándar
+    const finalQuery = deepSeekOptimization.optimized ? 
+      deepSeekOptimization.final_query : 
+      standardExpansion;
+    
     console.log(`🎯 Query original: "${query}"`);
-    console.log(`🚀 Query expandido: "${expandedQuery}"`);
+    if (deepSeekOptimization.optimized) {
+      console.log(`🧠 Query optimizada por DeepSeek: "${finalQuery}"`);
+      console.log(`📋 Estrategia aplicada: ${deepSeekOptimization.strategy}`);
+      console.log(`🎲 Probabilidad de éxito: ${deepSeekOptimization.success_probability}`);
+    } else {
+      console.log(`🚀 Query expandida estándar: "${finalQuery}"`);
+    }
     console.log(`📊 Límite optimizado: ${optimizedLimit} tweets`);
     
     // Generar session_id si no se proporciona
     const finalSessionId = sessionId || `mcp_session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
-    // Usar el servicio completo de nitterContext con términos mejorados
+    // PASO 3: EJECUTAR BÚSQUEDA CON TÉRMINOS OPTIMIZADOS
     const result = await processNitterContext(
-      expandedQuery, // Usar la query expandida en lugar de query original
+      finalQuery, // Usar la query optimizada por DeepSeek
       user.id,
       finalSessionId,
       location,
-      optimizedLimit // Usar el límite optimizado
+      optimizedLimit
     );
 
     if (result.success) {
       console.log(`✅ Nitter context procesado exitosamente: ${result.data.tweets_found} tweets analizados`);
       
-      // Formatear respuesta para el agente AI con información adicional sobre la mejora
+      // Formatear respuesta para el agente AI con información adicional sobre la optimización
       const formattedTweets = result.data.tweets.map(tweet => 
         `@${tweet.usuario} (${tweet.fecha_tweet}): ${tweet.texto}\n` +
         `   📊 Sentimiento: ${tweet.sentimiento} (${tweet.score_sentimiento}) | ` +
@@ -605,13 +745,24 @@ async function executeNitterContext(query, location = 'guatemala', limit = 10, s
         tweets: result.data.tweets,
         tweets_found: result.data.tweets_found,
         query_original: query,
-        query_expanded: expandedQuery,
+        query_final: finalQuery,
+        optimization_applied: deepSeekOptimization.optimized,
+        deepseek_strategy: deepSeekOptimization.strategy,
+        deepseek_reasoning: deepSeekOptimization.reasoning,
+        success_probability: deepSeekOptimization.success_probability,
         limit_requested: limit,
         limit_used: optimizedLimit,
         session_id: finalSessionId,
-        formatted_context: `BÚSQUEDA INTELIGENTE EJECUTADA:
+        formatted_context: `BÚSQUEDA OPTIMIZADA CON DEEPSEEK:
 Query original del usuario: "${query}"
-Query expandida estratégicamente: "${expandedQuery}"
+${deepSeekOptimization.optimized ? 
+  `🧠 Query optimizada por DeepSeek: "${finalQuery}"
+📋 Estrategia aplicada: ${deepSeekOptimization.strategy}
+🎯 Razonamiento: ${deepSeekOptimization.reasoning}
+📊 Probabilidad de éxito estimada: ${deepSeekOptimization.success_probability}
+${deepSeekOptimization.hashtags_included?.length > 0 ? `🏷️ Hashtags incluidos: ${deepSeekOptimization.hashtags_included.join(', ')}` : ''}
+${deepSeekOptimization.key_terms_added?.length > 0 ? `🔑 Términos clave agregados: ${deepSeekOptimization.key_terms_added.join(', ')}` : ''}` :
+  `🚀 Query expandida estándar: "${finalQuery}" (DeepSeek no disponible)`}
 Tweets analizados: ${result.data.tweets_found}/${optimizedLimit}
 Ubicación: ${location}
 
@@ -619,12 +770,18 @@ TWEETS ENCONTRADOS Y ANALIZADOS:
 ${formattedTweets}
 
 ANÁLISIS CONTEXTUAL:
-- Se expandió automáticamente la consulta para obtener mejores resultados
+${deepSeekOptimization.optimized ? 
+  `- Se aplicó optimización inteligente con DeepSeek para maximizar resultados
+- La estrategia "${deepSeekOptimization.strategy}" fue seleccionada tras análisis contextual
+- ${deepSeekOptimization.justification}` :
+  `- Se expandió automáticamente la consulta con métodos estándar`}
 - Se optimizó el límite basado en el tipo de análisis requerido
 - Todos los tweets incluyen análisis de sentimiento e intención comunicativa
 - Las entidades mencionadas han sido extraídas automáticamente`,
         analysis_metadata: {
-          query_expansion_applied: expandedQuery !== query,
+          deepseek_optimization: deepSeekOptimization.optimized,
+          optimization_strategy: deepSeekOptimization.strategy,
+          original_vs_optimized: deepSeekOptimization.optimized,
           limit_optimization_applied: optimizedLimit !== limit,
           tweets_analyzed: result.data.tweets_found,
           sentiment_distribution: result.data.tweets.reduce((acc, tweet) => {

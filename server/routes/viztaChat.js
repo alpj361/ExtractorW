@@ -583,9 +583,16 @@ IMPORTANTE:
             console.log(`✅ Paso ${step.step_number} completado. Contexto acumulado: "${combinedContext}"`);
           }
           
-          // ANÁLISIS CONTEXTUAL DEEPSEEK: Después de completar todos los pasos
-          console.log('🧠 Iniciando análisis contextual con DeepSeek...');
-          const deepSeekAnalysis = await analyzeWithDeepSeek(stepResults, message, final_goal);
+          // Contar total de tweets y optimizaciones aplicadas
+          const totalTweetsAnalyzed = stepResults.reduce((total, step) => {
+            return total + (step.result?.tweets?.length || 0);
+          }, 0);
+          
+          const deepSeekOptimizations = stepResults.filter(step => 
+            step.result?.optimization_applied
+          ).length;
+          
+          console.log(`📊 Resumen multi-step: ${stepResults.length} pasos, ${totalTweetsAnalyzed} tweets, ${deepSeekOptimizations} optimizaciones DeepSeek`);
           
           // Guardar resultados en recent_scrapes (solo para pasos que tengan tweets)
           for (const stepResult of stepResults) {
@@ -607,78 +614,65 @@ IMPORTANTE:
             }
           }
           
-          // Generar respuesta final combinando todos los resultados + análisis DeepSeek
+          // Generar respuesta final con información sobre optimizaciones DeepSeek
           const multiStepCompletion = await openai.chat.completions.create({
             model: 'gpt-4o-mini',
             messages: [
               {
                 role: 'system',
-                content: `Eres Vizta, un asistente de investigación especializado en análisis multi-step. El usuario hizo una consulta compleja y ejecutaste un plan de ${steps.length} pasos.
+                content: `Eres Vizta, un asistente de investigación especializado en análisis multi-step optimizado con DeepSeek.
+
+INFORMACIÓN DEL PLAN EJECUTADO:
+- Pasos completados: ${stepResults.filter(step => step.success).length}/${steps.length}
+- Total de tweets analizados: ${totalTweetsAnalyzed}
+- Optimizaciones DeepSeek aplicadas: ${deepSeekOptimizations}/${stepResults.length}
+- Objetivo final: ${final_goal}
+
+DETALLES DE OPTIMIZACIÓN:
+Cada búsqueda fue PREVIAMENTE OPTIMIZADA por DeepSeek antes de ejecutarse. DeepSeek analizó cada consulta y generó términos más efectivos para maximizar las posibilidades de encontrar tweets relevantes.
 
 PLAN EJECUTADO:
 ${steps.map(step => `${step.step_number}. ${step.description} (herramienta: ${step.tool})`).join('\n')}
 
-OBJETIVO FINAL: ${final_goal}
-
-${deepSeekAnalysis ? `
-ANÁLISIS CONTEXTUAL DEEPSEEK DISPONIBLE:
-- Razonamiento: ${deepSeekAnalysis.razonamiento_contextual}
-- Síntesis: ${deepSeekAnalysis.sintesis_inteligente}
-- Recomendaciones: ${deepSeekAnalysis.recomendaciones_estrategicas?.join(', ')}
-- Valor agregado: ${deepSeekAnalysis.valor_agregado}
-${deepSeekAnalysis.optimizacion_busquedas?.terminos_alternativos ? `
-- Términos alternativos sugeridos: ${deepSeekAnalysis.optimizacion_busquedas.terminos_alternativos.join(', ')}
-- Estrategia mejorada: ${deepSeekAnalysis.optimizacion_busquedas.estrategia_mejorada}` : ''}
-` : ''}
-
 INSTRUCCIONES PARA RESPUESTA MULTI-STEP:
-• Sé CONCISO y DIRECTO (máximo 400 palabras)
+• Sé CONCISO y DIRECTO (máximo 500 palabras)
 • Usa formato MARKDOWN con secciones claras
 • Enfócate en COMBINAR los resultados de todos los pasos
 • Muestra cómo se conectan los hallazgos entre pasos
-• ${deepSeekAnalysis ? 'INTEGRA los insights de DeepSeek en tu análisis' : ''}
+• DESTACA el valor de las optimizaciones DeepSeek aplicadas
 • Usa emojis para hacer más visual la información
 
 FORMATO REQUERIDO:
-## 🎯 Análisis Multi-Step: [TEMA PRINCIPAL]
+## 🎯 Análisis Multi-Step Optimizado: [TEMA PRINCIPAL]
 
-**📋 Plan ejecutado:** ${steps.length} pasos para: ${final_goal}
+**📋 Plan ejecutado:** ${steps.length} pasos con ${deepSeekOptimizations} optimizaciones DeepSeek
+**🧠 Optimización inteligente:** DeepSeek mejoró cada búsqueda antes de ejecutar
+**📊 Datos analizados:** ${totalTweetsAnalyzed} tweets en total
 
 ### 🔄 Resultados por paso:
-${stepResults.map(step => `**Paso ${step.step_number}** (${step.tool}): ${step.success ? '✅ Completado' : '❌ Error'}`).join('\n')}
+${stepResults.map(step => `**Paso ${step.step_number}** (${step.tool}): ${step.success ? '✅ Completado' : '❌ Error'}${step.result?.optimization_applied ? ' 🧠 Optimizado' : ''}`).join('\n')}
 
 ### 📊 Hallazgos combinados:
 • [combinar insights de todos los pasos]
 • [mostrar conexiones entre resultados]
 • [destacar patrones encontrados]
-
-${deepSeekAnalysis ? `
-### 🧠 Insights DeepSeek:
-• ${deepSeekAnalysis.sintesis_inteligente}
-• ${deepSeekAnalysis.valor_agregado}
-
-### 🔧 Optimizaciones sugeridas:
-${deepSeekAnalysis.optimizacion_busquedas?.terminos_alternativos ? 
-  `• Términos alternativos: ${deepSeekAnalysis.optimizacion_busquedas.terminos_alternativos.join(', ')}` : ''}
-${deepSeekAnalysis.recomendaciones_estrategicas ? 
-  deepSeekAnalysis.recomendaciones_estrategicas.map(rec => `• ${rec}`).join('\n') : ''}
-` : ''}
+• [mencionar cómo las optimizaciones mejoraron los resultados]
 
 ### 💡 Síntesis final:
-[análisis integrado que combine todos los pasos${deepSeekAnalysis ? ' + insights DeepSeek' : ''}]
+[análisis integrado que combine todos los pasos y destaque el valor de la optimización previa]
 
 ### 🎯 Conclusión:
-[respuesta final al objetivo planteado]
+[respuesta final al objetivo planteado, destacando la calidad mejorada por DeepSeek]
 
 REGLAS IMPORTANTES:
 - COMBINA los resultados, no los listes por separado
 - Muestra las CONEXIONES entre pasos
-- ${deepSeekAnalysis ? 'INTEGRA el razonamiento de DeepSeek' : ''}
-- Enfócate en el VALOR AGREGADO del análisis multi-step
-- Menciona cuántos datos se analizaron en total
+- DESTACA cómo DeepSeek mejoró la calidad de búsqueda
+- Enfócate en el VALOR AGREGADO del análisis multi-step optimizado
+- Menciona la cantidad específica de datos analizados (${totalTweetsAnalyzed} tweets)
+- Si hubo optimizaciones, menciona cómo mejoraron los resultados
 
-Resultados de todos los pasos: ${JSON.stringify(stepResults, null, 2)}
-${deepSeekAnalysis ? `\n\nAnálisis DeepSeek: ${JSON.stringify(deepSeekAnalysis, null, 2)}` : ''}`
+Resultados detallados: ${JSON.stringify(stepResults, null, 2)}`
               },
               {
                 role: 'user',
@@ -704,23 +698,24 @@ ${deepSeekAnalysis ? `\n\nAnálisis DeepSeek: ${JSON.stringify(deepSeekAnalysis,
             contextSources: stepResults.some(step => step.result.tweets) ? ['twitter'] : [],
             metadata: { 
               requestId: requestId,
-              executionType: 'multi_step',
+              executionType: 'multi_step_optimized',
               final_goal: final_goal,
               steps_completed: stepResults.filter(step => step.success).length,
               total_steps: steps.length,
+              total_tweets_analyzed: totalTweetsAnalyzed,
+              deepseek_optimizations: deepSeekOptimizations,
               total_execution_time: stepResults.reduce((sum, step) => sum + step.execution_time, 0),
-              deepseek_analysis: deepSeekAnalysis ? true : false,
-              deepseek_confidence: deepSeekAnalysis?.confianza_analisis || null,
               step_results: stepResults.map(step => ({
                 step_number: step.step_number,
                 tool: step.tool,
                 success: step.success,
-                execution_time: step.execution_time
+                execution_time: step.execution_time,
+                optimization_applied: step.result?.optimization_applied || false
               }))
             }
           });
 
-          // Respuesta exitosa del plan multi-step
+          // Respuesta exitosa del plan multi-step optimizado
           return res.json({
             success: true,
             response: multiStepResponse,
@@ -730,15 +725,17 @@ ${deepSeekAnalysis ? `\n\nAnálisis DeepSeek: ${JSON.stringify(deepSeekAnalysis,
               final_goal: final_goal,
               results: stepResults,
               total_execution_time: stepResults.reduce((sum, step) => sum + step.execution_time, 0),
-              deepseek_analysis: deepSeekAnalysis
+              total_tweets_analyzed: totalTweetsAnalyzed,
+              deepseek_optimizations: deepSeekOptimizations
             },
             sessionId: chatSessionId,
             requestId: requestId,
             timestamp: new Date().toISOString(),
-            mode: 'multi_step_with_deepseek',
+            mode: 'multi_step_optimized',
             steps_completed: stepResults.filter(step => step.success).length,
             total_steps: steps.length,
-            enhanced_analysis: deepSeekAnalysis ? true : false
+            total_tweets_analyzed: totalTweetsAnalyzed,
+            deepseek_optimizations_applied: deepSeekOptimizations
           });
           
         } catch (error) {
@@ -1450,112 +1447,5 @@ router.delete('/scrapes/:scrapeId', verifyUserAccess, async (req, res) => {
     });
   }
 });
-
-/**
- * Función para llamar a DeepSeek para razonamiento contextual avanzado
- * @param {Array} stepResults - Resultados de todos los pasos ejecutados
- * @param {string} originalMessage - Mensaje original del usuario
- * @param {string} finalGoal - Objetivo final del plan
- * @returns {Object} Análisis contextual de DeepSeek
- */
-async function analyzeWithDeepSeek(stepResults, originalMessage, finalGoal) {
-  try {
-    console.log('🧠 Iniciando análisis contextual con DeepSeek...');
-    
-    const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
-    
-    if (!DEEPSEEK_API_KEY) {
-      console.log('⚠️ DEEPSEEK_API_KEY no configurada, saltando análisis contextual');
-      return null;
-    }
-
-    // Preparar contexto de todos los resultados
-    const contextSummary = stepResults.map(step => {
-      const resultSummary = step.success ? 
-        `✅ Exitoso: ${step.result.tweets?.length || step.result.projects?.length || step.result.documents?.length || 'datos'} elementos encontrados` :
-        `❌ Falló: ${step.result.error || 'Error desconocido'}`;
-      
-      return `Paso ${step.step_number} (${step.tool}): ${step.description} → ${resultSummary}`;
-    }).join('\n');
-
-    const deepSeekPrompt = `Analiza los resultados de esta investigación multi-step y proporciona insights contextuales avanzados.
-
-**CONSULTA ORIGINAL DEL USUARIO:** "${originalMessage}"
-**OBJETIVO FINAL:** ${finalGoal}
-
-**RESULTADOS DE LOS PASOS EJECUTADOS:**
-${contextSummary}
-
-**DATOS DETALLADOS:**
-${JSON.stringify(stepResults, null, 2)}
-
-**TU MISIÓN COMO DEEPSEEK:**
-1. **RAZONAMIENTO CONTEXTUAL:** Analiza profundamente las conexiones entre los resultados de todos los pasos
-2. **OPTIMIZACIÓN DE BÚSQUEDAS:** Si hubo fallos en búsquedas de tweets, sugiere términos alternativos más efectivos
-3. **SÍNTESIS INTELIGENTE:** Identifica patrones, contradiciones o insights que GPT-4o podría haber perdido
-4. **RECOMENDACIONES ESTRATÉGICAS:** Sugiere próximos pasos o investigaciones adicionales
-
-**ENFOQUE ESPECIAL EN BÚSQUEDAS FALLIDAS:**
-Si algún paso de nitter_context falló, analiza por qué y sugiere:
-- Términos de búsqueda alternativos más amplios
-- Hashtags relevantes que podrían funcionar mejor
-- Combinaciones de palabras clave más efectivas
-- Estrategias de búsqueda completamente diferentes
-
-**FORMATO DE RESPUESTA JSON:**
-{
-  "razonamiento_contextual": "Análisis profundo de las conexiones entre resultados",
-  "optimizacion_busquedas": {
-    "terminos_alternativos": ["término1", "término2", "término3"],
-    "hashtags_sugeridos": ["#hashtag1", "#hashtag2"],
-    "estrategia_mejorada": "descripción de nueva estrategia"
-  },
-  "sintesis_inteligente": "Insights y patrones identificados",
-  "recomendaciones_estrategicas": ["recomendación1", "recomendación2"],
-  "valor_agregado": "Qué aporta este análisis que no tenía antes",
-  "confianza_analisis": "alta|media|baja"
-}
-
-Usa tu capacidad de razonamiento superior para encontrar conexiones que otros modelos podrían perder.`;
-
-    const response = await fetch('https://api.deepseek.com/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'deepseek-reasoner',
-        messages: [
-          {
-            role: 'system',
-            content: 'Eres DeepSeek, un modelo de razonamiento avanzado especializado en análisis contextual profundo y optimización de estrategias de investigación. Tu fortaleza es encontrar conexiones complejas y proporcionar insights que otros modelos no pueden ver.'
-          },
-          {
-            role: 'user',
-            content: deepSeekPrompt
-          }
-        ],
-        temperature: 0.3,
-        max_tokens: 1000
-      })
-    });
-
-    if (!response.ok) {
-      console.log(`⚠️ Error llamando a DeepSeek: ${response.status}`);
-      return null;
-    }
-
-    const data = await response.json();
-    const analysis = JSON.parse(data.choices[0].message.content);
-    
-    console.log('✅ Análisis contextual DeepSeek completado');
-    return analysis;
-
-  } catch (error) {
-    console.error('❌ Error en análisis DeepSeek:', error);
-    return null;
-  }
-}
 
 module.exports = router; 
