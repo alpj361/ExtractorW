@@ -1,5 +1,12 @@
 const axios = require('axios');
 const { processNitterContext } = require('./nitterContext');
+const { 
+  getUserProjects, 
+  getUserCodex, 
+  getProjectDecisions,
+  searchUserCodex, 
+  getUserStats 
+} = require('./supabaseData');
 
 // Importar fetch para Node.js
 let fetch;
@@ -328,6 +335,88 @@ const AVAILABLE_TOOLS = {
       'Detección de hashtags relevantes',
       'Contexto guatemalteco especializado'
     ]
+  },
+  
+  user_projects: {
+    name: 'user_projects',
+    description: 'Obtiene los proyectos del usuario autenticado con estadísticas y metadatos completos',
+    parameters: {
+      limit: {
+        type: 'integer',
+        required: false,
+        default: 20,
+        min: 1,
+        max: 100,
+        description: 'Número máximo de proyectos a obtener'
+      },
+      status: {
+        type: 'string',
+        required: false,
+        description: 'Filtrar por estado específico: active, completed, paused, planning'
+      },
+      priority: {
+        type: 'string',
+        required: false,
+        description: 'Filtrar por prioridad: high, medium, low'
+      }
+    },
+    service_endpoint: '/api/user_projects',
+    service_url: 'internal',
+    category: 'user_data',
+    usage_credits: 1,
+    features: [
+      'Lista proyectos del usuario autenticado',
+      'Incluye estadísticas (decisiones, assets)',
+      'Metadatos completos (fechas, prioridad, tags)',
+      'Filtros por estado y prioridad',
+      'Información de progreso y sugerencias'
+    ]
+  },
+  
+  user_codex: {
+    name: 'user_codex',
+    description: 'Accede al Codex personal del usuario: documentos, transcripciones, análisis y assets de proyectos',
+    parameters: {
+      project_id: {
+        type: 'string',
+        required: false,
+        description: 'ID del proyecto específico para filtrar items'
+      },
+      query: {
+        type: 'string',
+        required: false,
+        description: 'Búsqueda en título, contenido o transcripciones'
+      },
+      limit: {
+        type: 'integer',
+        required: false,
+        default: 20,
+        min: 1,
+        max: 50,
+        description: 'Número máximo de items a obtener'
+      },
+      type: {
+        type: 'string',
+        required: false,
+        description: 'Filtrar por tipo: document, audio, video, image, note'
+      },
+      tags: {
+        type: 'array',
+        required: false,
+        description: 'Filtrar por tags específicos (array de strings)'
+      }
+    },
+    service_endpoint: '/api/user_codex',
+    service_url: 'internal',
+    category: 'user_data',
+    usage_credits: 1,
+    features: [
+      'Acceso completo al Codex personal',
+      'Búsqueda inteligente en contenido y transcripciones',
+      'Filtros por proyecto, tipo y tags',
+      'Incluye análisis de documentos y transcripciones de audio',
+      'Metadatos de archivos y relaciones con proyectos'
+    ]
   }
 };
 
@@ -426,6 +515,24 @@ async function executeTool(toolName, parameters = {}, user = null) {
           parameters.location || 'Guatemala',
           parameters.focus || 'general',
           parameters.improve_nitter_search || false,
+          user
+        );
+        break;
+      case 'user_projects':
+        result = await executeUserProjects(
+          parameters.limit || 20,
+          parameters.status,
+          parameters.priority,
+          user
+        );
+        break;
+      case 'user_codex':
+        result = await executeUserCodex(
+          parameters.project_id,
+          parameters.query,
+          parameters.limit || 20,
+          parameters.type,
+          parameters.tags,
           user
         );
         break;
@@ -809,6 +916,169 @@ Contexto: ${location}`;
 }
 
 /**
+ * Ejecuta la herramienta user_projects: obtiene proyectos del usuario
+ * @param {number} limit - Límite de proyectos a obtener
+ * @param {string} status - Filtro por estado (opcional)
+ * @param {string} priority - Filtro por prioridad (opcional)
+ * @param {Object} user - Usuario autenticado
+ * @returns {Object} Resultados de proyectos del usuario
+ */
+async function executeUserProjects(limit = 20, status = null, priority = null, user = null) {
+  try {
+    if (!user || !user.id) {
+      throw new Error('Usuario no autenticado. Se requiere autenticación para acceder a proyectos personales.');
+    }
+
+    console.log(`📊 Ejecutando user_projects para usuario: ${user.email} (${user.id})`);
+    
+    const options = { limit };
+    if (status) options.status = status;
+    if (priority) options.priority = priority;
+
+    const projects = await getUserProjects(user.id, options);
+    
+    // Obtener estadísticas generales
+    const userStats = await getUserStats(user.id);
+
+    // Formatear respuesta para el agente AI
+    const formattedResponse = `PROYECTOS DEL USUARIO: ${user.email}
+
+ESTADÍSTICAS GENERALES:
+• Total de proyectos: ${userStats.totalProjects}
+• Total de items en Codex: ${userStats.totalCodexItems}
+• Total de decisiones: ${userStats.totalDecisions}
+
+DISTRIBUCIÓN POR ESTADO:
+${Object.entries(userStats.projectsByStatus).map(([key, value]) => `• ${key}: ${value} proyectos`).join('\n')}
+
+PROYECTOS (${projects.length} mostrados):
+${projects.map(project => `
+📁 ${project.title} (ID: ${project.id})
+   Estado: ${project.status} | Prioridad: ${project.priority}
+   Categoría: ${project.category || 'Sin categoría'}
+   Decisiones: ${project.stats.decisionsCount} | Assets: ${project.stats.assetsCount}
+   ${project.description ? `Descripción: ${project.description.substring(0, 100)}...` : ''}
+   Creado: ${new Date(project.created_at).toLocaleDateString('es-ES')}
+   ${project.tags && project.tags.length > 0 ? `Tags: ${project.tags.join(', ')}` : ''}
+`).join('\n')}
+
+Los proyectos están ordenados por fecha de actualización más reciente.`;
+
+    return {
+      success: true,
+      user_id: user.id,
+      user_email: user.email,
+      filters_applied: { limit, status, priority },
+      total_projects: projects.length,
+      user_stats: userStats,
+      projects: projects,
+      formatted_response: formattedResponse,
+      metadata: {
+        service: 'user_projects',
+        execution_time: new Date().toISOString(),
+        data_source: 'supabase'
+      }
+    };
+
+  } catch (error) {
+    console.error(`❌ Error ejecutando user_projects MCP:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Ejecuta la herramienta user_codex: accede al Codex personal del usuario
+ * @param {string} projectId - ID del proyecto (opcional)
+ * @param {string} searchQuery - Búsqueda en contenido (opcional)
+ * @param {number} limit - Límite de items a obtener
+ * @param {string} type - Filtro por tipo (opcional)
+ * @param {Array} tags - Filtro por tags (opcional)
+ * @param {Object} user - Usuario autenticado
+ * @returns {Object} Resultados del Codex personal
+ */
+async function executeUserCodex(projectId = null, searchQuery = null, limit = 20, type = null, tags = null, user = null) {
+  try {
+    if (!user || !user.id) {
+      throw new Error('Usuario no autenticado. Se requiere autenticación para acceder al Codex personal.');
+    }
+
+    console.log(`📚 Ejecutando user_codex para usuario: ${user.email} (${user.id})`);
+    console.log(`Filtros - Proyecto: ${projectId}, Búsqueda: "${searchQuery}", Tipo: ${type}`);
+    
+    const options = { limit };
+    if (projectId) options.projectId = projectId;
+    if (searchQuery) options.query = searchQuery;
+    if (type) options.type = type;
+    if (tags) options.tags = tags;
+
+    const codexItems = await getUserCodex(user.id, options);
+    
+    // Si hay búsqueda específica, usar también la función de búsqueda
+    let searchResults = null;
+    if (searchQuery) {
+      searchResults = await searchUserCodex(searchQuery, user.id, { limit: 10 });
+    }
+
+    // Formatear respuesta para el agente AI
+    const filtersText = [
+      projectId ? `Proyecto: ${projectId}` : null,
+      searchQuery ? `Búsqueda: "${searchQuery}"` : null,
+      type ? `Tipo: ${type}` : null,
+      tags ? `Tags: ${tags.join(', ')}` : null
+    ].filter(Boolean).join(' | ');
+
+    const formattedResponse = `CODEX PERSONAL: ${user.email}
+
+${filtersText ? `FILTROS APLICADOS: ${filtersText}` : 'MOSTRANDO TODOS LOS ITEMS'}
+
+RESULTADOS DEL CODEX (${codexItems.length} items):
+${codexItems.map(item => `
+📄 ${item.title} (ID: ${item.id})
+   Proyecto: ${item.projectTitle} (${item.projectStatus})
+   Tipo: ${item.type}
+   ${item.file_name ? `Archivo: ${item.file_name}` : ''}
+   ${item.hasTranscription ? '🎵 Tiene transcripción de audio' : ''}
+   ${item.hasAnalysis ? '📊 Tiene análisis de documento' : ''}
+   ${item.tags && item.tags.length > 0 ? `Tags: ${item.tags.join(', ')}` : ''}
+   ${item.contentPreview ? `Contenido: ${item.contentPreview}` : ''}
+   ${item.transcriptionPreview ? `Transcripción: ${item.transcriptionPreview}` : ''}
+   Creado: ${new Date(item.created_at).toLocaleDateString('es-ES')}
+`).join('\n')}
+
+${searchResults && searchResults.length > 0 ? `
+BÚSQUEDA ESPECÍFICA "${searchQuery}" (${searchResults.length} resultados más relevantes):
+${searchResults.slice(0, 5).map(result => `
+🔍 ${result.title} (Relevancia: ${result.relevanceScore})
+   Proyecto: ${result.projectTitle}
+   ${result.contentPreview}
+`).join('\n')}` : ''}
+
+Total de items disponibles en tu Codex personal.`;
+
+    return {
+      success: true,
+      user_id: user.id,
+      user_email: user.email,
+      filters_applied: { projectId, searchQuery, limit, type, tags },
+      total_items: codexItems.length,
+      codex_items: codexItems,
+      search_results: searchResults,
+      formatted_response: formattedResponse,
+      metadata: {
+        service: 'user_codex',
+        execution_time: new Date().toISOString(),
+        data_source: 'supabase',
+        search_performed: !!searchQuery
+      }
+    };
+
+  } catch (error) {
+    console.error(`❌ Error ejecutando user_codex MCP:`, error);
+    throw error;
+  }
+}
+
+/**
  * Valida los parámetros de una herramienta
  * @param {Object} tool - Configuración de la herramienta
  * @param {Object} parameters - Parámetros a validar
@@ -902,6 +1172,8 @@ module.exports = {
   executeTool,
   executeNitterContext,
   executePerplexitySearch,
+  executeUserProjects,
+  executeUserCodex,
   getServerStatus,
   expandSearchTerms,
   enhanceSearchTermsWithPerplexity,
