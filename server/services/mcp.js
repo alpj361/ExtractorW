@@ -140,93 +140,122 @@ CONTEXTO: Guatemala`
 function expandSearchTerms(originalQuery) {
   const query = originalQuery.toLowerCase().trim();
   
-  // Diccionario de expansiones específicas para Guatemala
+  // Diccionario de TÉRMINOS REALES que la gente usa en redes sociales guatemaltecas
   const expansions = {
-    // Eventos y marchas (con contexto temporal actual)
-    'marcha del orgullo': 'Orgullo2025 OR MarchadelOrgullo OR OrguIIoGt OR Pride OR LGBTI OR diversidad OR OrgulloActual OR Pride2025',
-    'orgullo': 'Orgullo2025 OR MarchadelOrgullo OR OrguIIoGt OR Pride OR LGBTI OR diversidad OR OrgulloActual OR Pride2025',
-    'pride': 'Orgullo2025 OR MarchadelOrgullo OR OrguIIoGt OR Pride OR LGBTI OR diversidad OR OrgulloActual OR Pride2025',
+    // Eventos y marchas - TÉRMINOS REALES
+    'marcha del orgullo': 'orgullo OR "marcha del orgullo" OR pride OR lgbt OR diversidad OR #orgullogt OR marcha',
+    'orgullo': 'orgullo OR "marcha del orgullo" OR pride OR lgbt OR diversidad OR #orgullogt',
+    'pride': 'pride OR orgullo OR lgbt OR "marcha del orgullo" OR diversidad',
     
-    // Política (con contexto temporal actual)
-    'elecciones': 'EleccionesGt OR TSE OR voto OR candidatos OR Elecciones2025 OR procesoelectoral OR EleccionesActuales',
-    'presidente': 'BernardoArevalo OR presidente OR GobiernoGt OR CasaPresidencial OR Presidencia OR Arevalo2025 OR PresidenteActual',
-    'gobierno': 'GobiernoGt OR BernardoArevalo OR CasaPresidencial OR Presidencia OR ejecutivo OR GobiernoActual OR Arevalo2025',
-    'congreso': 'CongresoGt OR diputados OR legislativo OR plenaria OR bancada OR Congreso2025 OR LegislativoActual',
+    // Política - TÉRMINOS REALES
+    'elecciones': 'elecciones OR tse OR voto OR candidatos OR electoral OR votacion',
+    'presidente': 'presidente OR "bernardo arevalo" OR gobierno OR presidencia',
+    'gobierno': 'gobierno OR presidente OR "bernardo arevalo" OR presidencia OR ejecutivo',
+    'congreso': 'congreso OR diputados OR legislativo OR plenaria OR bancada',
     
-    // Economía
-    'economia': 'economiaGt OR PIB OR inflacion OR empleo OR QuetzalGt OR BancoGuatemala',
-    'inflación': 'inflacion OR precios OR carestia OR QuetzalGt OR poder OR adquisitivo',
-    'empleo': 'empleo OR trabajo OR desempleo OR MinTrabajo OR OportunidadesGt',
+    // Economía - TÉRMINOS REALES
+    'economia': 'economia OR inflacion OR empleo OR precios OR quetzal OR guatemala',
+    'inflacion': 'inflacion OR precios OR carestia OR caro OR economia',
+    'empleo': 'empleo OR trabajo OR desempleo OR oportunidades',
     
-    // Deportes
-    'futbol': 'SeleccionGt OR GuatemalaFC OR LigaNacional OR Fedefut OR bicolor',
-    'seleccion': 'SeleccionGt OR bicolor OR Fedefut OR eliminatorias OR futbolGt',
+    // Deportes - TÉRMINOS REALES
+    'futbol': 'futbol OR seleccion OR guatemala OR liga OR deporte',
+    'seleccion': 'seleccion OR futbol OR guatemala OR bicolor OR deportes',
     
-    // Seguridad
-    'seguridad': 'seguridadGt OR PNC OR delincuencia OR violencia OR MinGob',
-    'violencia': 'violencia OR delincuencia OR inseguridad OR crimenes OR PNC',
+    // Seguridad - TÉRMINOS REALES
+    'seguridad': 'seguridad OR violencia OR delincuencia OR pnc OR crimenes',
+    'violencia': 'violencia OR delincuencia OR inseguridad OR crimenes OR seguridad',
     
-    // Educación
-    'educacion': 'educacionGt OR Mineduc OR estudiantes OR maestros OR escuelas',
-    'universidad': 'universidadesGt OR USAC OR URL OR UVG OR estudiantes',
+    // Educación - TÉRMINOS REALES
+    'educacion': 'educacion OR estudiantes OR maestros OR escuelas OR universidad',
+    'universidad': 'universidad OR usac OR estudiantes OR educacion',
     
-    // Salud
-    'salud': 'saludGt OR MSPAS OR hospitales OR medicos OR MinSalud',
-    'covid': 'covid OR pandemia OR vacunas OR MinSalud OR CovidGt',
+    // Salud - TÉRMINOS REALES
+    'salud': 'salud OR hospitales OR medicos OR medicina OR enfermedad',
+    'covid': 'covid OR coronavirus OR pandemia OR vacuna OR salud',
     
-    // Cultura
-    'cultura': 'culturaGt OR tradiciones OR artesanias OR Micude OR patrimonioGt',
-    'musica': 'musicaGt OR artistas OR conciertos OR cantantes OR chapin'
+    // Cultura - TÉRMINOS REALES
+    'cultura': 'cultura OR tradiciones OR guatemala OR arte OR festival',
+    'musica': 'musica OR artista OR concierto OR cantante OR guatemala',
+    
+    // Minería - TÉRMINOS REALES
+    'mineria': 'mineria OR mina OR minera OR extraccion OR "san rafael" OR resistencia',
+    'mina': 'mina OR mineria OR minera OR extraccion OR resistencia',
+    
+    // Protestas - TÉRMINOS REALES  
+    'protesta': 'protesta OR manifestacion OR marcha OR resistencia OR derecho',
+    'manifestacion': 'manifestacion OR protesta OR marcha OR derecho OR resistencia',
+    
+    // Lugares específicos - TÉRMINOS REALES
+    'izabal': 'izabal OR "puerto barrios" OR caribe OR guatemala',
+    'antigua': 'antigua OR guatemala OR turismo OR colonial',
+    'xela': 'xela OR quetzaltenango OR guatemala OR altiplano'
   };
 
   // Buscar coincidencias exactas primero
   for (const [key, expansion] of Object.entries(expansions)) {
     if (query.includes(key)) {
-      console.log(`🎯 Expansión exacta encontrada: "${key}" → "${expansion}"`);
+      console.log(`🎯 Expansión REAL encontrada: "${key}" → "${expansion}"`);
       return expansion;
     }
   }
 
-  // Búsquedas por palabras clave
+  // Búsquedas por palabras clave con TÉRMINOS REALES
   const keywords = [
-    // Política (con contexto temporal)
-    { keys: ['bernardo', 'arevalo'], expansion: 'BernardoArevalo OR presidente OR GobiernoGt OR CasaPresidencial OR Arevalo2025 OR PresidenteActual' },
-    { keys: ['giammattei'], expansion: 'Giammattei OR expresidente OR gobiernoanterior' }, // Mantener histórico para ex-presidente
-    { keys: ['tse'], expansion: 'TSE OR tribunal OR electoral OR elecciones OR voto OR TSE2025 OR ElectoralActual' },
-    { keys: ['mp', 'ministerio publico'], expansion: 'MP OR MinisterioPublico OR fiscalia OR ContraCosta OR MP2025 OR FiscaliaActual' },
+    // Política REAL
+    { keys: ['bernardo', 'arevalo'], expansion: '"bernardo arevalo" OR presidente OR gobierno OR arevalo' },
+    { keys: ['giammattei'], expansion: 'giammattei OR "alejandro giammattei" OR expresidente' },
+    { keys: ['tse'], expansion: 'tse OR tribunal OR electoral OR elecciones OR voto' },
+    { keys: ['mp', 'ministerio publico'], expansion: 'mp OR "ministerio publico" OR fiscalia OR justicia' },
     
-    // Eventos específicos
-    { keys: ['festival', 'cervantino'], expansion: 'FIC OR CervantinOGuatemala OR festivalcervantino OR cultura' },
-    { keys: ['independencia'], expansion: 'IndependenciaGt OR 15septiembre OR patria OR antorcha' },
-    { keys: ['navidad'], expansion: 'NavidadGt OR posadas OR aguinaldo OR fiestas' },
+    // Eventos REALES
+    { keys: ['cervantino'], expansion: 'cervantino OR festival OR cultura OR antigua' },
+    { keys: ['independencia'], expansion: 'independencia OR guatemala OR septiembre OR patria' },
+    { keys: ['navidad'], expansion: 'navidad OR posadas OR diciembre OR fiestas' },
     
-    // Ubicaciones
-    { keys: ['zona viva'], expansion: 'ZonaViva OR zona10 OR entretenimiento OR restaurantes' },
-    { keys: ['antigua'], expansion: 'Antigua OR LaAntigua OR patrimonio OR turismo' },
-    { keys: ['lago atitlan'], expansion: 'Atitlan OR lago OR turismo OR Solola' },
+    // Ubicaciones REALES
+    { keys: ['zona viva'], expansion: '"zona viva" OR zona10 OR guatemala OR restaurantes' },
+    { keys: ['lago atitlan'], expansion: 'atitlan OR lago OR solola OR turismo' },
     
-    // Hashtags comunes
-    { keys: ['guatemala'], expansion: 'Guatemala OR GuatemalaGt OR Guate OR Chapin OR GT' },
-    { keys: ['chapín', 'chapin'], expansion: 'Chapin OR Guatemala OR Guate OR GuatemalaGt' },
+    // País
+    { keys: ['guatemala'], expansion: 'guatemala OR guate OR chapin OR gt' },
+    { keys: ['chapin'], expansion: 'chapin OR guatemala OR guate OR guatemalteco' },
   ];
 
   // Buscar palabras clave
   for (const keywordObj of keywords) {
     if (keywordObj.keys.some(keyword => query.includes(keyword))) {
-      console.log(`🔍 Palabra clave encontrada: ${keywordObj.keys.join('/')} → "${keywordObj.expansion}"`);
+      console.log(`🔍 Palabra clave REAL encontrada: ${keywordObj.keys.join('/')} → "${keywordObj.expansion}"`);
       return keywordObj.expansion;
     }
   }
 
-  // Si no hay expansión específica, agregar contexto guatemalteco Y temporal
-  const now = new Date();
-  const currentYear = now.getFullYear();
-  const currentMonth = now.toLocaleString('es-ES', { month: 'long' });
-  
-  const contextualizedQuery = `${originalQuery} OR ${originalQuery}Gt OR ${originalQuery}Guatemala OR ${originalQuery}${currentYear} OR ${originalQuery}Actual OR ${originalQuery}${currentMonth}`;
-  console.log(`📝 Consulta contextualizada temporal: "${originalQuery}" → "${contextualizedQuery}"`);
-  
-  return contextualizedQuery;
+  // FALLBACK INTELIGENTE: Solo agregar términos que realmente se usan
+  // Si la query original ya tiene OR, no modificar
+  if (originalQuery.includes(' OR ')) {
+    console.log(`✅ Query ya optimizada con OR: "${originalQuery}"`);
+    return originalQuery;
+  }
+
+  // Para queries simples, agregar solo variaciones lógicas
+  const words = originalQuery.split(' ').filter(word => word.length > 2);
+  if (words.length === 1) {
+    const word = words[0].toLowerCase();
+    // Solo agregar "guatemala" si no es obvio que ya es guatemalteco
+    const needsContext = !['guatemala', 'guate', 'chapin', 'gt'].some(geoTerm => 
+      originalQuery.toLowerCase().includes(geoTerm)
+    );
+    
+    if (needsContext) {
+      const contextualQuery = `${originalQuery} OR ${originalQuery} guatemala`;
+      console.log(`📍 Agregando contexto guatemalteco: "${originalQuery}" → "${contextualQuery}"`);
+      return contextualQuery;
+    }
+  }
+
+  // Si no necesita expansión, usar query original
+  console.log(`✅ Query original sin cambios: "${originalQuery}"`);
+  return originalQuery;
 }
 
 /**
@@ -577,42 +606,35 @@ async function optimizeSearchWithDeepSeek(originalQuery, location, user) {
     const currentMonth = now.toLocaleString('es-ES', { month: 'long' });
     const currentYear = now.getFullYear();
 
-    const deepSeekPrompt = `Analiza esta consulta de búsqueda para redes sociales y optimízala para maximizar las posibilidades de encontrar tweets relevantes.
+    const deepSeekPrompt = `Optimiza esta consulta para encontrar tweets REALES en redes sociales guatemaltecas.
 
-**CONSULTA ORIGINAL:** "${originalQuery}"
-**UBICACIÓN:** ${location}
-**FECHA ACTUAL:** ${currentMonth} ${currentYear}
+CONSULTA: "${originalQuery}"
+UBICACIÓN: ${location}
+FECHA: ${currentMonth} ${currentYear}
 
-**TU MISIÓN COMO DEEPSEEK:**
-1. **RAZONAMIENTO ESTRATÉGICO:** Analiza profundamente qué busca realmente el usuario
-2. **OPTIMIZACIÓN DE TÉRMINOS:** Genera términos de búsqueda que tengan MÁS PROBABILIDADES de encontrar tweets
-3. **CONTEXTO LOCAL:** Considera el contexto específico de ${location}
-4. **TENDENCIAS ACTUALES:** Incluye términos que podrían estar trending en ${currentMonth} ${currentYear}
+INSTRUCCIONES:
+1. Analiza qué busca el usuario
+2. Genera términos que la gente REALMENTE usa en Twitter
+3. Incluye hashtags y variaciones populares
+4. Considera el contexto guatemalteco actual
 
-**ESTRATEGIAS DE OPTIMIZACIÓN:**
-- Si la consulta es muy específica → Ampliar con términos relacionados
-- Si incluye nombres técnicos → Agregar variaciones populares
-- Si es sobre eventos → Incluir hashtags probables
-- Si es político → Incluir nombres de figuras relevantes
-- Si es social → Incluir términos de movimientos actuales
+EJEMPLOS DE OPTIMIZACIÓN CORRECTA:
+- "disturbios Izabal minería" → "izabal OR minería OR protestas OR manifestaciones OR mina OR resistencia"
+- "elecciones guatemala" → "elecciones OR electoral OR voto OR tse OR bernardo OR arevalo"
+- "orgullo guatemala" → "orgullo OR pride OR lgbt OR diversidad OR marcha OR #orgullogt"
 
-**EJEMPLOS DE OPTIMIZACIÓN:**
-- "disturbios Izabal minería" → "Izabal OR minería OR protestas OR manifestaciones OR #Guatemala"
-- "elecciones guatemala" → "elecciones OR electoral OR voto OR TSE OR #Guatemala OR BernardoArevalo"
-- "economía guatemala" → "economía OR inflación OR precios OR #EconomíaGt OR Guatemala"
-
-**FORMATO DE RESPUESTA JSON:**
+RESPONDE SOLO EN JSON:
 {
-  "razonamiento": "Por qué la consulta original podría no encontrar resultados y cómo se optimiza",
-  "consulta_optimizada": "términos OR optimizados OR para OR buscar",
-  "hashtags_incluidos": ["#hashtag1", "#hashtag2"],
-  "estrategia_aplicada": "descripción de la estrategia usada",
+  "razonamiento": "análisis breve de por qué optimizar",
+  "consulta_optimizada": "términos OR reales OR que OR usan",
+  "hashtags_incluidos": ["#hashtag1"],
+  "estrategia_aplicada": "estrategia usada",
   "probabilidad_exito": "alta|media|baja",
-  "terminos_clave_agregados": ["término1", "término2"],
-  "justificacion": "Por qué estos términos deberían funcionar mejor"
+  "terminos_clave_agregados": ["término1"],
+  "justificacion": "por qué estos términos funcionan mejor"
 }
 
-Usa tu razonamiento avanzado para generar la mejor estrategia de búsqueda posible.`;
+Usa SOLO términos que realmente se usan en redes sociales guatemaltecas.`;
 
     const response = await fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
@@ -633,7 +655,7 @@ Usa tu razonamiento avanzado para generar la mejor estrategia de búsqueda posib
           }
         ],
         temperature: 0.3,
-        max_tokens: 600
+        max_tokens: 1000
       })
     });
 
@@ -649,12 +671,8 @@ Usa tu razonamiento avanzado para generar la mejor estrategia de búsqueda posib
 
     const data = await response.json();
     
-    // Debug: Imprimir respuesta completa de DeepSeek para diagnosticar
-    console.log('🐛 DeepSeek respuesta completa:', JSON.stringify(data, null, 2));
-    console.log('🐛 Contenido del mensaje:', data.choices?.[0]?.message?.content);
-    
     if (!data.choices || !data.choices[0] || !data.choices[0].message || !data.choices[0].message.content) {
-      console.log('⚠️ Respuesta de DeepSeek incompleta o malformada');
+      console.log('⚠️ Respuesta de DeepSeek incompleta, usando expansión estándar');
       return {
         optimized: false,
         final_query: originalQuery,
@@ -664,23 +682,19 @@ Usa tu razonamiento avanzado para generar la mejor estrategia de búsqueda posib
     }
 
     const rawContent = data.choices[0].message.content.trim();
-    console.log('🐛 Contenido a parsear:', rawContent);
     
     let optimization;
     try {
       optimization = JSON.parse(rawContent);
     } catch (parseError) {
-      console.log('❌ Error parseando JSON de DeepSeek:', parseError.message);
-      console.log('🐛 Contenido que falló al parsear:', rawContent);
-      
       // Intentar extraer JSON si está envuelto en otros caracteres
       const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         try {
           optimization = JSON.parse(jsonMatch[0]);
-          console.log('✅ JSON extraído exitosamente del contenido');
+          console.log('✅ DeepSeek JSON extraído exitosamente');
         } catch (secondError) {
-          console.log('❌ Falló segunda tentativa de parsing:', secondError.message);
+          console.log('⚠️ DeepSeek falló, usando expansión estándar');
           return {
             optimized: false,
             final_query: originalQuery,
@@ -689,11 +703,12 @@ Usa tu razonamiento avanzado para generar la mejor estrategia de búsqueda posib
           };
         }
       } else {
+        console.log('⚠️ DeepSeek no devolvió JSON válido, usando expansión estándar');
         return {
           optimized: false,
           final_query: originalQuery,
           strategy: 'standard_expansion',
-          error: `No JSON found in response: ${rawContent.substring(0, 100)}...`
+          error: `No JSON found in response`
         };
       }
     }
