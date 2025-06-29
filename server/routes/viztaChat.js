@@ -594,24 +594,78 @@ IMPORTANTE:
           
           console.log(`📊 Resumen multi-step: ${stepResults.length} pasos, ${totalTweetsAnalyzed} tweets, ${deepSeekOptimizations} optimizaciones DeepSeek`);
           
-          // Guardar resultados en recent_scrapes (solo para pasos que tengan tweets)
-          for (const stepResult of stepResults) {
-            if (stepResult.success && stepResult.result.tweets) {
-              await recentScrapesService.saveScrape({
-                queryOriginal: message,
-                queryClean: stepResult.args.q || message,
-                generatedTitle: `Multi-step: ${stepResult.description}`,
-                detectedGroup: 'multi-step',
-                herramienta: stepResult.tool,
-                categoria: 'Multi-step',
-                tweets: stepResult.result.tweets,
-                userId: userId,
-                sessionId: chatSessionId,
-                mcpRequestId: requestId,
-                mcpExecutionTime: stepResult.execution_time,
-                location: stepResult.args.location || 'guatemala'
+          // Consolidar TODOS los tweets en una sola entrada
+          const allTweets = stepResults
+            .filter(step => step.success && step.result.tweets)
+            .flatMap(step => step.result.tweets);
+          
+          if (allTweets.length > 0) {
+            // Generar título inteligente para toda la investigación
+            let consolidatedTitle = final_goal;
+            try {
+              const titleCompletion = await openai.chat.completions.create({
+                model: 'gpt-4o-mini',
+                messages: [
+                  {
+                    role: 'system',
+                    content: `Genera un título de máximo 50 caracteres para esta investigación integral.
+
+OBJETIVO: ${final_goal}
+TWEETS ANALIZADOS: ${allTweets.length}
+PASOS COMPLETADOS: ${stepResults.filter(s => s.success).length}
+
+INSTRUCCIONES:
+• Título debe ser específico y descriptivo
+• Máximo 50 caracteres
+• Sin mencionar aspectos técnicos
+• Enfocado en el tema principal
+
+EJEMPLOS:
+• "Marcha del Orgullo LGBT+ Guatemala 2025"
+• "Reacciones: Nuevo Gobierno Arévalo"
+• "Crisis Minera en Izabal - Análisis"
+
+Solo devuelve el título, sin explicaciones.`
+                  },
+                  {
+                    role: 'user',
+                    content: `Genera título para: ${final_goal}`
+                  }
+                ],
+                temperature: 0.3,
+                max_tokens: 30
               });
+              
+              consolidatedTitle = titleCompletion.choices[0].message.content.trim()
+                .replace(/['"]/g, '').substring(0, 50);
+                
+            } catch (error) {
+              console.log('⚠️ Error generando título consolidado, usando objetivo original');
+              consolidatedTitle = final_goal.substring(0, 50);
             }
+
+            // Guardar UNA SOLA entrada consolidada
+            await recentScrapesService.saveScrape({
+              queryOriginal: message,
+              queryClean: final_goal,
+              generatedTitle: consolidatedTitle,
+              detectedGroup: 'investigacion-integral',
+              herramienta: 'investigacion_multifuente',
+              categoria: 'Investigación Integral',
+              tweets: allTweets,
+              userId: userId,
+              sessionId: chatSessionId,
+              mcpRequestId: requestId,
+              mcpExecutionTime: stepResults.reduce((sum, step) => sum + step.execution_time, 0),
+              location: 'guatemala',
+              metadata: {
+                steps_executed: stepResults.length,
+                sources_consulted: stepResults.map(s => s.tool).filter((v, i, a) => a.indexOf(v) === i),
+                total_tweets: allTweets.length
+              }
+            });
+            
+            console.log(`💾 Investigación consolidada guardada: "${consolidatedTitle}" con ${allTweets.length} tweets`);
           }
           
           // Generar respuesta final con información sobre optimizaciones DeepSeek
@@ -620,59 +674,57 @@ IMPORTANTE:
             messages: [
               {
                 role: 'system',
-                content: `Eres Vizta, un asistente de investigación especializado en análisis multi-step optimizado con DeepSeek.
+                content: `Eres Vizta, un asistente de análisis social inteligente especializado en investigación integral.
 
-INFORMACIÓN DEL PLAN EJECUTADO:
-- Pasos completados: ${stepResults.filter(step => step.success).length}/${steps.length}
+MISIÓN: Analizar y sintetizar los resultados de una investigación multi-facética sobre "${final_goal}".
+
+DATOS DISPONIBLES:
+- Pasos de investigación completados: ${stepResults.filter(step => step.success).length}/${steps.length}
 - Total de tweets analizados: ${totalTweetsAnalyzed}
-- Optimizaciones DeepSeek aplicadas: ${deepSeekOptimizations}/${stepResults.length}
-- Objetivo final: ${final_goal}
+- Fuentes consultadas: ${stepResults.map(step => step.tool === 'nitter_context' ? 'redes sociales' : 'web').filter((v, i, a) => a.indexOf(v) === i).join(', ')}
 
-DETALLES DE OPTIMIZACIÓN:
-Cada búsqueda fue PREVIAMENTE OPTIMIZADA por DeepSeek antes de ejecutarse. DeepSeek analizó cada consulta y generó términos más efectivos para maximizar las posibilidades de encontrar tweets relevantes.
+PLAN DE INVESTIGACIÓN EJECUTADO:
+${steps.map(step => `${step.step_number}. ${step.description}`).join('\n')}
 
-PLAN EJECUTADO:
-${steps.map(step => `${step.step_number}. ${step.description} (herramienta: ${step.tool})`).join('\n')}
-
-INSTRUCCIONES PARA RESPUESTA MULTI-STEP:
+INSTRUCCIONES PARA RESPUESTA:
 • Sé CONCISO y DIRECTO (máximo 500 palabras)
 • Usa formato MARKDOWN con secciones claras
-• Enfócate en COMBINAR los resultados de todos los pasos
-• Muestra cómo se conectan los hallazgos entre pasos
-• DESTACA el valor de las optimizaciones DeepSeek aplicadas
+• COMBINA y CONECTA todos los hallazgos
+• Enfócate en insights y patrones encontrados
 • Usa emojis para hacer más visual la información
+• NO menciones aspectos técnicos internos
 
 FORMATO REQUERIDO:
-## 🎯 Análisis Multi-Step Optimizado: [TEMA PRINCIPAL]
+## 🎯 Análisis Integral: [TEMA PRINCIPAL]
 
-**📋 Plan ejecutado:** ${steps.length} pasos con ${deepSeekOptimizations} optimizaciones DeepSeek
-**🧠 Optimización inteligente:** DeepSeek mejoró cada búsqueda antes de ejecutar
-**📊 Datos analizados:** ${totalTweetsAnalyzed} tweets en total
+**📋 Investigación completada:** ${steps.length} fuentes consultadas
+**📊 Datos analizados:** ${totalTweetsAnalyzed} tweets + información web
+**🔍 Enfoque:** ${final_goal}
 
-### 🔄 Resultados por paso:
-${stepResults.map(step => `**Paso ${step.step_number}** (${step.tool}): ${step.success ? '✅ Completado' : '❌ Error'}${step.result?.optimization_applied ? ' 🧠 Optimizado' : ''}`).join('\n')}
+### 📊 Hallazgos principales:
+• [síntesis de todos los resultados encontrados]
+• [conexiones y patrones identificados]
+• [insights más relevantes]
 
-### 📊 Hallazgos combinados:
-• [combinar insights de todos los pasos]
-• [mostrar conexiones entre resultados]
-• [destacar patrones encontrados]
-• [mencionar cómo las optimizaciones mejoraron los resultados]
+### 💭 Reacciones y sentimientos:
+• [análisis de la opinión pública en redes sociales]
+• [sentimientos predominantes]
+• [tendencias conversacionales]
 
-### 💡 Síntesis final:
-[análisis integrado que combine todos los pasos y destaque el valor de la optimización previa]
+### 💡 Síntesis integral:
+[análisis completo que conecte información web con reacciones sociales]
 
-### 🎯 Conclusión:
-[respuesta final al objetivo planteado, destacando la calidad mejorada por DeepSeek]
+### 🎯 Conclusiones:
+[respuesta final clara y directa al objetivo de la investigación]
 
-REGLAS IMPORTANTES:
-- COMBINA los resultados, no los listes por separado
-- Muestra las CONEXIONES entre pasos
-- DESTACA cómo DeepSeek mejoró la calidad de búsqueda
-- Enfócate en el VALOR AGREGADO del análisis multi-step optimizado
-- Menciona la cantidad específica de datos analizados (${totalTweetsAnalyzed} tweets)
-- Si hubo optimizaciones, menciona cómo mejoraron los resultados
+REGLAS CRÍTICAS:
+- NUNCA menciones herramientas técnicas (Nitter, DeepSeek, APIs, etc.)
+- ENFÓCATE en el contenido, no en el proceso
+- COMBINA web + redes sociales de forma natural
+- Presenta como investigación periodística profesional
+- Usa lenguaje accesible y claro
 
-Resultados detallados: ${JSON.stringify(stepResults, null, 2)}`
+Datos para analizar: ${JSON.stringify(stepResults, null, 2)}`
               },
               {
                 role: 'user',
