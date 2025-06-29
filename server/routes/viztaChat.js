@@ -194,6 +194,11 @@ router.post('/query', verifyUserAccess, async (req, res) => {
         if (param.max !== undefined) properties[key].maximum = param.max;
         if (param.default !== undefined) properties[key].default = param.default;
         
+        // Para arrays, agregar definición de items
+        if (param.type === 'array' && param.items) {
+          properties[key].items = param.items;
+        }
+        
         // Agregar a required si es necesario
         if (param.required === true) {
           required.push(key);

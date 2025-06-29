@@ -127,7 +127,7 @@ async function getUserCodex(userId, options = {}) {
       .from('codex_items')
       .select(`
         id,
-        name,
+        title,
         content,
         type,
         tags,

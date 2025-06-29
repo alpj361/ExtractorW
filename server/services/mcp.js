@@ -403,7 +403,10 @@ const AVAILABLE_TOOLS = {
       tags: {
         type: 'array',
         required: false,
-        description: 'Filtrar por tags específicos (array de strings)'
+        description: 'Filtrar por tags específicos (array de strings)',
+        items: {
+          type: 'string'
+        }
       }
     },
     service_endpoint: '/api/user_codex',
