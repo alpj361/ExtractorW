@@ -456,6 +456,58 @@ async function getGroupedStats(userId) {
   }
 }
 
+/**
+ * Elimina un scrape específico del usuario
+ * @param {string} scrapeId - ID del scrape a eliminar
+ * @param {string} userId - ID del usuario (para verificar propiedad)
+ * @returns {Object} Resultado de la operación
+ */
+async function deleteScrape(scrapeId, userId) {
+  try {
+    console.log(`🗑️ Eliminando scrape ${scrapeId} del usuario ${userId}`);
+
+    // Verificar que el scrape existe y pertenece al usuario
+    const { data: scrape, error: fetchError } = await supabase
+      .from('recent_scrapes')
+      .select('id, user_id, query_original')
+      .eq('id', scrapeId)
+      .eq('user_id', userId)
+      .single();
+
+    if (fetchError) {
+      if (fetchError.code === 'PGRST116') {
+        throw new Error('Scrape no encontrado o no tienes permisos para eliminarlo');
+      }
+      throw new Error(`Error verificando scrape: ${fetchError.message}`);
+    }
+
+    // Eliminar el scrape
+    const { error: deleteError } = await supabase
+      .from('recent_scrapes')
+      .delete()
+      .eq('id', scrapeId)
+      .eq('user_id', userId);
+
+    if (deleteError) {
+      throw new Error(`Error eliminando scrape: ${deleteError.message}`);
+    }
+
+    console.log(`✅ Scrape eliminado exitosamente: "${scrape.query_original}"`);
+    return {
+      success: true,
+      message: 'Scrape eliminado exitosamente',
+      deletedScrape: {
+        id: scrapeId,
+        query_original: scrape.query_original
+      }
+    };
+
+  } catch (error) {
+    console.error('❌ Error eliminando scrape:', error);
+    throw error;
+  }
+}
+
 module.exports = {
   saveScrape,
   getUserScrapes,
@@ -463,5 +515,6 @@ module.exports = {
   getSessionScrapes,
   cleanupOldScrapes,
   getGroupedScrapes,
-  getGroupedStats
+  getGroupedStats,
+  deleteScrape
 }; 

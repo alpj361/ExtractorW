@@ -1112,4 +1112,52 @@ router.get('/scrapes/grouped-stats', verifyUserAccess, async (req, res) => {
   }
 });
 
+/**
+ * DELETE /api/vizta-chat/scrapes/:scrapeId
+ * Eliminar un scrape específico del usuario
+ */
+router.delete('/scrapes/:scrapeId', verifyUserAccess, async (req, res) => {
+  try {
+    const { scrapeId } = req.params;
+    const userId = req.user.id;
+
+    // Validar parámetros
+    if (!scrapeId || scrapeId.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'ID del scrape es requerido'
+      });
+    }
+
+    console.log(`🗑️ Solicitud de eliminación de scrape ${scrapeId} por usuario ${userId}`);
+
+    // Eliminar scrape usando el servicio
+    const result = await recentScrapesService.deleteScrape(scrapeId.trim(), userId);
+
+    res.json({
+      success: true,
+      message: result.message,
+      deletedScrape: result.deletedScrape,
+      deletedAt: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Error eliminando scrape:', error);
+    
+    // Manejar errores específicos
+    if (error.message.includes('no encontrado') || error.message.includes('no tienes permisos')) {
+      return res.status(404).json({
+        success: false,
+        message: error.message
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando scrape',
+      error: error.message
+    });
+  }
+});
+
 module.exports = router; 
