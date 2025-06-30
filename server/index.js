@@ -16,7 +16,8 @@ const defaultOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
   'https://qqshdccpmypelhmyqnut.supabase.co',
-  'https://jornal.standatpd.com' // Dominio de producción del frontend
+  'https://jornal.standatpd.com', // Dominio de producción del frontend original
+  'https://hablams.org' // Nuevo dominio del frontend añadido
 ];
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS

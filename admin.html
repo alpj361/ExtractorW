@@ -53,6 +53,31 @@
         .text-gold-800 {
             color: #92400e;
         }
+
+        /* TextShimmer animations */
+        @keyframes shimmer {
+            0% { background-position: 100% center; }
+            100% { background-position: 0% center; }
+        }
+
+        .text-shimmer {
+            background: linear-gradient(90deg, 
+                transparent calc(50% - var(--spread, 20px)), 
+                currentColor, 
+                transparent calc(50% + var(--spread, 20px))
+            ), 
+            linear-gradient(currentColor, currentColor);
+            background-size: 250% 100%, auto;
+            background-repeat: no-repeat;
+            background-clip: text;
+            -webkit-background-clip: text;
+            color: transparent;
+            animation: shimmer var(--duration, 2s) linear infinite;
+        }
+
+        .chat-container {
+            height: calc(100vh - 80px);
+        }
     </style>
 </head>
 <body class="bg-gray-50">
@@ -68,7 +93,39 @@
     </div>
 
     <script type="text/babel">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useRef } = React;
+
+        // TextShimmer Component
+        function TextShimmer({ children, className = "", duration = 2, spread = 2 }) {
+            const dynamicSpread = children.length * spread;
+            
+            return React.createElement('span', {
+                className: `text-shimmer ${className}`,
+                style: {
+                    '--spread': `${dynamicSpread}px`,
+                    '--duration': `${duration}s`
+                }
+            }, children);
+        }
+
+        // Card Component
+        function Card({ children, className = "" }) {
+            return React.createElement('div', {
+                className: `bg-white border border-gray-200 rounded-lg shadow-sm ${className}`
+            }, children);
+        }
+
+        // Badge Component
+        function Badge({ children, variant = "default", className = "" }) {
+            const variants = {
+                default: "bg-gray-100 text-gray-800",
+                outline: "border border-gray-300 bg-transparent"
+            };
+            
+            return React.createElement('span', {
+                className: `inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${variants[variant]} ${className}`
+            }, children);
+        }
 
         // Verificación de autenticación de administrador
         const checkAdminAuth = async () => {
