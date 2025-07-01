@@ -317,5 +317,6 @@ module.exports = {
   getDepartmentForCity,
   getCitiesForDepartment,
   isCityInDepartment,
-  normalizeGeographicInfo
+  normalizeGeographicInfo,
+  DEPARTMENTS: Object.keys(GUATEMALA_GEOGRAPHY)
 }; 

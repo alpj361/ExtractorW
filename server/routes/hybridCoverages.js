@@ -8,6 +8,7 @@ const router = express.Router();
 const { verifyUserAccess } = require('../middlewares/auth');
 const hybridGeoService = require('../services/hybridGeographicAI');
 const { createClient } = require('@supabase/supabase-js');
+const { splitLocations } = require('../utils/geo-splitter');
 
 const supabase = createClient(
     process.env.SUPABASE_URL,
@@ -81,6 +82,33 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
         );
 
         console.log(`📍 Detección completada: ${detectionResults.locations.length} ubicaciones encontradas`);
+
+        // ---------------------------------------------------------------
+        // NUEVO: división de ubicaciones con comas ("Quiché, Baja Verapaz")
+        // ---------------------------------------------------------------
+        const expandedLocations = [];
+
+        for (const loc of detectionResults.locations) {
+            if (loc.name.includes(',')) {
+                const parts = splitLocations(loc.name);
+                parts.forEach(p => {
+                    expandedLocations.push({
+                        ...loc,
+                        name: p.name,
+                        parent_name: p.parent || null,
+                        details: {
+                            ...loc.details,
+                            hierarchy_level: p.type === 'pais' ? 1 : p.type === 'departamento' ? 2 : 3
+                        }
+                    });
+                });
+            } else {
+                expandedLocations.push(loc);
+            }
+        }
+
+        // Reemplazar lista de ubicaciones por la expandida
+        detectionResults.locations = expandedLocations;
 
         // ===================================================================
         // PASO 2: CREAR COBERTURAS EN project_coverages
