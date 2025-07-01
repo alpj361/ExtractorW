@@ -18,8 +18,9 @@ const CACHE_EXPIRY = 24 * 60 * 60 * 1000; // 24 horas
  * Parsea una string de ubicación que puede venir en diferentes formatos
  * Ejemplo: "Antigua, Sacatepéquez" → {city: "Antigua Guatemala", department: "Sacatepéquez"}
  * Ejemplo: "Zacapa, Quiché, Alta Verapaz" → devuelve múltiples ubicaciones separadas
+ * Ejemplo: "El Estor, Livingston, Izabal" → devuelve múltiples municipios del mismo departamento
  * @param {Object} geoInfo - {city, department, pais} información original
- * @returns {Object|Array} - Información parseada. Si detecta múltiples departamentos, devuelve array
+ * @returns {Object|Array} - Información parseada. Si detecta múltiples ubicaciones, devuelve array
  */
 function parseLocationString(geoInfo) {
   let { city, department, pais } = geoInfo;
@@ -31,30 +32,80 @@ function parseLocationString(geoInfo) {
     'Santa Rosa', 'Sololá', 'Suchitepéquez', 'Totonicapán', 'Zacapa'
   ];
   
-  // Si la ciudad contiene comas, analizar el contenido
-  if (city && city.includes(',')) {
-    const parts = city.split(',').map(part => part.trim()).filter(part => part.length > 0);
-    
-    // Verificar cuántas partes son departamentos guatemaltecos
-    const departmentMatches = parts.filter(part => 
-      guatemalanDepartments.some(dept => 
-        dept.toLowerCase() === part.toLowerCase()
-      )
-    );
-    
-    // CASO ESPECIAL: Múltiples departamentos (como "Zacapa, Quiché, Alta Verapaz")
-    if (departmentMatches.length > 1) {
-      console.log(`🔍 Detectados múltiples departamentos: "${geoInfo.city}" → ${departmentMatches.join(', ')}`);
-      
-      // Devolver array de ubicaciones separadas, una por cada departamento
-      return departmentMatches.map(dept => ({
-        city: null,
-        department: dept,
-        pais: pais || 'Guatemala',
-        _isMultiDepartment: true,
-        _originalString: geoInfo.city
-      }));
-    }
+  // Algunos municipios conocidos de Guatemala para mejor detección
+  const knownMunicipalities = [
+    'Livingston', 'El Estor', 'Puerto Barrios', 'Morales', 'Los Amates',
+    'San Agustín Acasaguastlán', 'San Cristóbal Acasaguastlán', 'El Jícaro', 'Morazán',
+    'San Miguel Uspantán', 'Cunén', 'Sacapulas', 'San Andrés Sajcabajá',
+    'Cubulco', 'Salamá', 'San Jerónimo', 'Purulhá', 'Santa Cruz El Chol',
+    'Santa Anita', 'Antigua Guatemala', 'Ciudad Vieja', 'Jocotenango', 'Pastores',
+    'San Antonio Aguas Calientes', 'San Bartolomé Milpas Altas', 'San Lucas Sacatepéquez',
+    'San Miguel Dueñas', 'Santa Catarina Barahona', 'Santa Lucía Milpas Altas',
+    'Santa María de Jesús', 'Santiago Sacatepéquez', 'Santo Domingo Xenacoj', 'Sumpango'
+  ];
+  
+     // Si la ciudad contiene comas, analizar el contenido
+   if (city && city.includes(',')) {
+     const parts = city.split(',').map(part => part.trim()).filter(part => part.length > 0);
+     
+     // Verificar cuántas partes son departamentos guatemaltecos
+     const departmentMatches = parts.filter(part => 
+       guatemalanDepartments.some(dept => 
+         dept.toLowerCase() === part.toLowerCase()
+       )
+     );
+     
+     // Verificar cuántas partes son municipios conocidos
+     const municipalityMatches = parts.filter(part => 
+       knownMunicipalities.some(muni => 
+         muni.toLowerCase() === part.toLowerCase() ||
+         part.toLowerCase().includes(muni.toLowerCase()) ||
+         muni.toLowerCase().includes(part.toLowerCase())
+       )
+     );
+     
+     // CASO ESPECIAL: Múltiples departamentos (como "Zacapa, Quiché, Alta Verapaz")
+     if (departmentMatches.length > 1) {
+       console.log(`🔍 Detectados múltiples departamentos: "${geoInfo.city}" → ${departmentMatches.join(', ')}`);
+       
+       // Devolver array de ubicaciones separadas, una por cada departamento
+       return departmentMatches.map(dept => ({
+         city: null,
+         department: dept,
+         pais: pais || 'Guatemala',
+         _isMultiDepartment: true,
+         _originalString: geoInfo.city
+       }));
+     }
+     
+     // CASO ESPECIAL: Múltiples municipios + departamento (como "El Estor, Livingston, Izabal")
+     else if (municipalityMatches.length > 1 && departmentMatches.length === 1) {
+       console.log(`🔍 Detectados múltiples municipios: "${geoInfo.city}" → ${municipalityMatches.join(', ')} en ${departmentMatches[0]}`);
+       
+       // Devolver array de ubicaciones, una por cada municipio
+       return municipalityMatches.map(municipality => ({
+         city: municipality,
+         department: departmentMatches[0],
+         pais: pais || 'Guatemala',
+         _isMultiMunicipality: true,
+         _originalString: geoInfo.city
+       }));
+     }
+     
+     // CASO ESPECIAL: Múltiples municipios sin departamento explícito
+     else if (municipalityMatches.length > 1 && departmentMatches.length === 0) {
+       console.log(`🔍 Detectados múltiples municipios sin departamento: "${geoInfo.city}" → ${municipalityMatches.join(', ')}`);
+       
+       // Devolver array de ubicaciones, cada municipio se procesará individualmente para detectar departamento
+       return municipalityMatches.map(municipality => ({
+         city: municipality,
+         department: department, // Mantener departamento original si existe
+         pais: pais || 'Guatemala',
+         _isMultiMunicipality: true,
+         _needsDepartmentDetection: true,
+         _originalString: geoInfo.city
+       }));
+     }
     
     // CASO: Exactamente 2 partes - probablemente "ciudad, departamento"
     else if (parts.length === 2 && departmentMatches.length === 1) {
