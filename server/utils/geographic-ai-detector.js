@@ -15,6 +15,120 @@ const geoCache = new Map();
 const CACHE_EXPIRY = 24 * 60 * 60 * 1000; // 24 horas
 
 /**
+ * Parsea una string de ubicación que puede venir en diferentes formatos
+ * Ejemplo: "Antigua, Sacatepéquez" → {city: "Antigua Guatemala", department: "Sacatepéquez"}
+ * Ejemplo: "Zacapa, Quiché, Alta Verapaz" → devuelve múltiples ubicaciones separadas
+ * @param {Object} geoInfo - {city, department, pais} información original
+ * @returns {Object|Array} - Información parseada. Si detecta múltiples departamentos, devuelve array
+ */
+function parseLocationString(geoInfo) {
+  let { city, department, pais } = geoInfo;
+  
+  const guatemalanDepartments = [
+    'Alta Verapaz', 'Baja Verapaz', 'Chimaltenango', 'Chiquimula', 'El Progreso', 
+    'Escuintla', 'Guatemala', 'Huehuetenango', 'Izabal', 'Jalapa', 'Jutiapa', 
+    'Petén', 'Quetzaltenango', 'Quiché', 'Retalhuleu', 'Sacatepéquez', 'San Marcos', 
+    'Santa Rosa', 'Sololá', 'Suchitepéquez', 'Totonicapán', 'Zacapa'
+  ];
+  
+  // Si la ciudad contiene comas, analizar el contenido
+  if (city && city.includes(',')) {
+    const parts = city.split(',').map(part => part.trim()).filter(part => part.length > 0);
+    
+    // Verificar cuántas partes son departamentos guatemaltecos
+    const departmentMatches = parts.filter(part => 
+      guatemalanDepartments.some(dept => 
+        dept.toLowerCase() === part.toLowerCase()
+      )
+    );
+    
+    // CASO ESPECIAL: Múltiples departamentos (como "Zacapa, Quiché, Alta Verapaz")
+    if (departmentMatches.length > 1) {
+      console.log(`🔍 Detectados múltiples departamentos: "${geoInfo.city}" → ${departmentMatches.join(', ')}`);
+      
+      // Devolver array de ubicaciones separadas, una por cada departamento
+      return departmentMatches.map(dept => ({
+        city: null,
+        department: dept,
+        pais: pais || 'Guatemala',
+        _isMultiDepartment: true,
+        _originalString: geoInfo.city
+      }));
+    }
+    
+    // CASO: Exactamente 2 partes - probablemente "ciudad, departamento"
+    else if (parts.length === 2 && departmentMatches.length === 1) {
+      const [possibleCity, possibleDepartment] = parts;
+      const departmentMatch = departmentMatches[0];
+      
+      // Determinar cuál es ciudad y cuál es departamento
+      if (possibleDepartment === departmentMatch) {
+        city = possibleCity;
+        department = possibleDepartment;
+      } else if (possibleCity === departmentMatch) {
+        city = possibleDepartment;
+        department = possibleCity;
+      }
+      
+      console.log(`🔍 Parseado formato "ciudad, departamento": "${geoInfo.city}" → ciudad: "${city}", departamento: "${department}"`);
+    }
+    
+    // CASO: Múltiples partes con un departamento conocido
+    else if (parts.length > 2 && departmentMatches.length === 1) {
+      const departmentMatch = departmentMatches[0];
+      
+      if (!department || department.length < departmentMatch.length) {
+        // Tomar todo lo que no es el departamento como ciudad
+        const cityParts = parts.filter(part => part !== departmentMatch);
+        city = cityParts.join(', ');
+        department = departmentMatch;
+        
+        console.log(`🔍 Parseado formato complejo: "${geoInfo.city}" → ciudad: "${city}", departamento: "${department}"`);
+      }
+    }
+  }
+  
+  // Si el departamento contiene comas, verificar si son múltiples departamentos
+  if (department && department.includes(',')) {
+    const deptParts = department.split(',').map(part => part.trim()).filter(part => part.length > 0);
+    const deptMatches = deptParts.filter(part => 
+      guatemalanDepartments.some(dept => 
+        dept.toLowerCase() === part.toLowerCase()
+      )
+    );
+    
+    if (deptMatches.length > 1) {
+      console.log(`🔍 Detectados múltiples departamentos en campo departamento: "${geoInfo.department}" → ${deptMatches.join(', ')}`);
+      
+      // Devolver array de ubicaciones separadas
+      return deptMatches.map(dept => ({
+        city: city,
+        department: dept,
+        pais: pais || 'Guatemala',
+        _isMultiDepartment: true,
+        _originalString: geoInfo.department
+      }));
+    } else {
+      // Solo limpiar el primer departamento
+      department = deptParts[0];
+      console.log(`🔍 Limpiado departamento: "${geoInfo.department}" → "${department}"`);
+    }
+  }
+  
+  // Si el país contiene comas, tomar solo la primera parte  
+  if (pais && pais.includes(',')) {
+    pais = pais.split(',')[0].trim();
+    console.log(`🔍 Limpiado país: "${geoInfo.pais}" → "${pais}"`);
+  }
+  
+  return {
+    city: city?.trim() || null,
+    department: department?.trim() || null,
+    pais: pais?.trim() || null
+  };
+}
+
+/**
  * Detecta información geográfica usando Gemini AI
  * @param {string} cityName - Nombre de la ciudad
  * @param {string} countryHint - Sugerencia del país (opcional)
@@ -107,13 +221,40 @@ Responde ÚNICAMENTE el JSON, sin markdown ni explicaciones adicionales.`;
  * Normaliza información geográfica usando IA como fuente principal
  * Con fallback al sistema manual para mayor confiabilidad
  * @param {Object} geoInfo - {city, department, pais}
- * @returns {Promise<Object>} - Información normalizada y enriquecida
+ * @returns {Promise<Object|Array>} - Información normalizada. Array si había múltiples departamentos
  */
 async function normalizeGeographicInfoWithAI(geoInfo) {
-  let { city, department, pais } = geoInfo;
+  // PASO 1: Parsear ubicación para separar "ciudad, departamento" correctamente
+  const parsedLocation = parseLocationString(geoInfo);
+  
+  // CASO ESPECIAL: Si parseLocationString devolvió múltiples ubicaciones
+  if (Array.isArray(parsedLocation)) {
+    console.log(`🔄 Procesando múltiples ubicaciones parseadas: ${parsedLocation.length}`);
+    
+    // Procesar cada ubicación por separado
+    const processedLocations = [];
+    for (const location of parsedLocation) {
+      const processed = await normalizeGeographicInfoWithAI(location);
+      processedLocations.push({
+        ...processed,
+        _isFromMultiParse: true,
+        _originalIndex: geoInfo._originalIndex || 0
+      });
+    }
+    return processedLocations;
+  }
+  
+  let { city, department, pais } = parsedLocation;
+  
   let detectionMethod = 'original';
   let confidence = 'high';
   let reasoning = 'Información original proporcionada';
+  
+  // Si hubo cambios en el parseo, marcar como parseado
+  if (parsedLocation.city !== geoInfo.city || parsedLocation.department !== geoInfo.department) {
+    detectionMethod = 'parsed';
+    reasoning = 'Información parseada desde formato compuesto';
+  }
 
   try {
     // Si tenemos ciudad pero no departamento, intentar detectar con IA
@@ -205,7 +346,20 @@ async function batchNormalizeGeography(locations) {
     
     const batchPromises = batch.map(async (location, index) => {
       try {
-        const result = await normalizeGeographicInfoWithAI(location);
+        const result = await normalizeGeographicInfoWithAI({
+          ...location,
+          _originalIndex: i + index
+        });
+        
+        // Si es un array (múltiples departamentos), devolver cada uno con su índice
+        if (Array.isArray(result)) {
+          return result.map((item, subIndex) => ({
+            ...item,
+            original_index: i + index,
+            sub_index: subIndex
+          }));
+        }
+        
         return { ...result, original_index: i + index };
       } catch (error) {
         console.error(`Error procesando ubicación ${i + index}:`, error.message);
@@ -220,7 +374,15 @@ async function batchNormalizeGeography(locations) {
     });
     
     const batchResults = await Promise.all(batchPromises);
-    results.push(...batchResults);
+    
+    // Aplanar resultados que pueden contener arrays
+    for (const result of batchResults) {
+      if (Array.isArray(result)) {
+        results.push(...result);
+      } else {
+        results.push(result);
+      }
+    }
     
     // Pequeña pausa entre lotes para no sobrecargar la API
     if (i + BATCH_SIZE < locations.length) {
@@ -265,6 +427,7 @@ function getCacheStats() {
 }
 
 module.exports = {
+  parseLocationString,
   detectGeographyWithAI,
   normalizeGeographicInfoWithAI,
   batchNormalizeGeography,
