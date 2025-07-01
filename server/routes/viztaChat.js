@@ -902,24 +902,6 @@ Título generado: "${generatedTitle}"`
         detectedGroup = 'general';
       }
 
-      // Guardar en recent_scrapes con título generado y grupo
-      if (toolResult.success && toolResult.tweets) {
-        await recentScrapesService.saveScrape({
-          queryOriginal: message,
-          queryClean: functionArgs.q || message,
-          generatedTitle: generatedTitle,
-          detectedGroup: detectedGroup,
-          herramienta: functionName,
-          categoria: 'General',
-          tweets: toolResult.tweets,
-          userId: userId,
-          sessionId: chatSessionId,
-          mcpRequestId: requestId,
-          mcpExecutionTime: executionTime,
-          location: functionArgs.location || 'guatemala'
-        });
-      }
-
       // Generar respuesta final con contexto
       const finalCompletion = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
