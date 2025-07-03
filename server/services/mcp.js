@@ -757,8 +757,17 @@ async function executeNitterContext(query, location = 'guatemala', limit = 10, s
       throw new Error('Usuario autenticado requerido para ejecutar nitter_context');
     }
     
-    // PASO 1: OPTIMIZACIÓN INTELIGENTE CON DEEPSEEK
-    const deepSeekOptimization = await optimizeSearchWithDeepSeek(query, location, user);
+    // Permitir desactivar DeepSeek a través de la variable de entorno DISABLE_DEEPSEEK.
+    // Si DISABLE_DEEPSEEK === 'true', saltamos la optimización y usamos la consulta original.
+    const deepSeekOptimization = process.env.DISABLE_DEEPSEEK === 'true'
+      ? {
+          optimized: false,
+          final_query: query,
+          strategy: 'disabled',
+          reasoning: null,
+          success_probability: null
+        }
+      : await optimizeSearchWithDeepSeek(query, location, user);
     
     // PASO 2: EXPANSIÓN ESTÁNDAR como backup
     const standardExpansion = expandSearchTerms(query);

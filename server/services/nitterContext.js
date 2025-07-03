@@ -372,6 +372,18 @@ async function processNitterContext(query, userId, sessionId, location = 'guatem
     // 2. Determinar categoría del query
     const categoria = categorizeTrend(query);
     console.log(`🏷️ Categoría detectada: ${categoria}`);
+
+    // 2b. Mapear categoría a grupo detectado para agrupaciones inteligentes
+    const groupMapping = {
+      'Política': 'politica-guatemala',
+      'Económica': 'economia-guatemala',
+      'Sociales': 'social-guatemala',
+      'Tecnología': 'tecnologia',
+      'Deportes': 'deportes-guatemala',
+      'General': 'general'
+    };
+    const detectedGroup = groupMapping[categoria] || 'general';
+    console.log(`🏷️ Grupo detectado (mapeo): ${detectedGroup}`);
     
     // 3. Analizar cada tweet y guardarlo individualmente en recent_scrapes
     const processedTweets = [];
@@ -398,6 +410,7 @@ async function processNitterContext(query, userId, sessionId, location = 'guatem
           query_clean: query.trim(),
           herramienta: 'nitter_context',
           categoria: categoria,
+          detected_group: detectedGroup,
           tweet_id: tweet.tweet_id,
           usuario: tweet.usuario,
           fecha_tweet: parseNitterDate(tweet.fecha),
@@ -485,6 +498,7 @@ async function processNitterContext(query, userId, sessionId, location = 'guatem
         query_clean: query.trim(),
         herramienta: 'nitter_context',
         categoria: categoria,
+        detected_group: detectedGroup,
         tweet_count: processedTweets.length,
         total_engagement: totalEngagement,
         avg_engagement: avgEngagement,
@@ -531,6 +545,7 @@ async function processNitterContext(query, userId, sessionId, location = 'guatem
       data: {
         query: query,
         categoria: categoria,
+        detected_group: detectedGroup,
         tweets_found: processedTweets.length,
         tweets_saved: savedCount,
         total_engagement: totalEngagement,
