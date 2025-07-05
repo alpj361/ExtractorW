@@ -200,7 +200,7 @@ async function saveTranscriptionToCodex(
       tipo: originalFileType,
       titulo: metadata.titulo || `Transcripción: ${originalFileName}`,
       descripcion: metadata.descripcion || `Transcripción automática de ${originalFileType === 'video' ? 'video' : 'audio'} generada con Gemini AI. ${transcriptionResult.metadata.wordsCount} palabras, ${transcriptionResult.metadata.charactersCount} caracteres.`,
-      etiquetas: options.noAutoTags ? (metadata.etiquetas || []) : [
+      etiquetas: metadata.noAutoTags ? (metadata.etiquetas || []) : [
         'transcripcion',
         'audio',
         originalFileType,
@@ -228,7 +228,7 @@ async function saveTranscriptionToCodex(
       };
       
       // Solo actualizar etiquetas si no está deshabilitado
-      if (!options.noAutoTags) {
+      if (!metadata.noAutoTags) {
         updateData.etiquetas = codexItemData.etiquetas;
       }
       
