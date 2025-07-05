@@ -290,8 +290,7 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                             .from('codex_items')
                             .update({
                                 descripcion: item.descripcion ? `${item.descripcion}\n\n[ANÁLISIS BÁSICO]\n${basicAnalysis}` : basicAnalysis,
-                                etiquetas: updatedTags,
-                                updated_at: new Date().toISOString()
+                                etiquetas: updatedTags
                             })
                             .eq('id', item.id);
                         
@@ -361,8 +360,7 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                         .from('codex_items')
                         .update({
                             descripcion: item.descripcion ? `${item.descripcion}${finalAnalysis}` : finalAnalysis.trim(),
-                            etiquetas: updatedTags,
-                            updated_at: new Date().toISOString()
+                            etiquetas: updatedTags
                         })
                         .eq('id', item.id);
                     
@@ -429,7 +427,7 @@ router.get('/pending-stats', verifyUserAccess, async (req, res) => {
         
         const { data: pendingItems, error } = await supabase
             .from('codex_items')
-            .select('url, titulo, created_at')
+            .select('id, url, titulo, created_at')
             .eq('user_id', userId)
             .eq('tipo', 'enlace')
             .contains('etiquetas', ['pendiente-analisis']);
