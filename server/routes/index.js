@@ -8,6 +8,7 @@ const mcpRoutes = require('./mcp');
 const viztaChatRoutes = require('./viztaChat');
 const hybridCoveragesRoutes = require('./hybridCoverages');
 const nitterContextRoutes = require('./nitterContext');
+const pendingAnalysisRoutes = require('./pendingAnalysis');
 const path = require('path');
 const capturadosRoutes = require('./capturados');
 const coveragesRoutes = require('./coverages');
@@ -70,6 +71,9 @@ function setupRoutes(app) {
   
   // Configurar rutas de Nitter Context (herramienta de análisis de tweets)
   app.use('/api', nitterContextRoutes);
+  
+  // Configurar rutas de análisis de enlaces pendientes
+  app.use('/api/pending-analysis', pendingAnalysisRoutes);
 }
 
 module.exports = {

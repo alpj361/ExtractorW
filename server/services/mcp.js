@@ -757,17 +757,15 @@ async function executeNitterContext(query, location = 'guatemala', limit = 10, s
       throw new Error('Usuario autenticado requerido para ejecutar nitter_context');
     }
     
-    // Permitir desactivar DeepSeek a través de la variable de entorno DISABLE_DEEPSEEK.
-    // Si DISABLE_DEEPSEEK === 'true', saltamos la optimización y usamos la consulta original.
-    const deepSeekOptimization = process.env.DISABLE_DEEPSEEK === 'true'
-      ? {
-          optimized: false,
-          final_query: query,
-          strategy: 'disabled',
-          reasoning: null,
-          success_probability: null
-        }
-      : await optimizeSearchWithDeepSeek(query, location, user);
+    // Desactivar completamente la optimización con DeepSeek.
+    // Siempre usaremos expansión estándar; se mantiene la estructura para no romper referencias posteriores.
+    const deepSeekOptimization = {
+      optimized: false,
+      final_query: query,
+      strategy: 'disabled',
+      reasoning: null,
+      success_probability: null
+    };
     
     // PASO 2: EXPANSIÓN ESTÁNDAR como backup
     const standardExpansion = expandSearchTerms(query);
