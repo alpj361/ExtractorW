@@ -200,7 +200,7 @@ async function saveTranscriptionToCodex(
       tipo: originalFileType,
       titulo: metadata.titulo || `Transcripción: ${originalFileName}`,
       descripcion: metadata.descripcion || `Transcripción automática de ${originalFileType === 'video' ? 'video' : 'audio'} generada con Gemini AI. ${transcriptionResult.metadata.wordsCount} palabras, ${transcriptionResult.metadata.charactersCount} caracteres.`,
-      etiquetas: [
+      etiquetas: options.noAutoTags ? (metadata.etiquetas || []) : [
         'transcripcion',
         'audio',
         originalFileType,
@@ -221,14 +221,20 @@ async function saveTranscriptionToCodex(
     let codexData, codexError;
     if (updateItemId) {
       console.log(`📝 Actualizando item existente ${updateItemId} con transcripción...`);
+      const updateData = {
+        audio_transcription: codexItemData.audio_transcription,
+        descripcion: codexItemData.descripcion,
+        nombre_archivo: codexItemData.nombre_archivo
+      };
+      
+      // Solo actualizar etiquetas si no está deshabilitado
+      if (!options.noAutoTags) {
+        updateData.etiquetas = codexItemData.etiquetas;
+      }
+      
       ({ data: codexData, error: codexError } = await supabaseClient
         .from('codex_items')
-        .update({
-          audio_transcription: codexItemData.audio_transcription,
-          descripcion: codexItemData.descripcion,
-          nombre_archivo: codexItemData.nombre_archivo,
-          etiquetas: codexItemData.etiquetas
-        })
+        .update(updateData)
         .eq('id', updateItemId)
         .select()
         .single());

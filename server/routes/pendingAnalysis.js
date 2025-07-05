@@ -28,7 +28,7 @@ function isMediaUrl(url) {
 
 // Función para descargar medios desde ExtractorT
 async function downloadMediaFromUrl(url) {
-    const extractorTUrl = process.env.EXTRACTORT_URL || 'http://localhost:8000';
+    const extractorTUrl = process.env.EXTRACTORT_URL || 'https://api.standatpd.com';
     
     try {
         console.log(`📥 Descargando medios desde: ${url}`);
@@ -90,7 +90,8 @@ async function processDownloadedFile(filePath, fileName, userId) {
             // Transcribir audio/video
             console.log(`🎵 Transcribiendo archivo de audio/video: ${fileName}`);
             const transcriptionResult = await transcribeFile(filePath, userId, {
-                updateExistingItem: false // No crear nuevo item, solo obtener transcripción
+                updateExistingItem: false, // No crear nuevo item, solo obtener transcripción
+                noAutoTags: true // No crear etiquetas automáticamente
             });
             
             return {
@@ -210,14 +211,10 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                         }
                         
                         // Actualizar item con análisis básico
-                        const updatedTags = item.etiquetas.filter(tag => tag !== 'pendiente-analisis');
-                        updatedTags.push('analizado');
-                        
                         const { error: updateError } = await supabase
                             .from('codex_items')
                             .update({
-                                descripcion: item.descripcion ? `${item.descripcion}\n\n[ANÁLISIS BÁSICO]\n${basicAnalysis}` : basicAnalysis,
-                                etiquetas: updatedTags
+                                descripcion: item.descripcion ? `${item.descripcion}\n\n[ANÁLISIS BÁSICO]\n${basicAnalysis}` : basicAnalysis
                             })
                             .eq('id', item.id);
                         
@@ -282,14 +279,10 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                         }
                         
                         // Actualizar con análisis básico
-                        const updatedTags = item.etiquetas.filter(tag => tag !== 'pendiente-analisis');
-                        updatedTags.push('analizado');
-                        
                         const { error: updateError } = await supabase
                             .from('codex_items')
                             .update({
-                                descripcion: item.descripcion ? `${item.descripcion}\n\n[ANÁLISIS BÁSICO]\n${basicAnalysis}` : basicAnalysis,
-                                etiquetas: updatedTags
+                                descripcion: item.descripcion ? `${item.descripcion}\n\n[ANÁLISIS BÁSICO]\n${basicAnalysis}` : basicAnalysis
                             })
                             .eq('id', item.id);
                         
@@ -352,14 +345,10 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                 
                 if (!dryRun) {
                     // Actualizar item con análisis multimedia
-                    const updatedTags = item.etiquetas.filter(tag => tag !== 'pendiente-analisis');
-                    updatedTags.push('analizado');
-                    
                     const { error: updateError } = await supabase
                         .from('codex_items')
                         .update({
-                            descripcion: item.descripcion ? `${item.descripcion}${finalAnalysis}` : finalAnalysis.trim(),
-                            etiquetas: updatedTags
+                            descripcion: item.descripcion ? `${item.descripcion}${finalAnalysis}` : finalAnalysis.trim()
                         })
                         .eq('id', item.id);
                     
