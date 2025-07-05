@@ -4,8 +4,8 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const { transcribeFile } = require('../services/transcription');
-const { checkCredits, debitCredits } = require('../middlewares/credits');
-const { requireAuth } = require('../middlewares/auth');
+const { checkCreditsFunction, debitCreditsFunction } = require('../middlewares/credits');
+const { verifyUserAccess } = require('../middlewares/auth');
 const supabase = require('../utils/supabase');
 
 // Función para detectar si una URL es multimedia (videos, imágenes, etc.)
@@ -124,9 +124,9 @@ async function processDownloadedFile(filePath, fileName, userId) {
 }
 
 // Endpoint principal para analizar enlaces pendientes
-router.post('/analyze-pending-links', requireAuth, async (req, res) => {
+router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
     try {
-        const { userId } = req.user;
+        const userId = req.user.id;
         const { 
             itemIds = null, // IDs específicos a procesar (opcional)
             processAll = false, // Si procesar todos los pendientes
@@ -198,7 +198,7 @@ router.post('/analyze-pending-links', requireAuth, async (req, res) => {
                     
                     if (!dryRun) {
                         // Verificar créditos (5 créditos para análisis básico)
-                        const creditsCheck = await checkCredits(userId, 5);
+                        const creditsCheck = await checkCreditsFunction(userId, 5);
                         if (!creditsCheck.hasCredits) {
                             results.push({
                                 itemId: item.id,
@@ -227,7 +227,7 @@ router.post('/analyze-pending-links', requireAuth, async (req, res) => {
                         }
                         
                         // Debitar créditos
-                        await debitCredits(userId, 5, 'basic_link_analysis', { itemId: item.id, url });
+                        await debitCreditsFunction(userId, 5, 'basic_link_analysis', { itemId: item.id, url });
                         totalCreditsUsed += 5;
                     }
                     
@@ -248,7 +248,7 @@ router.post('/analyze-pending-links', requireAuth, async (req, res) => {
                 
                 if (!dryRun) {
                     // Verificar créditos (25 créditos para multimedia)
-                    const creditsCheck = await checkCredits(userId, 25);
+                    const creditsCheck = await checkCreditsFunction(userId, 25);
                     if (!creditsCheck.hasCredits) {
                         results.push({
                             itemId: item.id,
@@ -271,7 +271,7 @@ router.post('/analyze-pending-links', requireAuth, async (req, res) => {
                     
                     if (!dryRun) {
                         // Verificar créditos para análisis básico
-                        const creditsCheck = await checkCredits(userId, 5);
+                        const creditsCheck = await checkCreditsFunction(userId, 5);
                         if (!creditsCheck.hasCredits) {
                             results.push({
                                 itemId: item.id,
@@ -300,7 +300,7 @@ router.post('/analyze-pending-links', requireAuth, async (req, res) => {
                         }
                         
                         // Debitar créditos básicos
-                        await debitCredits(userId, 5, 'basic_link_analysis', { itemId: item.id, url });
+                        await debitCreditsFunction(userId, 5, 'basic_link_analysis', { itemId: item.id, url });
                         totalCreditsUsed += 5;
                     }
                     
@@ -371,7 +371,7 @@ router.post('/analyze-pending-links', requireAuth, async (req, res) => {
                     }
                     
                     // Debitar créditos multimedia
-                    await debitCredits(userId, 25, 'multimedia_analysis', { 
+                    await debitCreditsFunction(userId, 25, 'multimedia_analysis', { 
                         itemId: item.id, 
                         url,
                         filesProcessed: downloadResult.files.length
@@ -423,9 +423,9 @@ router.post('/analyze-pending-links', requireAuth, async (req, res) => {
 });
 
 // Endpoint para obtener estadísticas de enlaces pendientes
-router.get('/pending-stats', requireAuth, async (req, res) => {
+router.get('/pending-stats', verifyUserAccess, async (req, res) => {
     try {
-        const { userId } = req.user;
+        const userId = req.user.id;
         
         const { data: pendingItems, error } = await supabase
             .from('codex_items')
