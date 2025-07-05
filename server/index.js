@@ -1,6 +1,9 @@
 // Import Sentry first - must be before any other imports
 const Sentry = require('../instrument');
 
+// Cargar variables de entorno
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
@@ -55,6 +58,7 @@ console.log('OPENAI_API_KEY configurada:', !!process.env.OPENAI_API_KEY);
 console.log('OPENAI_ORG_ID configurada:', !!process.env.OPENAI_ORG_ID);
 console.log('SUPABASE_URL configurada:', !!process.env.SUPABASE_URL);
 console.log('SUPABASE_ANON_KEY configurada:', !!process.env.SUPABASE_ANON_KEY);
+console.log('EXTRACTORT_URL configurada:', process.env.EXTRACTORT_URL || 'http://localhost:8000 (default)');
 
 // Iniciar el servidor
 const PORT = process.env.PORT || 8080;

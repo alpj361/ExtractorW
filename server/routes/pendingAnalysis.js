@@ -217,8 +217,7 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                             .from('codex_items')
                             .update({
                                 descripcion: item.descripcion ? `${item.descripcion}\n\n[ANÁLISIS BÁSICO]\n${basicAnalysis}` : basicAnalysis,
-                                etiquetas: updatedTags,
-                                updated_at: new Date().toISOString()
+                                etiquetas: updatedTags
                             })
                             .eq('id', item.id);
                         
