@@ -16,7 +16,7 @@ El Sistema de Análisis Automático de Enlaces Multimedia es una integración co
 
 2. **ExtractorT (Scraper y Descarga)**
    - Servicio de descarga de medios
-   - Soporte para múltiples plataformas (Twitter, YouTube, Instagram, etc.)
+   - Soporte para una plataforma(Twitter)
    - Descarga temporal de archivos multimedia
 
 3. **PulseJ (Frontend)**

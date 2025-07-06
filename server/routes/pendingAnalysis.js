@@ -28,50 +28,80 @@ function isMediaUrl(url) {
 
 // Función para descargar medios desde ExtractorT
 async function downloadMediaFromUrl(url) {
-    const extractorTUrl = process.env.EXTRACTORT_URL || 'https://api.standatpd.com';
-    
-    try {
-        console.log(`📥 Descargando medios desde: ${url}`);
-        
-        // Llamar al endpoint de media downloader de ExtractorT
-        const response = await axios.get(`${extractorTUrl}/media/download`, {
-            params: {
+    const candidateBaseUrls = [];
+
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    // 1) URL explícita de entorno LOCAL (tiene prioridad absoluta si existe)
+    if (process.env.EXTRACTORT_LOCAL_URL) {
+        candidateBaseUrls.push(process.env.EXTRACTORT_LOCAL_URL);
+    }
+
+    // 2) Servicio interno docker-compose (ExtractorW y ExtractorT misma red)
+    candidateBaseUrls.push('http://extractor_api:8000');
+
+    // 3) Puerto publicado al host (cuando ExtractorT corre en Docker y ExtractorW fuera de Docker)
+    candidateBaseUrls.push('http://localhost:8000');
+
+    // 4) Gateway especial hacia el host desde un contenedor (ExtractorW dentro de Docker)
+    candidateBaseUrls.push('http://host.docker.internal:8000');
+
+    // 5) URL de producción (solo si estamos en producción o no hay otra opción)
+    if (isProduction && process.env.EXTRACTORT_URL) {
+        candidateBaseUrls.push(process.env.EXTRACTORT_URL);
+    } else if (!isProduction && process.env.EXTRACTORT_URL) {
+        // Colocar al final como último recurso
+        candidateBaseUrls.push(process.env.EXTRACTORT_URL);
+    }
+
+    console.log('🔗 URLs candidatas ExtractorT:', candidateBaseUrls.join(' | '));
+
+    // Iterar sobre las URLs candidatas hasta que una funcione
+    for (const baseUrl of candidateBaseUrls) {
+        try {
+            console.log(`📥 Descargando medios desde: ${url} vía ${baseUrl}`);
+
+            const response = await axios.post(`${baseUrl.replace(/\/$/, '')}/download_media`, {
                 tweet_url: url,
                 download_videos: true,
-                download_images: true,
+                download_images: false,
                 quality: 'medium'
-            },
-            timeout: 60000 // 60 segundos timeout
-        });
-        
-        if (response.data.status === 'success' && response.data.downloaded_files.length > 0) {
-            console.log(`✅ Descarga exitosa: ${response.data.downloaded_files.length} archivos`);
-            return {
-                success: true,
-                files: response.data.downloaded_files,
-                message: response.data.message
-            };
-        } else {
-            console.log(`⚠️ Sin archivos descargados: ${response.data.message}`);
-            return {
-                success: false,
-                files: [],
-                message: response.data.message || 'No se encontraron archivos multimedia'
-            };
+            }, {
+                timeout: 60000,
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            // Extraer campos relevantes considerando la nueva estructura { status, message, data }
+            const { status, message: respMessage, data: respData } = response.data || {};
+            const downloadedFiles = respData?.downloaded_files || respData?.files || response.data.downloaded_files || [];
+
+            if (status === 'success' && downloadedFiles.length > 0) {
+                console.log(`✅ Descarga exitosa (${downloadedFiles.length} archivos) usando ${baseUrl}`);
+                return {
+                    success: true,
+                    files: downloadedFiles,
+                    message: respMessage,
+                    baseUrl
+                };
+            } else {
+                console.warn(`⚠️ Descarga sin archivos desde ${baseUrl}: ${respMessage || 'Sin mensaje'}`);
+            }
+        } catch (err) {
+            console.warn(`⚠️ Fallo al intentar ${baseUrl}: ${err.message}`);
+            // Continúa con la siguiente URL candidata
         }
-        
-    } catch (error) {
-        console.error(`❌ Error descargando medios: ${error.message}`);
-        return {
-            success: false,
-            files: [],
-            message: `Error al descargar medios: ${error.message}`
-        };
     }
+
+    // Si llegamos aquí ninguna URL funcionó
+    return {
+        success: false,
+        files: [],
+        message: 'No se pudo descargar medios desde ninguna instancia de ExtractorT'
+    };
 }
 
 // Función para procesar un archivo descargado
-async function processDownloadedFile(filePath, fileName, userId) {
+async function processDownloadedFile(filePath, fileName, userId, itemId) {
     try {
         console.log(`🔄 Procesando archivo: ${fileName}`);
         
@@ -80,8 +110,16 @@ async function processDownloadedFile(filePath, fileName, userId) {
             throw new Error(`Archivo no encontrado: ${filePath}`);
         }
         
-        // Detectar el tipo de archivo
-        const fileExt = path.extname(fileName).toLowerCase();
+        // Limpiar nombre de archivo (quitar query params y decodificar)
+        let cleanName = fileName;
+        try {
+            cleanName = decodeURIComponent(fileName);
+        } catch {}
+        if (cleanName.includes('?')) {
+            cleanName = cleanName.split('?')[0];
+        }
+        // Algunos nombres vienen con %3fname%3dsmall... ya decodificado lo anterior elimina parte posterior
+        const fileExt = path.extname(cleanName).toLowerCase();
         const audioFormats = ['.mp3', '.wav', '.aac', '.ogg', '.flac', '.m4a'];
         const videoFormats = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'];
         const imageFormats = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
@@ -90,7 +128,7 @@ async function processDownloadedFile(filePath, fileName, userId) {
             // Transcribir audio/video
             console.log(`🎵 Transcribiendo archivo de audio/video: ${fileName}`);
             const transcriptionResult = await transcribeFile(filePath, userId, {
-                updateExistingItem: false, // No crear nuevo item, solo obtener transcripción
+                updateItemId: itemId, // Actualizar el item existente con la transcripción
                 noAutoTags: true // No crear etiquetas automáticamente
             });
             
@@ -222,9 +260,13 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                             throw updateError;
                         }
                         
-                        // Debitar créditos
-                        await debitCreditsFunction(userId, 5, 'basic_link_analysis', { itemId: item.id, url });
-                        totalCreditsUsed += 5;
+                        // No debitar créditos si es admin
+                        const adminCheck = await checkCreditsFunction(userId, 0);
+                        const creditsToDebit = adminCheck.isAdmin ? 0 : 5;
+                        if (creditsToDebit > 0) {
+                            await debitCreditsFunction(userId, creditsToDebit, 'basic_link_analysis', { itemId: item.id, url });
+                            totalCreditsUsed += creditsToDebit;
+                        }
                     }
                     
                     results.push({
@@ -243,8 +285,8 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                 console.log(`📱 URL multimedia detectada: ${url}`);
                 
                 if (!dryRun) {
-                    // Verificar créditos (25 créditos para multimedia)
-                    const creditsCheck = await checkCreditsFunction(userId, 25);
+                    // Verificar créditos (5 créditos para multimedia)
+                    const creditsCheck = await checkCreditsFunction(userId, 5);
                     if (!creditsCheck.hasCredits) {
                         results.push({
                             itemId: item.id,
@@ -290,9 +332,13 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                             throw updateError;
                         }
                         
-                        // Debitar créditos básicos
-                        await debitCreditsFunction(userId, 5, 'basic_link_analysis', { itemId: item.id, url });
-                        totalCreditsUsed += 5;
+                        // No debitar créditos si es admin
+                        const adminCheck = await checkCreditsFunction(userId, 0);
+                        const creditsToDebit = adminCheck.isAdmin ? 0 : 5;
+                        if (creditsToDebit > 0) {
+                            await debitCreditsFunction(userId, creditsToDebit, 'basic_link_analysis', { itemId: item.id, url });
+                            totalCreditsUsed += creditsToDebit;
+                        }
                     }
                     
                     results.push({
@@ -311,13 +357,48 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                 let finalAnalysis = '';
                 const tempFilesToCleanup = [];
                 
+                const usedBaseUrl = downloadResult.baseUrl || candidateBaseUrls.find(u=>u); // fallback just in case
+
                 for (const file of downloadResult.files) {
                     try {
-                        const filePath = file.path;
+                        let effectivePath = file.path || file.filepath;
+                        if (!effectivePath || !fs.existsSync(effectivePath)) {
+                            // Construir URL del endpoint /media/ en ExtractorT si existe
+                            let remoteFileUrl = file.url;
+                            if (!remoteFileUrl && usedBaseUrl) {
+                                remoteFileUrl = `${usedBaseUrl.replace(/\/$/, '')}/media/${encodeURIComponent(file.filename)}`;
+                            }
+                            if (!remoteFileUrl) {
+                                throw new Error('Ruta de archivo inaccesible y no se pudo construir URL remota');
+                            }
+
+                            const tempDir = '/tmp';
+                            const localFilename = `${Date.now()}_${file.filename || path.basename(remoteFileUrl)}`;
+                            effectivePath = path.join(tempDir, localFilename);
+
+                            console.log(`⬇️ Descargando archivo faltante a ${effectivePath}`);
+                            const writer = fs.createWriteStream(effectivePath);
+                            const resp = await axios.get(remoteFileUrl, { responseType: 'stream', timeout: 60000 });
+                            await new Promise((resolve, reject) => {
+                                resp.data.pipe(writer);
+                                let error = null;
+                                writer.on('error', err => {
+                                    error = err;
+                                    writer.close();
+                                    reject(err);
+                                });
+                                writer.on('close', () => {
+                                    if (!error) resolve();
+                                });
+                            });
+                            console.log(`✅ Archivo descargado localmente (${(fs.statSync(effectivePath).size/1024/1024).toFixed(2)} MB)`);
+                        }
+
+                        const filePath = effectivePath;
                         const fileName = file.filename;
                         tempFilesToCleanup.push(filePath);
                         
-                        const processResult = await processDownloadedFile(filePath, fileName, userId);
+                        const processResult = await processDownloadedFile(filePath, fileName, userId, item.id);
                         
                         if (processResult.type === 'transcription') {
                             finalAnalysis += `\n\n[TRANSCRIPCIÓN - ${fileName}]\n${processResult.result}`;
@@ -336,133 +417,72 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                     try {
                         if (fs.existsSync(tempFile)) {
                             fs.unlinkSync(tempFile);
-                            console.log(`🗑️ Archivo temporal eliminado: ${tempFile}`);
+                            console.log(`✅ Archivo eliminado temporalmente: ${tempFile}`);
                         }
                     } catch (cleanupError) {
-                        console.error(`⚠️ Error limpiando archivo temporal:`, cleanupError);
+                        console.error(`❌ Error al intentar eliminar archivo temporal: ${cleanupError.message}`);
                     }
                 }
                 
-                if (!dryRun) {
-                    // Actualizar item con análisis multimedia
-                    const { error: updateError } = await supabase
-                        .from('codex_items')
-                        .update({
-                            descripcion: item.descripcion ? `${item.descripcion}${finalAnalysis}` : finalAnalysis.trim()
-                        })
-                        .eq('id', item.id);
-                    
-                    if (updateError) {
-                        throw updateError;
-                    }
-                    
-                    // Debitar créditos multimedia
-                    await debitCreditsFunction(userId, 25, 'multimedia_analysis', { 
-                        itemId: item.id, 
-                        url,
-                        filesProcessed: downloadResult.files.length
-                    });
-                    totalCreditsUsed += 25;
+                // Actualizar item con análisis final
+                const { error: updateError } = await supabase
+                    .from('codex_items')
+                    .update({
+                        descripcion: item.descripcion ? `${item.descripcion}\n\n[ANÁLISIS FINAL]\n${finalAnalysis}` : finalAnalysis
+                    })
+                    .eq('id', item.id);
+                
+                if (updateError) {
+                    throw updateError;
+                }
+                
+                // No debitar créditos si es admin
+                const adminCheck = await checkCreditsFunction(userId, 0);
+                // Costo fijo de 5 créditos para análisis multimedia (igual que básico)
+                let calculatedCost = 5;
+                const creditsToDebit = adminCheck.isAdmin ? 0 : calculatedCost;
+                if (creditsToDebit > 0) {
+                    await debitCreditsFunction(userId, creditsToDebit, 'final_link_analysis', { itemId: item.id, url });
+                    totalCreditsUsed += creditsToDebit;
                 }
                 
                 results.push({
                     itemId: item.id,
                     success: true,
-                    message: 'Análisis multimedia completado',
-                    creditsUsed: 25,
-                    analysisType: 'multimedia',
-                    filesProcessed: downloadResult.files.length
+                    message: 'Análisis final completado',
+                    creditsUsed: creditsToDebit,
+                    analysisType: 'final'
                 });
                 
                 processedCount++;
                 
-            } catch (itemError) {
-                console.error(`❌ Error procesando item ${item.id}:`, itemError);
+            } catch (error) {
+                console.error(`❌ Error procesando item: ${item.id} - ${item.titulo}:`, error);
                 results.push({
                     itemId: item.id,
                     success: false,
-                    message: `Error: ${itemError.message}`,
+                    message: error.message,
                     creditsUsed: 0
                 });
+                processedCount++;
             }
         }
         
-        console.log(`\n✅ Análisis completado. Procesados: ${processedCount}/${pendingItems.length}`);
-        
         return res.json({
             success: true,
-            message: `Análisis completado. Procesados: ${processedCount}/${pendingItems.length}`,
+            message: 'Análisis de enlaces pendientes completado',
             processed: processedCount,
-            total: pendingItems.length,
-            creditsUsed: totalCreditsUsed,
-            results
+            totalCreditsUsed: totalCreditsUsed,
+            results: results
         });
-        
     } catch (error) {
-        console.error('❌ Error en análisis de enlaces:', error);
+        console.error('❌ Error al procesar análisis de enlaces pendientes:', error);
         return res.status(500).json({
             success: false,
-            message: 'Error interno del servidor',
+            message: 'Error al procesar análisis de enlaces pendientes',
             error: error.message
         });
     }
 });
 
-// Endpoint para obtener estadísticas de enlaces pendientes
-router.get('/pending-stats', verifyUserAccess, async (req, res) => {
-    try {
-        const userId = req.user.id;
-        
-        const { data: pendingItems, error } = await supabase
-            .from('codex_items')
-            .select('id, url, titulo, created_at')
-            .eq('user_id', userId)
-            .eq('tipo', 'enlace')
-            .contains('etiquetas', ['pendiente-analisis']);
-        
-        if (error) {
-            throw error;
-        }
-        
-        const stats = {
-            totalPending: pendingItems.length,
-            multimediaUrls: 0,
-            basicUrls: 0,
-            items: []
-        };
-        
-        for (const item of pendingItems) {
-            const isMultimedia = item.url ? isMediaUrl(item.url) : false;
-            
-            if (isMultimedia) {
-                stats.multimediaUrls++;
-            } else {
-                stats.basicUrls++;
-            }
-            
-            stats.items.push({
-                id: item.id,
-                titulo: item.titulo,
-                url: item.url,
-                isMultimedia,
-                creditsRequired: isMultimedia ? 25 : 5,
-                created_at: item.created_at
-            });
-        }
-        
-        return res.json({
-            success: true,
-            stats
-        });
-        
-    } catch (error) {
-        console.error('❌ Error obteniendo estadísticas:', error);
-        return res.status(500).json({
-            success: false,
-            message: 'Error obteniendo estadísticas',
-            error: error.message
-        });
-    }
-});
-
-module.exports = router; 
+module.exports = router;

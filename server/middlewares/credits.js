@@ -297,7 +297,7 @@ async function debitCreditsFunction(userId, amount, operation, metadata = {}) {
       console.log(`👑 Admin ${profile.email} ejecutó ${operation} - No se debitan créditos`);
       
       // Registrar log sin débito
-      await logUsage({ id: userId, profile }, operation, amount, { 
+      await logUsage({ id: userId, email: profile.email, profile }, operation, amount, { 
         body: metadata,
         path: operation 
       });
@@ -324,7 +324,7 @@ async function debitCreditsFunction(userId, amount, operation, metadata = {}) {
     console.log(`✅ ${amount} créditos debitados de ${profile.email}. Nuevo saldo: ${updateResult.credits}`);
 
     // Registrar log de uso
-    await logUsage({ id: userId, profile }, operation, amount, { 
+    await logUsage({ id: userId, email: profile.email, profile }, operation, amount, { 
       body: metadata,
       path: operation 
     });
