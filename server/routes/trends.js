@@ -216,6 +216,15 @@ function setupTrendsRoutes(app) {
       let trends = [];
       
       try {
+        // Debug: log estructura de rawData
+        console.log('🔍 Estructura de rawData recibida:', {
+          type: typeof rawData,
+          isArray: Array.isArray(rawData),
+          keys: typeof rawData === 'object' ? Object.keys(rawData) : 'N/A',
+          hasTwitterTrends: rawData?.twitter_trends !== undefined,
+          twitterTrendsType: typeof rawData?.twitter_trends
+        });
+        
         // Verificar si es el formato de ExtractorT
         if (rawData.twitter_trends) {
           console.log('Detectado formato de ExtractorT con prefijos numéricos');
@@ -226,17 +235,19 @@ function setupTrendsRoutes(app) {
             
             trends = rawData.twitter_trends.map(trendString => {
               // Extraer número de tendencia y volumen si está presente
-              const match = trendString.match(/^(\d+)\.\s*([^0-9]*)(\d+[kK])?/);
+              const match = trendString.match(/^(\d+)\.\s*(.+?)(\d+[kK])?$/);
               
               if (match) {
                 const position = parseInt(match[1]) || 0;
-                const name = match[2].trim();
+                let name = match[2].trim();
                 let volume = 1000 - (position * 10); // Valor por defecto basado en la posición
                 
                 // Si hay un número con K al final, usarlo como volumen
                 if (match[3]) {
                   const volStr = match[3].replace(/[kK]$/, '');
                   volume = parseInt(volStr) * 1000;
+                  // Remover el número+K del nombre si está ahí
+                  name = name.replace(/\d+[kK]$/, '').trim();
                 }
                 
                 return {
@@ -246,10 +257,18 @@ function setupTrendsRoutes(app) {
                 };
               }
               
-              // Si no coincide con el patrón esperado, devolver con valores predeterminados
+              // Si no coincide con el patrón esperado, sanitizar manualmente
+              let fallbackName = trendString.replace(/^\d+\.\s*/, '').trim();
+              // Detectar volumen al final (e.g., "Pacífico16K" → 16K)
+              const volMatch = fallbackName.match(/(\d+)[kK]$/);
+              let fallbackVolume = 1;
+              if (volMatch) {
+                fallbackVolume = parseInt(volMatch[1]) * 1000;
+                fallbackName = fallbackName.replace(/(\d+)[kK]$/, '').trim();
+              }
               return {
-                name: trendString.replace(/^\d+\.\s*/, '').trim(),
-                volume: 1,
+                name: fallbackName,
+                volume: fallbackVolume,
                 position: 0
               };
             });
@@ -270,29 +289,62 @@ function setupTrendsRoutes(app) {
               });
           }
         } 
-        // Si es array de objetos con structure { name, count/volume }
-        else if (Array.isArray(rawData) && rawData.length > 0 && (rawData[0].name || rawData[0].text)) {
-          console.log('Detectado formato de array de objetos');
-          trends = rawData.map(item => ({
-            name: item.name || item.text || item.keyword,
-            volume: item.volume || item.count || 1
-          }));
-        }
-        // Si es un objeto con keys siendo las tendencias
-        else if (typeof rawData === 'object' && !Array.isArray(rawData)) {
-          console.log('Detectado formato de objeto con keys');
-          trends = Object.keys(rawData).map(key => ({
-            name: key,
-            volume: rawData[key] || 1
-          }));
-        } 
-        // Si es solo un array de strings
-        else if (Array.isArray(rawData) && typeof rawData[0] === 'string') {
-          console.log('Detectado formato de array de strings');
-          trends = rawData.map((name, index) => ({
-            name,
-            volume: (rawData.length - index) // Asignar volumen descendente
-          }));
+        // Verificar si es el formato con campo 'trends' (nuevo formato)
+        else if (rawData.trends && Array.isArray(rawData.trends)) {
+          console.log('Detectado formato con campo "trends"');
+          
+          // Si es array de strings con prefijos numéricos
+          if (typeof rawData.trends[0] === 'string') {
+            console.log('Procesando trends como array de strings con prefijos numéricos');
+            
+            trends = rawData.trends.map(trendString => {
+              // Extraer número de tendencia y volumen si está presente
+              const match = trendString.match(/^(\d+)\.\s*(.+?)(\d+[kK])?$/);
+              
+              if (match) {
+                const position = parseInt(match[1]) || 0;
+                let name = match[2].trim();
+                let volume = 1000 - (position * 10); // Valor por defecto basado en la posición
+                
+                // Si hay un número con K al final, usarlo como volumen
+                if (match[3]) {
+                  const volStr = match[3].replace(/[kK]$/, '');
+                  volume = parseInt(volStr) * 1000;
+                  // Remover el número+K del nombre si está ahí
+                  name = name.replace(/\d+[kK]$/, '').trim();
+                }
+                
+                return {
+                  name: name,
+                  volume: volume,
+                  position: position
+                };
+              }
+              
+              // Si no coincide con el patrón esperado, sanitizar manualmente
+              let fallbackName = trendString.replace(/^\d+\.\s*/, '').trim();
+              // Detectar volumen al final (e.g., "Pacífico16K" → 16K)
+              const volMatch = fallbackName.match(/(\d+)[kK]$/);
+              let fallbackVolume = 1;
+              if (volMatch) {
+                fallbackVolume = parseInt(volMatch[1]) * 1000;
+                fallbackName = fallbackName.replace(/(\d+)[kK]$/, '').trim();
+              }
+              return {
+                name: fallbackName,
+                volume: fallbackVolume,
+                position: 0
+              };
+            });
+          }
+          // Si es array de objetos
+          else if (typeof rawData.trends[0] === 'object') {
+            console.log('Procesando trends como array de objetos');
+            trends = rawData.trends.map(item => ({
+              name: item.name || item.text || item.keyword || 'Tendencia sin nombre',
+              volume: item.volume || item.count || 1
+            }));
+          }
         }
         // Caso para trends24_trends (array numérico)
         else if (rawData.trends24_trends && Array.isArray(rawData.trends24_trends)) {
@@ -301,6 +353,39 @@ function setupTrendsRoutes(app) {
             name: trend,
             volume: (rawData.trends24_trends.length - index)
           }));
+        }
+        // Si es array de objetos con structure { name, count/volume }
+        else if (Array.isArray(rawData) && rawData.length > 0 && (rawData[0].name || rawData[0].text)) {
+          console.log('Detectado formato de array de objetos');
+          trends = rawData.map(item => ({
+            name: item.name || item.text || item.keyword,
+            volume: item.volume || item.count || 1
+          }));
+        }
+        // Si es solo un array de strings
+        else if (Array.isArray(rawData) && typeof rawData[0] === 'string') {
+          console.log('Detectado formato de array de strings');
+          trends = rawData.map((name, index) => ({
+            name,
+            volume: (rawData.length - index) // Asignar volumen descendente
+          }));
+        }
+        // ÚLTIMO RECURSO: Si es un objeto genérico, pero SOLO si no tiene campos de metadatos
+        else if (typeof rawData === 'object' && !Array.isArray(rawData)) {
+          // Verificar que no sea un objeto con metadatos (status, message, etc.)
+          const metadataFields = ['status', 'message', 'location', 'count', 'source', 'timestamp'];
+          const hasMetadata = metadataFields.some(field => rawData.hasOwnProperty(field));
+          
+          if (hasMetadata) {
+            console.log('❌ Objeto contiene metadatos, no tendencias. Campos detectados:', Object.keys(rawData));
+            throw new Error('Objeto contiene metadatos en lugar de tendencias');
+          } else {
+            console.log('Detectado formato de objeto con keys como tendencias');
+            trends = Object.keys(rawData).map(key => ({
+              name: key,
+              volume: rawData[key] || 1
+            }));
+          }
         }
       } catch (parseError) {
         console.error('❌ Error parseando datos:', parseError);
@@ -327,8 +412,9 @@ function setupTrendsRoutes(app) {
       
       // Procesar datos básicos
       const basicProcessedTrends = trends.map(trend => {
-        const trendName = trend.name || trend.keyword || trend.text || 'Tendencia sin nombre';
-        const rawCategory = detectarCategoria(trendName);
+        // trend.name ya viene sanitizado del parsing anterior
+        const trendName = trend.name || 'Tendencia sin nombre';
+        const rawCategory = detectarCategoriaLocal(trendName);
         const normalizedCategory = normalizarCategoria(rawCategory);
         
         return {
@@ -554,17 +640,19 @@ function setupTrendsRoutes(app) {
             
             trends = rawData.twitter_trends.map(trendString => {
               // Extraer número de tendencia y volumen si está presente
-              const match = trendString.match(/^(\d+)\.\s*([^0-9]*)(\d+[kK])?/);
+              const match = trendString.match(/^(\d+)\.\s*(.+?)(\d+[kK])?$/);
               
               if (match) {
                 const position = parseInt(match[1]) || 0;
-                const name = match[2].trim();
+                let name = match[2].trim();
                 let volume = 1000 - (position * 10); // Valor por defecto basado en la posición
                 
                 // Si hay un número con K al final, usarlo como volumen
                 if (match[3]) {
                   const volStr = match[3].replace(/[kK]$/, '');
                   volume = parseInt(volStr) * 1000;
+                  // Remover el número+K del nombre si está ahí
+                  name = name.replace(/\d+[kK]$/, '').trim();
                 }
                 
                 return {
@@ -574,10 +662,18 @@ function setupTrendsRoutes(app) {
                 };
               }
               
-              // Si no coincide con el patrón esperado, devolver con valores predeterminados
+              // Si no coincide con el patrón esperado, sanitizar manualmente
+              let fallbackName = trendString.replace(/^\d+\.\s*/, '').trim();
+              // Detectar volumen al final (e.g., "Pacífico16K" → 16K)
+              const volMatch = fallbackName.match(/(\d+)[kK]$/);
+              let fallbackVolume = 1;
+              if (volMatch) {
+                fallbackVolume = parseInt(volMatch[1]) * 1000;
+                fallbackName = fallbackName.replace(/(\d+)[kK]$/, '').trim();
+              }
               return {
-                name: trendString.replace(/^\d+\.\s*/, '').trim(),
-                volume: 1,
+                name: fallbackName,
+                volume: fallbackVolume,
                 position: 0
               };
             });
@@ -610,7 +706,8 @@ function setupTrendsRoutes(app) {
       
       // Procesar los datos básicos primero
       const basicProcessedTrends = trends.map(trend => {
-        const trendName = trend.name || trend.keyword || trend.text || 'Tendencia sin nombre';
+        // trend.name ya viene sanitizado del parsing anterior
+        const trendName = trend.name || 'Tendencia sin nombre';
         const rawCategory = detectarCategoriaLocal(trendName);
         const normalizedCategory = normalizarCategoria(rawCategory);
         
