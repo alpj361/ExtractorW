@@ -1,11 +1,13 @@
 const axios = require('axios');
 const { processNitterContext } = require('./nitterContext');
+const { processNitterProfile } = require('./nitterProfile'); // ✅ AGREGADO: Importar función completa con sentimiento
 const { 
   getUserProjects, 
   getUserCodex, 
   getProjectDecisions,
   searchUserCodex, 
-  getUserStats 
+  getUserStats,
+  saveNitterProfileTweets 
 } = require('./supabaseData');
 
 // Importar fetch para Node.js
@@ -23,7 +25,27 @@ try {
 // ===================================================================
 
 // Configuración de servicios externos
-const EXTRACTOR_T_URL = process.env.EXTRACTOR_T_URL || 'https://api.standatpd.com';
+function getExtractorTUrl() {
+  if (process.env.EXTRACTOR_T_URL) {
+    return process.env.EXTRACTOR_T_URL;
+  }
+  
+  // Detectar si estamos en Docker
+  if (process.env.NODE_ENV === 'production' || process.env.DOCKER_ENV === 'true') {
+    // En Docker, usar host.docker.internal o la IP del host
+    return process.env.DOCKER_HOST_IP 
+      ? `http://${process.env.DOCKER_HOST_IP}:8000`
+      : 'http://host.docker.internal:8000';
+  }
+  
+  // En desarrollo local
+  return 'http://localhost:8000';
+}
+
+const EXTRACTOR_T_URL = getExtractorTUrl();
+
+// Log de configuración
+console.log(`🔗 ExtractorT URL configurada (MCP): ${EXTRACTOR_T_URL}`);
 
 /**
  * Mejora la expansión de términos usando Perplexity para contexto adicional
@@ -449,6 +471,41 @@ const AVAILABLE_TOOLS = {
       'Incluye análisis de documentos y transcripciones de audio',
       'Metadatos de archivos y relaciones con proyectos'
     ]
+  },
+  
+  nitter_profile: {
+    name: 'nitter_profile',
+    description: 'Obtiene tweets recientes de un usuario específico usando Nitter, ideal para analizar la actividad de cuentas institucionales, políticos, influencers y personas públicas de Guatemala',
+    parameters: {
+      username: {
+        type: 'string',
+        description: 'Nombre de usuario de Twitter sin el @, por ejemplo: "GuatemalaGob", "elonmusk", "CashLuna"',
+        required: true
+      },
+      limit: {
+        type: 'number',
+        description: 'Número máximo de tweets a obtener del usuario',
+        min: 5,
+        max: 20,
+        default: 10
+      },
+      include_retweets: {
+        type: 'boolean',
+        description: 'Incluir retweets del usuario en los resultados',
+        default: false
+      },
+      include_replies: {
+        type: 'boolean',
+        description: 'Incluir replies del usuario en los resultados',
+        default: false
+      }
+    },
+    category: 'social_media',
+    examples: [
+      'Busca los últimos tweets de @GuatemalaGob',
+      'Que dice @CashLuna en sus tweets recientes',
+      'Analiza la actividad de @MPguatemala'
+    ]
   }
 };
 
@@ -515,51 +572,40 @@ async function getToolInfo(toolName) {
  */
 async function executeTool(toolName, parameters = {}, user = null) {
   try {
-    const tool = AVAILABLE_TOOLS[toolName];
+    console.log(`🔧 Ejecutando herramienta MCP: ${toolName}`);
     
-    if (!tool) {
-      throw new Error(`Herramienta '${toolName}' no encontrada`);
+    // Validar que la herramienta existe
+    if (!AVAILABLE_TOOLS[toolName]) {
+      throw new Error(`Herramienta '${toolName}' no encontrada. Herramientas disponibles: ${Object.keys(AVAILABLE_TOOLS).join(', ')}`);
     }
-
-    console.log(`🔧 Ejecutando herramienta: ${toolName} para usuario: ${user?.email || 'anónimo'}`);
     
-    // Validar parámetros requeridos
-    const validationResult = validateToolParameters(tool, parameters);
-    if (!validationResult.valid) {
-      throw new Error(`Parámetros inválidos: ${validationResult.errors.join(', ')}`);
-    }
-
     // Ejecutar herramienta específica
-    let result;
     switch (toolName) {
       case 'nitter_context':
-        result = await executeNitterContext(
+        return await executeNitterContext(
           parameters.q, 
           parameters.location || 'guatemala', 
           parameters.limit || 10,
           parameters.session_id,
           user
         );
-        break;
       case 'perplexity_search':
-        result = await executePerplexitySearch(
+        return await executePerplexitySearch(
           parameters.query,
           parameters.location || 'Guatemala',
           parameters.focus || 'general',
           parameters.improve_nitter_search || false,
           user
         );
-        break;
       case 'user_projects':
-        result = await executeUserProjects(
+        return await executeUserProjects(
           parameters.limit || 20,
           parameters.status,
           parameters.priority,
           user
         );
-        break;
       case 'user_codex':
-        result = await executeUserCodex(
+        return await executeUserCodex(
           parameters.project_id,
           parameters.query,
           parameters.limit || 20,
@@ -567,13 +613,23 @@ async function executeTool(toolName, parameters = {}, user = null) {
           parameters.tags,
           user
         );
-        break;
+      case 'nitter_profile':
+        const { username, limit, include_retweets, include_replies } = parameters;
+        
+        if (!username || typeof username !== 'string') {
+          throw new Error('El parámetro username es requerido y debe ser un string');
+        }
+        
+        return await executeNitterProfile(
+          username.trim(),
+          limit || 10,
+          include_retweets || false,
+          include_replies || false,
+          user
+        );
       default:
         throw new Error(`Ejecutor no implementado para herramienta: ${toolName}`);
     }
-
-    console.log(`✅ Herramienta ${toolName} ejecutada exitosamente`);
-    return result;
   } catch (error) {
     console.error(`❌ Error ejecutando herramienta ${toolName}:`, error);
     throw error;
@@ -1396,6 +1452,118 @@ async function getServerStatus() {
   }
 }
 
+/**
+ * Obtiene tweets recientes de un usuario específico usando Nitter CON ANÁLISIS DE SENTIMIENTO
+ * @param {string} username - Nombre de usuario sin @
+ * @param {number} limit - Número máximo de tweets
+ * @param {boolean} include_retweets - Incluir retweets
+ * @param {boolean} include_replies - Incluir replies
+ * @param {Object} user - Usuario autenticado
+ * @returns {Object} Respuesta con tweets del usuario y análisis completo
+ */
+async function executeNitterProfile(username, limit = 10, include_retweets = false, include_replies = false, user) {
+  const startTime = Date.now();
+  
+  try {
+    console.log(`🔍 Procesando nitter_profile: "@${username}" (límite: ${limit})`);
+    
+    if (!user || !user.id) {
+      throw new Error('Usuario no autenticado - se requiere autenticación para nitter_profile');
+    }
+    
+    // ✅ USAR FUNCIÓN COMPLETA CON ANÁLISIS DE SENTIMIENTO
+    const sessionId = `nitter_profile_mcp_${Date.now()}`;
+    const result = await processNitterProfile(
+      username.replace('@', ''), // Remover @ si existe
+      user.id,
+      sessionId,
+      limit,
+      include_retweets,
+      include_replies
+    );
+    
+    if (result.success) {
+      console.log(`✅ Procesamiento completo de @${username}: ${result.data.tweets_found} tweets con análisis de sentimiento`);
+      
+      // Formatear respuesta para compatibilidad MCP/Vizta
+      const formattedTweets = result.data.tweets?.map(tweet => ({
+        id: tweet.tweet_id || tweet.id,
+        text: tweet.texto,
+        author: tweet.usuario,
+        date: tweet.fecha,
+        metrics: {
+          likes: tweet.likes || 0,
+          retweets: tweet.retweets || 0,
+          replies: tweet.replies || 0
+        },
+        url: tweet.enlace,
+        is_retweet: false,
+        is_reply: false,
+        // 🧠 CAMPOS DE ANÁLISIS DE IA (¡Ahora disponibles!)
+        sentimiento: tweet.sentimiento,
+        score_sentimiento: tweet.score_sentimiento,
+        intencion_comunicativa: tweet.intencion_comunicativa,
+        entidades_mencionadas: tweet.entidades_mencionadas,
+        engagement: tweet.engagement,
+        categoria: tweet.categoria
+      })) || [];
+      
+      return {
+        success: true,
+        username: username,
+        profile_info: result.data.profile_info || {},
+        tweets: formattedTweets,
+        tweets_count: result.data.tweets_found,
+        execution_time: Date.now() - startTime,
+        source: 'nitter_profile_with_sentiment',
+        
+        // Información de guardado en Supabase (ya incluida en processNitterProfile)
+        supabase_saved: true,
+        supabase_saved_count: result.data.tweets_saved,
+        profile_link: `https://twitter.com/${username.replace('@', '')}`,
+        
+        // Métricas de análisis de IA
+        analytics: {
+          categoria: result.data.categoria,
+          detected_group: result.data.detected_group,
+          total_engagement: result.data.total_engagement,
+          avg_engagement: result.data.avg_engagement,
+          sentiment_analysis: true,
+          ai_processing: true
+        },
+        
+        metadata: {
+          include_retweets: include_retweets,
+          include_replies: include_replies,
+          requested_limit: limit,
+          actual_results: result.data.tweets_found,
+          sentiment_analysis_included: true,
+          processing_method: 'complete_nitter_profile_service'
+        }
+      };
+    } else {
+      throw new Error(result.error || 'Error procesando perfil con análisis de sentimiento');
+    }
+    
+  } catch (error) {
+    console.error(`❌ Error procesando perfil @${username}:`, error.message);
+    
+    return {
+      success: false,
+      username: username,
+      error: error.message,
+      tweets: [],
+      tweets_count: 0,
+      execution_time: Date.now() - startTime,
+      source: 'nitter_profile_with_sentiment',
+      metadata: {
+        error_type: 'processing_error',
+        processing_method: 'complete_nitter_profile_service'
+      }
+    };
+  }
+}
+
 module.exports = {
   listAvailableTools,
   getToolInfo,
@@ -1404,6 +1572,7 @@ module.exports = {
   executePerplexitySearch,
   executeUserProjects,
   executeUserCodex,
+  executeNitterProfile,
   getServerStatus,
   expandSearchTerms,
   enhanceSearchTermsWithPerplexity,

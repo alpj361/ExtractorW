@@ -21,7 +21,7 @@ async function testNitterContext() {
 
   // Verificar variables de entorno
   console.log('🔧 Verificando configuración:');
-  console.log(`   EXTRACTOR_T_URL: ${process.env.EXTRACTOR_T_URL || 'http://localhost:8001'}`);
+      console.log(`   EXTRACTOR_T_URL: ${process.env.EXTRACTOR_T_URL || 'http://localhost:8000'}`);
   console.log(`   GEMINI_API_KEY: ${process.env.GEMINI_API_KEY ? '✓ Configurado' : '❌ Faltante'}`);
   console.log(`   SUPABASE_URL: ${process.env.SUPABASE_URL ? '✓ Configurado' : '❌ Faltante'}`);
   console.log(`   SUPABASE_SERVICE_ROLE_KEY: ${process.env.SUPABASE_SERVICE_ROLE_KEY ? '✓ Configurado' : '❌ Faltante'}`);

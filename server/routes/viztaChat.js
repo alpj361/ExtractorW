@@ -377,6 +377,24 @@ ESTRATEGIA DE SELECCIÓN DE HERRAMIENTAS:
      • "Monitorea hashtags de..." (hashtags trending HOY)
      • "Sentimiento sobre..." (sentimiento actual, no histórico)
 
+   - Usa nitter_profile cuando el usuario necesite:
+     • Tweets recientes de un usuario específico (SIEMPRE QUE MENCIONEN @usuario)
+     • Actividad reciente de cuentas institucionales, políticos, influencers
+     • Análisis de la actividad de una persona específica
+     • Monitoreo de qué dice un usuario particular (ENFOQUE EN ${currentMonth} ${currentYear})
+     • Información del perfil y tweets de cuentas públicas guatemaltecas
+   - Ejemplos de cuándo usar nitter_profile:
+     • "¿Qué dice @GuatemalaGob?" (tweets del gobierno)
+     • "Busca los últimos tweets de @CashLuna" (tweets de persona específica)
+     • "Analiza la actividad de @MPguatemala" (tweets del MP)
+     • "Tweets recientes de @elonmusk" (cualquier usuario específico)
+     • "Qué ha dicho @usuario últimamente" (actividad reciente)
+     • "Revisa el perfil de @influencer" (información del perfil)
+   
+   **DETECCIÓN AUTOMÁTICA DE USUARIOS:**
+   Si la consulta contiene @usuario, nombre de usuario, o frases como "tweets de [nombre]", "qué dice [usuario]", 
+   "actividad de [cuenta]", USA AUTOMÁTICAMENTE nitter_profile en lugar de nitter_context.
+
 3. **PARA ACCESO A DATOS PERSONALES DEL USUARIO:**
    - Usa user_projects cuando el usuario necesite:
      • Información sobre sus proyectos personales

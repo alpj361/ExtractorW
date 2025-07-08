@@ -8,10 +8,14 @@ const mcpRoutes = require('./mcp');
 const viztaChatRoutes = require('./viztaChat');
 const hybridCoveragesRoutes = require('./hybridCoverages');
 const nitterContextRoutes = require('./nitterContext');
+const nitterProfileRoutes = require('./nitterProfile');
 const pendingAnalysisRoutes = require('./pendingAnalysis');
+const aiRoutes = require('./ai');
 const path = require('path');
 const capturadosRoutes = require('./capturados');
 const coveragesRoutes = require('./coverages');
+const express = require('express');
+const { verifyUserAccess } = require('../middlewares/auth');
 
 /**
  * Configura todas las rutas de la aplicación
@@ -72,8 +76,53 @@ function setupRoutes(app) {
   // Configurar rutas de Nitter Context (herramienta de análisis de tweets)
   app.use('/api', nitterContextRoutes);
   
+  // Configurar rutas de Nitter Profile (herramienta de análisis de perfiles de usuarios)
+  app.use('/api', nitterProfileRoutes);
+  
   // Configurar rutas de análisis de enlaces pendientes
   app.use('/api/pending-analysis', pendingAnalysisRoutes);
+  
+  // Configurar rutas de IA (Gemini)
+  app.use('/api/ai', aiRoutes);
+
+  // Nueva ruta para agrupación de Codex
+  require('./codexGroups')(app);
+
+  // Healthcheck route
+  app.get('/api/health', (req, res) => {
+    res.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      service: 'ExtractorW Backend'
+    });
+  });
+
+  // Default fallback
+  app.get('/api', (req, res) => {
+    res.json({
+      message: 'ExtractorW API v2.0',
+      timestamp: new Date().toISOString(),
+      endpoints: [
+        '/api/health',
+        '/api/vizta-chat',
+        '/api/admin',
+        '/api/transcription',
+        '/api/document-analysis',
+        '/api/nitter-context',
+        '/api/nitter-profile',
+        '/api/trends',
+        '/api/coverages',
+        '/api/hybrid-coverages',
+        '/api/ai',
+        '/api/mcp',
+        '/api/pending-analysis',
+        '/api/capturados',
+        '/api/sondeos',
+        '/api/project-suggestions',
+        '/api/codex-groups'
+      ]
+    });
+  });
 }
 
 module.exports = {

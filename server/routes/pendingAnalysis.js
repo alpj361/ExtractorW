@@ -3,10 +3,59 @@ const router = express.Router();
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const { transcribeFile } = require('../services/transcription');
+const { transcribeFile, transcribeImageWithGemini } = require('../services/transcription');
 const { checkCreditsFunction, debitCreditsFunction } = require('../middlewares/credits');
 const { verifyUserAccess } = require('../middlewares/auth');
 const supabase = require('../utils/supabase');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+
+// Función para generar descripción basada en transcripción
+async function generateDescriptionFromTranscription(transcription, url = null) {
+    try {
+        if (!process.env.GEMINI_API_KEY) {
+            console.warn('❌ GEMINI_API_KEY no configurada, saltando generación de descripción');
+            return null;
+        }
+
+        const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        const model = genai.getGenerativeModel({ model: 'gemini-2.5-flash' });
+
+        const prompt = `Analiza la siguiente transcripción de un audio/video de X (Twitter) y genera una descripción concisa y útil.
+
+TRANSCRIPCIÓN:
+"""
+${transcription}
+"""
+
+INSTRUCCIONES:
+1. Identifica el tema principal y los puntos clave mencionados
+2. Describe el tipo de contenido (entrevista, opinión, noticia, explicación, etc.)
+3. Menciona si hay datos importantes, nombres relevantes o información específica
+4. Mantén un tono profesional y objetivo
+5. Máximo 150 caracteres para que sea útil como descripción
+
+FORMATO DE RESPUESTA:
+Solo devuelve la descripción en texto plano, sin JSON ni formateo adicional.
+
+Ejemplos de buenas descripciones:
+- "Entrevista sobre políticas públicas con datos estadísticos y propuestas específicas"
+- "Explicación detallada del proceso electoral guatemalteco con ejemplos prácticos"
+- "Análisis político sobre declaraciones presidenciales con contexto histórico"
+
+Genera una descripción similar basada en la transcripción proporcionada.`;
+
+        console.log('🤖 Generando descripción con Gemini...');
+        const result = await model.generateContent(prompt);
+        const description = result.response.text().trim();
+        
+        console.log('✅ Descripción generada:', description.substring(0, 100) + '...');
+        return description;
+
+    } catch (error) {
+        console.error('❌ Error generando descripción:', error);
+        return null;
+    }
+}
 
 // Función para detectar si una URL es multimedia (videos, imágenes, etc.)
 function isMediaUrl(url) {
@@ -64,7 +113,7 @@ async function downloadMediaFromUrl(url) {
             const response = await axios.post(`${baseUrl.replace(/\/$/, '')}/download_media`, {
                 tweet_url: url,
                 download_videos: true,
-                download_images: false,
+                download_images: true,
                 quality: 'medium'
             }, {
                 timeout: 60000,
@@ -75,16 +124,19 @@ async function downloadMediaFromUrl(url) {
             const { status, message: respMessage, data: respData } = response.data || {};
             const downloadedFiles = respData?.downloaded_files || respData?.files || response.data.downloaded_files || [];
 
-            if (status === 'success' && downloadedFiles.length > 0) {
-                console.log(`✅ Descarga exitosa (${downloadedFiles.length} archivos) usando ${baseUrl}`);
+            if (status === 'success') {
+                if (downloadedFiles.length > 0) {
+                    console.log(`✅ Descarga exitosa (${downloadedFiles.length} archivos) usando ${baseUrl}`);
+                } else {
+                    console.warn(`⚠️ Descarga sin medios desde ${baseUrl} (solo texto del tweet)`);
+                }
                 return {
                     success: true,
                     files: downloadedFiles,
                     message: respMessage,
-                    baseUrl
+                    baseUrl,
+                    tweet_text: respData?.tweet_text || null
                 };
-            } else {
-                console.warn(`⚠️ Descarga sin archivos desde ${baseUrl}: ${respMessage || 'Sin mensaje'}`);
             }
         } catch (err) {
             console.warn(`⚠️ Fallo al intentar ${baseUrl}: ${err.message}`);
@@ -96,7 +148,8 @@ async function downloadMediaFromUrl(url) {
     return {
         success: false,
         files: [],
-        message: 'No se pudo descargar medios desde ninguna instancia de ExtractorT'
+        message: 'No se pudo descargar medios desde ninguna instancia de ExtractorT',
+        tweet_text: null
     };
 }
 
@@ -132,6 +185,15 @@ async function processDownloadedFile(filePath, fileName, userId, itemId) {
                 noAutoTags: true // No crear etiquetas automáticamente
             });
             
+            if (transcriptionResult.success === false) {
+                console.warn('⚠️ Transcripción fallida, no se obtuvo audio. Se usará análisis básico.');
+                return {
+                    type: 'transcription_error',
+                    result: `No se pudo transcribir audio del video ${fileName}. (${transcriptionResult.error})`,
+                    metadata: transcriptionResult
+                };
+            }
+            
             return {
                 type: 'transcription',
                 result: transcriptionResult.transcription,
@@ -139,18 +201,31 @@ async function processDownloadedFile(filePath, fileName, userId, itemId) {
             };
             
         } else if (imageFormats.includes(fileExt)) {
-            // Para imágenes, hacer análisis descriptivo básico
-            console.log(`🖼️ Analizando imagen: ${fileName}`);
-            return {
-                type: 'image_analysis',
-                result: `Imagen descargada: ${fileName}. Archivo de tipo ${fileExt.substring(1).toUpperCase()} listo para análisis visual.`,
-                metadata: {
-                    fileName: fileName,
-                    fileType: fileExt.substring(1).toUpperCase(),
-                    timestamp: new Date().toISOString()
-                }
-            };
-            
+            // Para imágenes, generar transcripción/descripción usando Gemini Vision
+            console.log(`🖼️ Generando transcripción de imagen vía Gemini: ${fileName}`);
+            try {
+                const imgResult = await transcribeImageWithGemini(filePath, {
+                    prompt: `Describe detalladamente el contenido de esta imagen de X (Twitter) en español. Si la imagen contiene texto, transcríbelo exactamente como aparece.`
+                });
+
+                return {
+                    type: 'image_transcription',
+                    result: imgResult.transcription,
+                    metadata: imgResult.metadata
+                };
+            } catch (visionError) {
+                console.error('❌ Error en Gemini Vision, usando fallback básico:', visionError.message);
+                return {
+                    type: 'image_analysis',
+                    result: `Imagen descargada: ${fileName}. No se pudo generar transcripción automática.`,
+                    metadata: {
+                        fileName: fileName,
+                        fileType: fileExt.substring(1).toUpperCase(),
+                        timestamp: new Date().toISOString(),
+                        error: visionError.message
+                    }
+                };
+            }
         } else {
             // Archivo no compatible
             throw new Error(`Formato de archivo no compatible: ${fileExt}`);
@@ -162,32 +237,81 @@ async function processDownloadedFile(filePath, fileName, userId, itemId) {
     }
 }
 
-// Endpoint principal para analizar enlaces pendientes
+// Endpoint para analizar enlaces multimedia (ya no requiere etiqueta "pendiente-analisis")
 router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
     try {
         const userId = req.user.id;
         const { 
             itemIds = null, // IDs específicos a procesar (opcional)
-            processAll = false, // Si procesar todos los pendientes
-            dryRun = false // Solo simular, no realizar cambios
+            processAll = false, // Si procesar enlaces recientes (últimos 30 días)
+            dryRun = false, // Solo simular, no realizar cambios
+            shouldGenerateDescription = false // Si generar descripción con IA después de transcripción
         } = req.body;
         
-        console.log(`🔍 Iniciando análisis de enlaces pendientes para usuario: ${userId}`);
+        console.log(`🔍 Iniciando análisis de enlaces multimedia para usuario: ${userId}`);
+        console.log(`🤖 Generar descripción con IA: ${shouldGenerateDescription}`);
         
-        // Obtener enlaces pendientes de análisis
-        let query = supabase
-            .from('codex_items')
-            .select('*')
-            .eq('user_id', userId)
-            .eq('tipo', 'enlace')
-            .contains('etiquetas', ['pendiente-analisis']);
+        // Obtener enlaces para procesar - usar consulta más simple para evitar problemas
+        console.log(`📊 Construyendo consulta para obtener enlaces para procesar...`);
+        console.log(`👤 User ID: ${userId}`);
         
-        if (itemIds && itemIds.length > 0) {
-            query = query.in('id', itemIds);
+        let pendingItems, fetchError;
+        
+        try {
+            // Primero intentar consulta simplificada si hay IDs específicos
+            if (itemIds && itemIds.length > 0) {
+                console.log(`🎯 Filtrando por IDs específicos: ${itemIds.join(', ')}`);
+                console.log(`🔄 Ejecutando consulta específica a Supabase...`);
+                
+                const { data, error } = await supabase
+                    .from('codex_items')
+                    .select('*')
+                    .eq('user_id', userId)
+                    .eq('tipo', 'enlace')
+                    .in('id', itemIds);
+                
+                pendingItems = data;
+                fetchError = error;
+                
+                console.log(`✅ Consulta específica completada. Encontrados ${pendingItems?.length || 0} elementos`);
+                
+                // Ya no filtramos por etiqueta "pendiente-analisis" ya que se eliminó del sistema
+                // Procesamos directamente los enlaces especificados por ID
+                console.log(`✅ Enlaces específicos para procesar: ${pendingItems?.length || 0}`);
+            } else {
+                // Consulta general para todos los enlaces del usuario
+                console.log(`🔄 Ejecutando consulta general a Supabase...`);
+                
+                const { data, error } = await supabase
+                    .from('codex_items')
+                    .select('*')
+                    .eq('user_id', userId)
+                    .eq('tipo', 'enlace');
+                
+                pendingItems = data;
+                fetchError = error;
+                
+                console.log(`✅ Consulta general completada. Encontrados ${pendingItems?.length || 0} enlaces totales`);
+                
+                // Para consulta general, filtramos enlaces recientes (últimos 30 días) para evitar procesar demasiados
+                if (pendingItems && !fetchError) {
+                    const thirtyDaysAgo = new Date();
+                    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+                    
+                    pendingItems = pendingItems.filter(item => {
+                        const itemDate = new Date(item.created_at);
+                        return itemDate >= thirtyDaysAgo;
+                    });
+                    console.log(`📅 Filtrados por fecha (últimos 30 días): ${pendingItems.length} enlaces recientes`);
+                }
+            }
+        } catch (queryError) {
+            console.error(`❌ Error en consulta a Supabase:`, queryError);
+            fetchError = queryError;
+            pendingItems = null;
         }
         
-        const { data: pendingItems, error: fetchError } = await query;
-        
+        console.log(`🔍 Verificando errores de consulta...`);
         if (fetchError) {
             console.error('❌ Error obteniendo elementos pendientes:', fetchError);
             return res.status(500).json({
@@ -197,24 +321,30 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
             });
         }
         
+        console.log(`📊 Verificando resultados de consulta...`);
         if (!pendingItems || pendingItems.length === 0) {
+            console.log(`ℹ️ No se encontraron enlaces para procesar`);
             return res.json({
                 success: true,
-                message: 'No hay enlaces pendientes de análisis',
+                message: 'No hay enlaces para procesar (sin IDs específicos o sin enlaces recientes)',
                 processed: 0,
                 results: []
             });
         }
         
-        console.log(`📋 Encontrados ${pendingItems.length} enlaces pendientes`);
+        console.log(`📋 Encontrados ${pendingItems.length} enlaces para procesar`);
+        console.log(`🔄 Iniciando procesamiento de enlaces...`);
         
         const results = [];
         let processedCount = 0;
         let totalCreditsUsed = 0;
         
-        for (const item of pendingItems) {
+        console.log(`🎯 Iniciando bucle de procesamiento para ${pendingItems.length} elementos...`);
+        
+        for (let index = 0; index < pendingItems.length; index++) {
+            const item = pendingItems[index];
             try {
-                console.log(`\n🔄 Procesando item: ${item.id} - ${item.titulo}`);
+                console.log(`\n🔄 Procesando item ${index + 1}/${pendingItems.length}: ${item.id} - ${item.titulo}`);
                 
                 const url = item.url;
                 if (!url) {
@@ -228,8 +358,14 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                     continue;
                 }
                 
+                console.log(`🔗 URL del item: ${url}`);
+                
                 // Verificar si es URL multimedia
-                if (!isMediaUrl(url)) {
+                console.log(`🔍 Verificando si es URL multimedia...`);
+                const isMultimedia = isMediaUrl(url);
+                console.log(`📱 Es multimedia: ${isMultimedia}`);
+                
+                if (!isMultimedia) {
                     console.log(`⚠️ URL no es multimedia: ${url}`);
                     
                     // Procesar como enlace básico (menos créditos)
@@ -285,9 +421,12 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                 console.log(`📱 URL multimedia detectada: ${url}`);
                 
                 if (!dryRun) {
+                    console.log(`💰 Verificando créditos para análisis multimedia...`);
                     // Verificar créditos (5 créditos para multimedia)
                     const creditsCheck = await checkCreditsFunction(userId, 5);
+                    console.log(`💰 Resultado verificación créditos: ${creditsCheck.hasCredits}`);
                     if (!creditsCheck.hasCredits) {
+                        console.log(`❌ Créditos insuficientes para ${item.id}`);
                         results.push({
                             itemId: item.id,
                             success: false,
@@ -296,10 +435,31 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                         });
                         continue;
                     }
+                    console.log(`✅ Créditos verificados correctamente`);
                 }
                 
-                // Descargar medios
-                const downloadResult = await downloadMediaFromUrl(url);
+                // Descargar medios con timeout
+                console.log(`📥 Iniciando descarga de medios para: ${url}`);
+                
+                let downloadResult;
+                try {
+                    // Crear timeout para descarga (máximo 45 segundos)
+                    const downloadPromise = downloadMediaFromUrl(url);
+                    const timeoutPromise = new Promise((_, reject) => {
+                        setTimeout(() => reject(new Error('Timeout: La descarga tardó más de 45 segundos')), 45000);
+                    });
+                    
+                    downloadResult = await Promise.race([downloadPromise, timeoutPromise]);
+                    console.log(`📥 Resultado de descarga:`, downloadResult.success ? 'ÉXITO' : 'FALLO');
+                } catch (downloadTimeout) {
+                    console.error(`⏰ Timeout en descarga de medios: ${downloadTimeout.message}`);
+                    downloadResult = {
+                        success: false,
+                        files: [],
+                        message: `Timeout en descarga: ${downloadTimeout.message}`,
+                        tweet_text: null
+                    };
+                }
                 
                 if (!downloadResult.success) {
                     console.log(`❌ Falló descarga: ${downloadResult.message}`);
@@ -356,27 +516,41 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                 // Procesar archivos descargados
                 let finalAnalysis = '';
                 const tempFilesToCleanup = [];
-                
-                const usedBaseUrl = downloadResult.baseUrl || candidateBaseUrls.find(u=>u); // fallback just in case
+                const usedBaseUrl = downloadResult.baseUrl || candidateBaseUrls.find(u=>u);
+
+                // NUEVO: Obtener tweet_text de la respuesta de descarga
+                const tweetText = downloadResult.tweet_text || null;
+                let combinedTranscription = null;
 
                 for (const file of downloadResult.files) {
                     try {
                         let effectivePath = file.path || file.filepath;
                         if (!effectivePath || !fs.existsSync(effectivePath)) {
-                            // Construir URL del endpoint /media/ en ExtractorT si existe
+                            // Construir URL del endpoint /media/ en ExtractorT
                             let remoteFileUrl = file.url;
-                            if (!remoteFileUrl && usedBaseUrl) {
+                            
+                            // Si la URL es relativa (/media/filename), construir URL completa
+                            if (remoteFileUrl && remoteFileUrl.startsWith('/media/')) {
+                                remoteFileUrl = `${usedBaseUrl.replace(/\/$/, '')}${remoteFileUrl}`;
+                            } else if (!remoteFileUrl && usedBaseUrl) {
+                                // Fallback: construir URL usando filename
                                 remoteFileUrl = `${usedBaseUrl.replace(/\/$/, '')}/media/${encodeURIComponent(file.filename)}`;
                             }
+                            
                             if (!remoteFileUrl) {
                                 throw new Error('Ruta de archivo inaccesible y no se pudo construir URL remota');
                             }
 
                             const tempDir = '/tmp';
-                            const localFilename = `${Date.now()}_${file.filename || path.basename(remoteFileUrl)}`;
+                            let rawName = file.filename || path.basename(remoteFileUrl);
+                            try { rawName = decodeURIComponent(rawName);} catch {}
+                            if (rawName.includes('?')) {
+                                rawName = rawName.split('?')[0];
+                            }
+                            const localFilename = `${Date.now()}_${rawName}`;
                             effectivePath = path.join(tempDir, localFilename);
 
-                            console.log(`⬇️ Descargando archivo faltante a ${effectivePath}`);
+                            console.log(`⬇️ Descargando archivo faltante desde ${remoteFileUrl} a ${effectivePath}`);
                             const writer = fs.createWriteStream(effectivePath);
                             const resp = await axios.get(remoteFileUrl, { responseType: 'stream', timeout: 60000 });
                             await new Promise((resolve, reject) => {
@@ -401,9 +575,66 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                         const processResult = await processDownloadedFile(filePath, fileName, userId, item.id);
                         
                         if (processResult.type === 'transcription') {
-                            finalAnalysis += `\n\n[TRANSCRIPCIÓN - ${fileName}]\n${processResult.result}`;
+                            // Combinar tweet_text con la transcripción si está disponible
+                            if (tweetText && processResult.result) {
+                                combinedTranscription = `${tweetText}\n-----\n${processResult.result}`;
+                            } else {
+                                combinedTranscription = processResult.result;
+                            }
+                            // Si está habilitada la generación de descripción, generar descripción basada en la combinación
+                            if (shouldGenerateDescription && !dryRun) {
+                                console.log('🤖 Generando descripción basada en tweet_text + transcripción...');
+                                const aiDescription = await generateDescriptionFromTranscription(combinedTranscription, item.url);
+                                if (aiDescription) {
+                                    try {
+                                        const { error: descUpdateError } = await supabase
+                                            .from('codex_items')
+                                            .update({ descripcion: aiDescription })
+                                            .eq('id', item.id);
+                                        if (descUpdateError) {
+                                            console.error('❌ Error actualizando descripción del item:', descUpdateError);
+                                        } else {
+                                            console.log('✅ Descripción del item actualizada con IA (solo resumen)');
+                                        }
+                                    } catch (descError) {
+                                        console.error('❌ Error en actualización de descripción:', descError);
+                                    }
+                                } else {
+                                    console.log('⚠️ No se pudo generar descripción IA');
+                                }
+                            }
+                            // Guardar el texto combinado en analisis_detallado
+                            finalAnalysis += `\n\n[TRANSCRIPCIÓN - ${fileName}]\n${combinedTranscription}`;
+                        } else if (processResult.type === 'image_transcription') {
+                            // Generar combinación con tweetText si existe
+                            if (tweetText && processResult.result) {
+                                combinedTranscription = `${tweetText}\n-----\n${processResult.result}`;
+                            } else {
+                                combinedTranscription = processResult.result;
+                            }
+
+                            // Guardar descripción IA si aplica
+                            if (shouldGenerateDescription && !dryRun) {
+                                try {
+                                    console.log('🤖 Generando descripción basada en tweet_text + transcripción de imagen...');
+                                    const aiDescription = await generateDescriptionFromTranscription(combinedTranscription, item.url);
+                                    if (aiDescription) {
+                                        const { error: descUpdateError } = await supabase
+                                            .from('codex_items')
+                                            .update({ descripcion: aiDescription })
+                                            .eq('id', item.id);
+                                        if (descUpdateError) {
+                                            console.error('❌ Error actualizando descripción del item:', descUpdateError);
+                                        }
+                                    }
+                                } catch(e){ console.error('❌ Error generando descripción IA:', e);} 
+                            }
+
+                            finalAnalysis += `\n\n[TRANSCRIPCIÓN IMAGEN - ${fileName}]\n${processResult.result}`;
                         } else if (processResult.type === 'image_analysis') {
                             finalAnalysis += `\n\n[ANÁLISIS DE IMAGEN - ${fileName}]\n${processResult.result}`;
+                        } else if (processResult.type === 'transcription_error') {
+                            finalAnalysis += `\n\n[ERROR TRANSCRIPCIÓN - ${fileName}]\n${processResult.result}`;
                         }
                         
                     } catch (procError) {
@@ -425,15 +656,71 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                 }
                 
                 // Actualizar item con análisis final
-                const { error: updateError } = await supabase
+                await supabase
                     .from('codex_items')
-                    .update({
-                        descripcion: item.descripcion ? `${item.descripcion}\n\n[ANÁLISIS FINAL]\n${finalAnalysis}` : finalAnalysis
-                    })
+                    .update({ analisis_detallado: finalAnalysis })
                     .eq('id', item.id);
                 
-                if (updateError) {
-                    throw updateError;
+                // NUEVO: Actualizar también el campo transcripcion con el texto combinado
+                if (combinedTranscription) {
+                    console.log('🟢 Guardando en transcripcion:', combinedTranscription);
+                    await supabase
+                        .from('codex_items')
+                        .update({ transcripcion: combinedTranscription })
+                        .eq('id', item.id);
+                    const { data: txAfter, error: txErr } = await supabase
+                        .from('codex_items')
+                        .select('transcripcion, audio_transcription')
+                        .eq('id', item.id);
+                    if (txErr) {
+                        console.error('❌ Error verificando transcripción después del update:', txErr);
+                    } else {
+                        console.log('🟢 Valor en supabase después de update (transcripcion):', txAfter && txAfter[0] && txAfter[0].transcripcion);
+                        console.log('🟢 Valor en supabase después de update (audio_transcription):', txAfter && txAfter[0] && txAfter[0].audio_transcription);
+                    }
+                }
+                
+                // --- NUEVO: Manejar tweets sin media descargada ---
+                if (downloadResult.files.length === 0 && tweetText) {
+                    console.log('📝 Tweet sin media: usando tweet.text como transcripción');
+                    combinedTranscription = tweetText;
+
+                    // Generar descripción IA si corresponde
+                    if (shouldGenerateDescription && !dryRun) {
+                        try {
+                            console.log('🤖 Generando descripción basada en tweet_text (sin media)...');
+                            const aiDescription = await generateDescriptionFromTranscription(combinedTranscription, item.url);
+                            if (aiDescription) {
+                                const { error: descUpdateError } = await supabase
+                                    .from('codex_items')
+                                    .update({ descripcion: aiDescription })
+                                    .eq('id', item.id);
+                                if (descUpdateError) {
+                                    console.error('❌ Error actualizando descripción del item:', descUpdateError);
+                                } else {
+                                    console.log('✅ Descripción del item actualizada con IA (solo tweet texto)');
+                                }
+                            }
+                        } catch (tweetDescErr) {
+                            console.error('❌ Error generando descripción IA para tweet sin media:', tweetDescErr);
+                        }
+                    }
+
+                    finalAnalysis += `\n\n[TRANSCRIPCIÓN - TWEET]\n${tweetText}`;
+
+                    // Actualizar campos de transcripción directamente
+                    try {
+                        await supabase
+                            .from('codex_items')
+                            .update({
+                                transcripcion: combinedTranscription,
+                                audio_transcription: combinedTranscription
+                            })
+                            .eq('id', item.id);
+                        console.log('✅ Campos transcripcion y audio_transcription actualizados con tweet_text');
+                    } catch (txUpdateErr) {
+                        console.error('❌ Error actualizando campos de transcripción:', txUpdateErr);
+                    }
                 }
                 
                 // No debitar créditos si es admin
@@ -451,13 +738,22 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                     success: true,
                     message: 'Análisis final completado',
                     creditsUsed: creditsToDebit,
-                    analysisType: 'final'
+                    analysisType: 'final',
+                    tweetData: {
+                        source: url,
+                        text: tweetText,
+                        timestamp: new Date().toISOString(),
+                        media_url: downloadResult.files && downloadResult.files.length > 0 ? (downloadResult.files[0].url || null) : null,
+                        type: downloadResult.files && downloadResult.files.length > 0 ? (/\.(jpg|jpeg|png|gif|webp)$/i.test(downloadResult.files[0].filename || '') ? 'image' : 'other') : 'text',
+                        transcription: combinedTranscription
+                    }
                 });
                 
                 processedCount++;
+                console.log(`✅ Item ${index + 1}/${pendingItems.length} completado exitosamente`);
                 
             } catch (error) {
-                console.error(`❌ Error procesando item: ${item.id} - ${item.titulo}:`, error);
+                console.error(`❌ Error procesando item ${index + 1}/${pendingItems.length}: ${item.id} - ${item.titulo}:`, error);
                 results.push({
                     itemId: item.id,
                     success: false,
@@ -465,8 +761,14 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                     creditsUsed: 0
                 });
                 processedCount++;
+                console.log(`💥 Item ${index + 1}/${pendingItems.length} completado con error`);
             }
+            
+            console.log(`📊 Progreso: ${index + 1}/${pendingItems.length} procesados hasta ahora`);
         }
+        
+        console.log(`🎉 Bucle de procesamiento completado. Total procesados: ${processedCount}`);
+        console.log(`💰 Total créditos usados: ${totalCreditsUsed}`);
         
         return res.json({
             success: true,
@@ -486,3 +788,6 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
 });
 
 module.exports = router;
+
+// Exportar función para pruebas
+module.exports.generateDescriptionFromTranscription = generateDescriptionFromTranscription;

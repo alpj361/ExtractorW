@@ -13,6 +13,7 @@ const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const TEMP_DIR = '/tmp/audio_transcriptions';
 const SUPPORTED_AUDIO_FORMATS = ['.mp3', '.wav', '.aac', '.ogg', '.flac', '.m4a'];
 const SUPPORTED_VIDEO_FORMATS = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v'];
+const SUPPORTED_IMAGE_FORMATS = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
 
 // Crear directorio temporal si no existe
 if (!fs.existsSync(TEMP_DIR)) {
@@ -103,7 +104,15 @@ async function transcribeWithGemini(audioPath, options = {}) {
     console.log(`📁 Tamaño del archivo: ${audioSize} MB`);
     
     // Configurar modelo Gemini
-    const model = genai.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+    let modelName = options.model || 'gemini-2.5-flash'; // nuevo default multimodal
+    let model;
+    try {
+      model = genai.getGenerativeModel({ model: modelName });
+    } catch (e) {
+      console.warn('⚠️ Modelo', modelName, 'no disponible, usando gemini-1.5-flash');
+      modelName = 'gemini-1.5-flash';
+      model = genai.getGenerativeModel({ model: modelName });
+    }
     
     // Preparar prompt personalizado
     const prompt = options.prompt || `
@@ -156,7 +165,7 @@ async function transcribeWithGemini(audioPath, options = {}) {
         originalFile: path.basename(audioPath),
         fileSize: audioSize,
         mimeType: mimeType,
-        model: 'gemini-2.0-flash-exp',
+        model: modelName,
         timestamp: new Date().toISOString(),
         charactersCount: transcription.length,
         wordsCount: transcription.split(' ').length
@@ -342,9 +351,109 @@ async function transcribeFile(filePath, userId, options = {}) {
   }
 }
 
+/**
+ * Transcribe or describe an image using Gemini Vision
+ * @param {string} imagePath - Absolute path to the local image file
+ * @param {Object} options - Extra options (prompt, model)
+ * @returns {Promise<{transcription: string, metadata: Object}>}
+ */
+async function transcribeImageWithGemini(imagePath, options = {}) {
+  try {
+    if (!fs.existsSync(imagePath)) {
+      throw new Error(`Archivo de imagen no encontrado: ${imagePath}`);
+    }
+
+    let imageExt = path.extname(imagePath).toLowerCase();
+    // Si contiene parámetros codificados (? o %), limpiarlos
+    if (imageExt.includes('%') || imageExt.includes('?')) {
+      const clean = imagePath.split('?')[0];
+      imageExt = path.extname(decodeURIComponent(clean)).toLowerCase();
+    }
+
+    if (!SUPPORTED_IMAGE_FORMATS.includes(imageExt)) {
+      throw new Error(`Formato de imagen no soportado para transcripción: ${imageExt}`);
+    }
+
+    const imageData = fs.readFileSync(imagePath);
+    const imageSize = (imageData.length / 1024 / 1024).toFixed(2); // MB
+
+    let modelName = options.model || 'gemini-2.5-flash'; // nuevo default multimodal
+    let model;
+    try {
+      model = genai.getGenerativeModel({ model: modelName });
+    } catch (e) {
+      console.warn('⚠️ Modelo', modelName, 'no disponible, usando gemini-1.5-flash');
+      modelName = 'gemini-1.5-flash';
+      model = genai.getGenerativeModel({ model: modelName });
+    }
+
+    const prompt = options.prompt || `Describe detalladamente el contenido de esta imagen en español. Si contiene texto incrustado, transcribe el texto exactamente como aparece. Devuelve solo la descripción/transcripción, sin formato adicional.`;
+
+    console.log(`🖼️ Enviando imagen a Gemini Vision (${modelName}, ${imageSize} MB)...`);
+    const result = await model.generateContent([
+      prompt,
+      {
+        inlineData: {
+          mimeType: (() => {
+            switch (imageExt) {
+              case '.jpg':
+              case '.jpeg':
+                return 'image/jpeg';
+              case '.png':
+                return 'image/png';
+              case '.gif':
+                return 'image/gif';
+              case '.webp':
+                return 'image/webp';
+              default:
+                return `image/${imageExt.replace('.', '')}`;
+            }
+          })(),
+          data: imageData.toString('base64')
+        }
+      }
+    ]);
+
+    const transcription = result.response.text();
+    console.log(`✅ Transcripción de imagen completada: ${transcription.substring(0, 80)}...`);
+
+    return {
+      transcription,
+      metadata: {
+        originalFile: path.basename(imagePath),
+        fileSize: imageSize,
+        mimeType: (() => {
+          switch (imageExt) {
+            case '.jpg':
+            case '.jpeg':
+              return 'image/jpeg';
+            case '.png':
+              return 'image/png';
+            case '.gif':
+              return 'image/gif';
+            case '.webp':
+              return 'image/webp';
+            default:
+              return `image/${imageExt.replace('.', '')}`;
+          }
+        })(),
+        model: modelName,
+        timestamp: new Date().toISOString(),
+        charactersCount: transcription.length,
+        wordsCount: transcription.split(' ').length
+      }
+    };
+  } catch (error) {
+    console.error('❌ Error en transcripción de imagen con Gemini:', error);
+    throw new Error(`Error al transcribir imagen con Gemini: ${error.message}`);
+  }
+}
+
 module.exports = {
   transcribeFile,
   detectFileType,
   SUPPORTED_AUDIO_FORMATS,
-  SUPPORTED_VIDEO_FORMATS
+  SUPPORTED_VIDEO_FORMATS,
+  SUPPORTED_IMAGE_FORMATS,
+  transcribeImageWithGemini
 }; 

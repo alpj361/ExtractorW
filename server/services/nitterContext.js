@@ -2,8 +2,28 @@ const fetch = require('node-fetch');
 const supabase = require('../utils/supabase');
 
 // Configuración de la API de ExtractorT
-const EXTRACTOR_T_URL = process.env.EXTRACTOR_T_URL || 'http://localhost:8001';
+function getExtractorTUrl() {
+  if (process.env.EXTRACTOR_T_URL) {
+    return process.env.EXTRACTOR_T_URL;
+  }
+  
+  // Detectar si estamos en Docker
+  if (process.env.NODE_ENV === 'production' || process.env.DOCKER_ENV === 'true') {
+    // En Docker, usar host.docker.internal o la IP del host
+    return process.env.DOCKER_HOST_IP 
+      ? `http://${process.env.DOCKER_HOST_IP}:8000`
+      : 'http://host.docker.internal:8000';
+  }
+  
+  // En desarrollo local
+  return 'http://localhost:8000';
+}
+
+const EXTRACTOR_T_URL = getExtractorTUrl();
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+// Log de configuración
+console.log(`🔗 ExtractorT URL configurada: ${EXTRACTOR_T_URL}`);
 
 // Función para análisis de sentimiento individual con Gemini 1.5 Flash
 async function analyzeTweetSentiment(tweet, categoria) {
@@ -296,7 +316,19 @@ const parseNitterDate = (dateString) => {
   if (!dateString) return null;
   
   try {
-    // Manejar fechas relativas: "3m", "16m", "2h", "58m", etc.
+    // 0) Si la cadena ya es ISO (contiene "T" y se parsea correctamente), devolverla tal cual en UTC
+    if (/^\d{4}-\d{2}-\d{2}T/.test(dateString)) {
+      const isoDate = new Date(dateString);
+      if (!isNaN(isoDate.getTime())) {
+        // Si no incluye zona, asumimos que la hora ya viene en UTC y simplemente añadimos 'Z'
+        if (/Z$/.test(dateString)) {
+          return dateString; // ya tiene Z
+        }
+        return dateString + 'Z';
+      }
+    }
+
+    // 1) Manejar fechas relativas: "3m", "16m", "2h", etc.
     if (/^\d+[mhsdwy]$/.test(dateString)) {
       const now = new Date();
       const value = parseInt(dateString);
@@ -328,9 +360,12 @@ const parseNitterDate = (dateString) => {
       return now.toISOString();
     }
     
-    // Formato típico de Nitter: "May 30, 2025 · 11:10 PM UTC"
-    const cleanDate = dateString.replace(' · ', ' ').replace(' UTC', '');
-    const date = new Date(cleanDate + ' UTC');
+    const currentYear = new Date().getFullYear();
+    let cleanDate = dateString.replace(' · ', ' ').replace(' UTC', '');
+    if (!/\d{4}/.test(cleanDate)) {
+      cleanDate = `${cleanDate} ${currentYear}`;
+    }
+    const date = new Date(`${cleanDate} UTC`);
     
     if (isNaN(date.getTime())) {
       return new Date().toISOString();
@@ -394,6 +429,10 @@ async function processNitterContext(query, userId, sessionId, location = 'guatem
       try {
         console.log(`🔄 Procesando tweet ${index + 1}/${tweets.length}: @${tweet.usuario}`);
         
+        // Log fecha cruda y parseada para depuración
+        const parsedFecha = parseNitterDate(tweet.fecha);
+        console.log(`🕒 Fecha raw recibida: "${tweet.fecha}" -> parseada a: ${parsedFecha}`);
+
         // Analizar sentimiento
         const sentimentData = await analyzeTweetSentiment(tweet, categoria);
         
@@ -413,7 +452,8 @@ async function processNitterContext(query, userId, sessionId, location = 'guatem
           detected_group: detectedGroup,
           tweet_id: tweet.tweet_id,
           usuario: tweet.usuario,
-          fecha_tweet: parseNitterDate(tweet.fecha),
+          fecha_tweet: parsedFecha,
+          fecha: parsedFecha,
           texto: tweet.texto,
           enlace: tweet.enlace,
           likes: likes,
@@ -458,7 +498,8 @@ async function processNitterContext(query, userId, sessionId, location = 'guatem
         const processedTweet = {
           tweet_id: tweet.tweet_id,
           usuario: tweet.usuario,
-          fecha_tweet: parseNitterDate(tweet.fecha),
+          fecha_tweet: parsedFecha,
+          fecha: parsedFecha,
           texto: tweet.texto,
           enlace: tweet.enlace,
           likes: likes,

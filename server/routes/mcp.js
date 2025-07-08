@@ -154,6 +154,58 @@ router.post('/nitter_context', verifyUserAccess, async (req, res) => {
 });
 
 /**
+ * POST /api/mcp/nitter_profile
+ * Endpoint directo para herramienta nitter_profile para tweets de usuario específico
+ */
+router.post('/nitter_profile', verifyUserAccess, async (req, res) => {
+  try {
+    const { username, limit = 10, include_retweets = false, include_replies = false } = req.body;
+    const user = req.user;
+    
+    if (!username) {
+      return res.status(400).json({
+        success: false,
+        message: 'El parámetro username es requerido'
+      });
+    }
+    
+    if (limit && (typeof limit !== 'number' || limit < 5 || limit > 20)) {
+      return res.status(400).json({
+        success: false,
+        message: 'El parámetro limit debe ser un número entre 5 y 20'
+      });
+    }
+    
+    console.log(`🔧 MCP nitter_profile solicitado por usuario ${user.email}: @${username}`);
+    
+    const result = await mcpService.executeTool('nitter_profile', { 
+      username: username.replace('@', ''), 
+      limit: parseInt(limit),
+      include_retweets: include_retweets,
+      include_replies: include_replies
+    }, user);
+    
+    res.json({
+      success: true,
+      message: `Tweets de usuario @${username} obtenidos exitosamente`,
+      username: username,
+      limit: parseInt(limit),
+      include_retweets: include_retweets,
+      include_replies: include_replies,
+      result: result,
+      execution_time: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error ejecutando nitter_profile MCP:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo tweets del usuario',
+      error: error.message
+    });
+  }
+});
+
+/**
  * GET /api/mcp/status
  * Estado del MCP Server
  */
@@ -237,6 +289,45 @@ router.get('/capabilities', async (req, res) => {
             "Guardado individual en base de datos",
             "Categorización automática"
           ]
+        },
+        {
+          "name": "nitter_profile",
+          "description": "Obtiene tweets recientes de un usuario específico usando Nitter, ideal para analizar actividad de cuentas institucionales, políticos e influencers",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "username": {
+                "type": "string",
+                "description": "Nombre de usuario de Twitter sin el @, ejemplo: GuatemalaGob, elonmusk, CashLuna"
+              },
+              "limit": {
+                "type": "number",
+                "description": "Número máximo de tweets a obtener del usuario",
+                "minimum": 5,
+                "maximum": 20,
+                "default": 10
+              },
+              "include_retweets": {
+                "type": "boolean",
+                "description": "Incluir retweets del usuario en los resultados",
+                "default": false
+              },
+              "include_replies": {
+                "type": "boolean",
+                "description": "Incluir replies del usuario en los resultados",
+                "default": false
+              }
+            },
+            "required": ["username"]
+          },
+          "features": [
+            "Extracción de tweets de usuario específico",
+            "Información completa del perfil",
+            "Ordenamiento cronológico (más reciente primero)",
+            "Filtrado inteligente de contenido",
+            "Métricas de engagement por tweet",
+            "Múltiples instancias Nitter como fallback"
+          ]
         }
       ]
     };
@@ -267,20 +358,45 @@ router.post('/call', async (req, res) => {
       // Listar herramientas disponibles
       const tools = await mcpService.listAvailableTools();
       res.json({
-        tools: tools.map(tool => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: {
-            type: "object",
-            properties: {
-              q: { type: "string", description: "Término de búsqueda" },
-              location: { type: "string", description: "Ubicación", default: "guatemala" },
-              limit: { type: "number", description: "Límite de tweets", default: 10 },
-              session_id: { type: "string", description: "ID de sesión del chat" }
-            },
-            required: ["q"]
+        tools: tools.map(tool => {
+          if (tool.name === 'nitter_profile') {
+            return {
+              name: tool.name,
+              description: tool.description,
+              inputSchema: {
+                type: "object",
+                properties: {
+                  username: { type: "string", description: "Nombre de usuario sin @" },
+                  limit: { type: "number", description: "Límite de tweets", default: 10 },
+                  include_retweets: { type: "boolean", description: "Incluir retweets", default: false },
+                  include_replies: { type: "boolean", description: "Incluir replies", default: false }
+                },
+                required: ["username"]
+              }
+            };
+          } else if (tool.name === 'nitter_context') {
+            return {
+              name: tool.name,
+              description: tool.description,
+              inputSchema: {
+                type: "object",
+                properties: {
+                  q: { type: "string", description: "Término de búsqueda" },
+                  location: { type: "string", description: "Ubicación", default: "guatemala" },
+                  limit: { type: "number", description: "Límite de tweets", default: 10 },
+                  session_id: { type: "string", description: "ID de sesión del chat" }
+                },
+                required: ["q"]
+              }
+            };
+          } else {
+            return {
+              name: tool.name,
+              description: tool.description,
+              inputSchema: tool.inputSchema || {}
+            };
           }
-        }))
+        })
       });
     } else if (method === 'tools/call') {
       // Ejecutar herramienta específica
@@ -291,6 +407,12 @@ router.post('/call', async (req, res) => {
         // Por ahora, retornamos error pidiendo usar endpoint autenticado
         res.status(401).json({
           error: 'nitter_context requiere autenticación. Use /api/mcp/nitter_context con token JWT'
+        });
+      } else if (name === 'nitter_profile') {
+        // Para N8N, necesitamos crear un usuario dummy o requerir autenticación
+        // Por ahora, retornamos error pidiendo usar endpoint autenticado
+        res.status(401).json({
+          error: 'nitter_profile requiere autenticación. Use /api/mcp/nitter_profile con token JWT'
         });
       } else {
         res.status(404).json({

@@ -18,6 +18,77 @@ if (!supabaseUrl || !supabaseServiceKey) {
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 /**
+ * Función para convertir fecha de Nitter a formato ISO
+ * Copiada de nitterProfile.js para compatibilidad
+ */
+const parseNitterDate = (dateString) => {
+  if (!dateString) return null;
+  
+  try {
+    // 1) Fechas relativas "3m", "2h", etc.
+    const relMatch = /(?:hace\s+)?(\d+)\s*(min|m|h|d|w|y)/i.exec(dateString);
+    if (relMatch) {
+      const now = new Date();
+      const value = parseInt(relMatch[1], 10);
+      const unitRaw = relMatch[2].toLowerCase();
+      const unit = unitRaw === 'min' ? 'm' : unitRaw;
+      
+      switch (unit) {
+        case 'm':
+          now.setMinutes(now.getMinutes() - value);
+          break;
+        case 'h':
+          now.setHours(now.getHours() - value);
+          break;
+        case 'd':
+          now.setDate(now.getDate() - value);
+          break;
+        case 'w':
+          now.setDate(now.getDate() - value * 7);
+          break;
+        case 'y':
+          now.setFullYear(now.getFullYear() - value);
+          break;
+        case 's':
+          now.setSeconds(now.getSeconds() - value);
+          break;
+        default:
+          break;
+      }
+      
+      return now.toISOString();
+    }
+    
+    // 2) Fechas absolutas con o sin año.
+    //   Ejemplos: "May 30, 2025 · 11:10 PM UTC"  |  "May 30 · 11:10 PM UTC"
+    const currentYear = new Date().getFullYear();
+    let cleanDate = dateString.replace(' · ', ' ').replace(' UTC', '');
+    
+    // Agregar año actual si falta.
+    if (!/\d{4}/.test(cleanDate)) {
+      cleanDate = `${cleanDate} ${currentYear}`;
+    }
+    
+    const date = new Date(`${cleanDate} UTC`);
+    
+    // Si el parse falla, devolver now.
+    if (isNaN(date.getTime())) {
+      return new Date().toISOString();
+    }
+    
+    // Si año poco probable (<2006) asumir año actual
+    if (date.getFullYear() < 2006) {
+      date.setFullYear(currentYear);
+    }
+    
+    return date.toISOString();
+  } catch (error) {
+    console.error(`Error parseando fecha "${dateString}":`, error.message);
+    return new Date().toISOString();
+  }
+};
+
+/**
  * Obtiene proyectos del usuario con metadatos y estadísticas
  * @param {string} userId - ID del usuario
  * @param {Object} options - Opciones de filtrado
@@ -362,54 +433,49 @@ async function searchUserCodex(searchQuery, userId, options = {}) {
  */
 async function getUserStats(userId) {
   try {
-    console.log(`📈 Obteniendo estadísticas del usuario: ${userId}`);
+    console.log(`📈 Calculando estadísticas globales del usuario: ${userId}`);
 
-    const [projectsResult, codexResult, decisionsResult] = await Promise.all([
-      supabase.from('projects').select('status', { count: 'exact' }).eq('user_id', userId),
-      supabase.from('codex_items').select('type', { count: 'exact' }).eq('user_id', userId),
-      supabase.from('project_decisions').select('decision_type').eq('user_id', userId)
-    ]);
+    // Contar proyectos
+    const { count: projectsCount } = await supabase
+      .from('projects')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId);
 
-    // Contar proyectos por status
-    const projectsByStatus = {};
-    projectsResult.data?.forEach(p => {
-      projectsByStatus[p.status] = (projectsByStatus[p.status] || 0) + 1;
-    });
+    // Contar decisiones
+    const { count: decisionsCount } = await supabase
+      .from('project_decisions')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId);
 
-    // Contar items del codex por tipo
-    const codexByType = {};
-    codexResult.data?.forEach(c => {
-      codexByType[c.type] = (codexByType[c.type] || 0) + 1;
-    });
+    // Contar items de codex
+    const { count: codexCount } = await supabase
+      .from('codex_items')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId);
 
-    // Contar decisiones por tipo
-    const decisionsByType = {};
-    decisionsResult.data?.forEach(d => {
-      decisionsByType[d.decision_type] = (decisionsByType[d.decision_type] || 0) + 1;
-    });
-
-    const stats = {
-      totalProjects: projectsResult.count || 0,
-      totalCodexItems: codexResult.count || 0,
-      totalDecisions: decisionsResult.count || 0,
-      projectsByStatus,
-      codexByType,
-      decisionsByType
+    return {
+      success: true,
+      stats: {
+        projects: projectsCount || 0,
+        decisions: decisionsCount || 0,
+        codex_items: codexCount || 0
+      }
     };
-
-    console.log('✅ Estadísticas obtenidas:', stats);
-    return stats;
-
   } catch (error) {
-    console.error('Error en getUserStats:', error);
-    throw error;
+    console.error('Error in getUserStats:', error);
+    return { success: false, error: error.message };
   }
 }
 
+// -------------------------------------------------------------
+// Exportar funciones públicas del servicio
+// -------------------------------------------------------------
+
 module.exports = {
+  parseNitterDate,
   getUserProjects,
   getUserCodex,
   getProjectDecisions,
   searchUserCodex,
   getUserStats
-}; 
+};

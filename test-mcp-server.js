@@ -232,7 +232,7 @@ async function runAllTests() {
   if (!TEST_USER_TOKEN) {
     console.log('   - Configura TEST_TOKEN en variables de entorno para autenticación');
   }
-  console.log('   - Verifica que ExtractorT esté corriendo en puerto 8001');
+      console.log('   - Verifica que ExtractorT esté corriendo en puerto 8000');
   console.log('   - Verifica que ExtractorW esté corriendo en puerto 3000');
   
   return {

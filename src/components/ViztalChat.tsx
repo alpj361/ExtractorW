@@ -7,6 +7,32 @@ import { Card } from './ui/card';
 import { Badge } from './ui/badge';
 import { cn } from '@/lib/utils';
 
+// ------------------------------------------------------------
+// Utilidad local para resolver la URL base del backend ExtractorW
+// Se inspira en la misma lógica usada en PulseJ/src/services/api.ts
+// ------------------------------------------------------------
+
+function resolveExtractorWUrl(): string {
+  // 1) Si existe variable de entorno explícita (por ejemplo en Netlify / Vercel)
+  if (process.env.NEXT_PUBLIC_EXTRACTORW_API_URL) {
+    return process.env.NEXT_PUBLIC_EXTRACTORW_API_URL.replace(/\/$/, ''); // sin barra final
+  }
+
+  // 2) Detectar entorno de desarrollo automáticamente (host localhost *o* NODE_ENV === 'development')
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    const isLocalHost = ['localhost', '127.0.0.1', '0.0.0.0', '[::1]'].includes(host);
+    if (isLocalHost || process.env.NODE_ENV === 'development') {
+      return 'http://localhost:8080/api';
+    }
+  }
+
+  // 3) Fallback a producción (link real)
+  return 'https://server.standatpd.com/api';
+}
+
+// Nota: No llamamos a resolveExtractorWUrl en SSR para evitar evaluar window.
+
 interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -25,7 +51,7 @@ interface ViztalChatProps {
 }
 
 export function ViztalChat({ 
-  apiBaseUrl = '/api/vizta-chat',
+  apiBaseUrl,
   className,
   placeholder = 'Pregúntame sobre tendencias, análisis de redes sociales o búsquedas web...',
   userToken
@@ -65,8 +91,12 @@ export function ViztalChat({
     setInput('');
     setIsLoading(true);
 
+    // Determinar base final: si prop viene completa (http) úsala, de lo contrario usa la interna
+    const apiBase = (apiBaseUrl && apiBaseUrl.startsWith('http')) ? apiBaseUrl : resolveExtractorWUrl();
+    console.log('🔧 ViztalChat: URL API base utilizada:', apiBase);
+
     try {
-      const response = await fetch(`${apiBaseUrl}/query`, {
+      const response = await fetch(`${apiBase}/vizta-chat/query`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

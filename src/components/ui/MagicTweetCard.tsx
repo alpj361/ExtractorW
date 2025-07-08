@@ -99,16 +99,11 @@ export function MagicCard(props: any) {
 const formatDate = (dateString: string | null) => {
   if (!dateString) return 'Fecha no disponible';
   const date = new Date(dateString);
-  const now = new Date();
-  const diffInHours = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60));
-  
-  if (diffInHours < 1) return 'hace menos de 1h';
-  if (diffInHours < 24) return `hace ${diffInHours}h`;
-  if (diffInHours < 48) return 'hace 1 día';
-  
+  if (isNaN(date.getTime())) return dateString;
+
   return new Intl.DateTimeFormat('es-ES', {
-    month: 'short',
     day: 'numeric',
+    month: 'short',
     hour: '2-digit',
     minute: '2-digit'
   }).format(date);
@@ -249,7 +244,7 @@ export function MagicTweetCard(props: any) {
               </Typography>
               <Typography variant="body2" color="text.secondary">·</Typography>
               <Typography variant="body2" color="text.secondary">
-                {formatDate(tweet.fecha_tweet)}
+                {formatDate(tweet.fecha_tweet || (tweet as any).fecha)}
               </Typography>
             </Box>
             

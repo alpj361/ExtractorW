@@ -10,6 +10,7 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=8080
+      - DOCKER_ENV=true
     env_file:
       - .env
     volumes:
