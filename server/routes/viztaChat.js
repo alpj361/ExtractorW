@@ -4,6 +4,7 @@ const { verifyUserAccess } = require('../middlewares/auth');
 const mcpService = require('../services/mcp');
 const recentScrapesService = require('../services/recentScrapes');
 const memoriesService = require('../services/memories');
+const agentesService = require('../services/agentesService');
 const supabase = require('../utils/supabase');
 
 // ===================================================================
@@ -264,7 +265,49 @@ router.post('/query', verifyUserAccess, async (req, res) => {
 
     console.log('🔍 Esquema de funciones para OpenAI:', JSON.stringify(functions, null, 2));
 
-    // 3. Preparar mensajes incluyendo historial de conversación
+    // 3. NUEVA ORQUESTACIÓN CON SISTEMA DE AGENTES
+    // Vizta delega trabajo a Laura (monitoreo) y Robert (documentos)
+    console.log('🎯 Iniciando orquestación de agentes para consulta...');
+    
+    const startTime = Date.now();
+    const agentResults = await agentesService.orchestrateQuery(message, req.user, {
+      sessionId: chatSessionId,
+      previousMessages: previousMessages
+    });
+    const orchestrationTime = Date.now() - startTime;
+
+    console.log(`🤖 Orquestación completada en ${orchestrationTime}ms:`, {
+      laura_tasks: agentResults.laura_findings.length,
+      robert_tasks: agentResults.robert_findings.length,
+      total_execution_time: agentResults.total_execution_time
+    });
+
+    // Preparar datos consolidados para guardar en recent_scrapes
+    const allTweets = agentResults.laura_findings
+      .filter(finding => finding.findings?.top_posts)
+      .flatMap(finding => finding.findings.top_posts);
+
+    if (allTweets.length > 0) {
+      await recentScrapesService.saveScrape({
+        queryOriginal: message,
+        queryClean: message,
+        herramienta: 'agentes_colaborativos',
+        categoria: 'Análisis Integral',
+        tweets: allTweets,
+        userId: userId,
+        sessionId: chatSessionId,
+        mcpRequestId: requestId,
+        mcpExecutionTime: agentResults.total_execution_time,
+        location: 'guatemala',
+        metadata: {
+          laura_findings: agentResults.laura_findings.length,
+          robert_findings: agentResults.robert_findings.length,
+          orchestration_time: orchestrationTime
+        }
+      });
+    }
+
+    // Preparar mensajes incluyendo historial de conversación
     // Obtener fecha actual para contexto temporal
     const now = new Date();
     const currentDate = now.toLocaleDateString('es-ES', { 
@@ -278,16 +321,65 @@ router.post('/query', verifyUserAccess, async (req, res) => {
     
     const systemMessage = {
       role: 'system',
-      content: `Eres Vizta, un asistente de investigación especializado en análisis de redes sociales, búsquedas web y tendencias en Guatemala.
+      content: `Eres Vizta, el orquestador principal de un sistema de agentes inteligentes para análisis social en Guatemala.
 
 **FECHA ACTUAL: ${currentDate}**
 **CONTEXTO TEMPORAL: ${currentMonth} ${currentYear}**
 
-IMPORTANTE: Siempre tienes en mente que HOY es ${currentDate}. Cuando realices búsquedas o análisis:
+**TU NUEVO ROL COMO ORQUESTADOR:**
+• Recibes datos PRE-PROCESADOS de tus agentes especializados Laura (monitoreo) y Robert (documentos)
+• Tu trabajo es SINTETIZAR, ANALIZAR y PRESENTAR estos hallazgos de forma clara y accionable
+• NO ejecutes herramientas directamente - tus agentes ya trabajaron por ti
+• NO prometas "buscar", "analizar" o "investigar" - ¡YA SE HIZO! Presenta los resultados
+
+**AGENTES QUE TRABAJARON PARA TI:**
+🔍 **Laura** (Analista de Monitoreo): Vigilancia de redes sociales, tendencias, sentimientos
+📚 **Robert** (Orquestador Interno): Gestión de proyectos y documentos del usuario
+
+**RESULTADOS DE LA INVESTIGACIÓN COMPLETADA:**
+${JSON.stringify(agentResults, null, 2)}
+
+**INSTRUCCIONES CRÍTICAS:**
+- NUNCA digas "voy a buscar", "procederé a analizar" o "un momento por favor"
+- SIEMPRE comienza con los resultados encontrados: "He analizado...", "Los datos muestran...", "Según la investigación realizada..."
+- Si no hay datos (0 tweets), explica qué se buscó y sugiere términos alternativos
+- Enfócate en presentar y analizar los hallazgos existentes, no en promesas de futuras búsquedas
+
+**TU TRABAJO AHORA:**
 - Enfócate en información ACTUAL y RECIENTE (${currentMonth} ${currentYear})
 - Filtra información obsoleta o de fechas anteriores
 - Contextualiza todo en el tiempo presente
 - Busca eventos, noticias y tendencias de AHORA 
+
+--------------------------------------------------------------------
+**MEMORIA CONVERSACIONAL AVANZADA**
+• Usa los mensajes previos del usuario (memories) para evitar repetir búsquedas.
+• Referencia insights o resultados anteriores cuando aporten valor.
+• Si existen hallazgos relevantes en la sesión, enlázalos brevemente antes de ejecutar nuevas herramientas.
+
+**PROCESAMIENTO INTELIGENTE DE RESULTADOS**
+Siempre que recibas datos de una herramienta sigue este flujo:
+1. **Analiza** ¿qué significan los datos?
+2. **Contextualiza** ¿cómo se relacionan con Guatemala y el momento actual?
+3. **Sintetiza** patrones o tendencias detectadas.
+4. **Proyecta** implicaciones futuras o posibles escenarios.
+5. **Recomienda** acciones concretas o próximos pasos.
+
+**FORMATO ADAPTATIVO DE RESPUESTA**
+Detecta la intención del usuario y responde con la estructura más apropiada:
+    • *Análisis profundo* → Executive Summary ▸ Detalles ▸ Recomendaciones.
+    • *Datos rápidos* → lista breve de puntos clave.
+    • *Tendencias* → bullets con gráfico en texto + interpretación.
+    • *Comparaciones* → tabla ▸ análisis diferencial.
+    • *Investigación* → metodología ▸ hallazgos ▸ próximos pasos.
+
+**REGLA OBLIGATORIA DE FUENTES**
+Al final de cada respuesta agrega una sección **Fuentes**:
+    • Tweets → '@usuario · fecha · enlace'
+    • Perplexity / Web → URL sin cortar.
+    • Codex → nombre del documento / enlace directo.
+Finaliza siempre con: "¿Te gustaría que profundice en algún aspecto específico?"
+--------------------------------------------------------------------
 
 **ACCESO COMPLETO A DATOS PERSONALES:**
 TIENES ACCESO TOTAL a los datos personales del usuario autenticado a través de las herramientas user_projects y user_codex. 
@@ -526,543 +618,69 @@ IMPORTANTE:
 
     console.log(`💭 Enviando ${messagesForAI.length} mensajes a OpenAI (incluyendo ${previousMessages.length} del historial)`);
 
-    // 4. Llamar a GPT-4o mini con function calling y contexto de conversación
+    // 4. Llamar a GPT-4o mini SOLO para síntesis (sin function calling - los agentes ya trabajaron)
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: messagesForAI,
-      functions: functions,
-      function_call: 'auto',
       temperature: 0.7,
-      max_tokens: 1000
+      max_tokens: 1200
     });
 
     const assistantMessage = completion.choices[0].message;
 
-    // Si GPT decidió usar una función
-    if (assistantMessage.function_call) {
-      const functionName = assistantMessage.function_call.name;
-      const functionArgs = JSON.parse(assistantMessage.function_call.arguments);
-      
-      console.log(`🔧 GPT decidió usar herramienta: ${functionName} con args:`, functionArgs);
+    // 5. Procesar respuesta de síntesis de Vizta
+    let finalResponse = assistantMessage.content;
+    
+    // Aplicar formateo de respuesta
+    finalResponse = formatChatResponse(finalResponse, {
+      laura_findings: agentResults.laura_findings.length,
+      robert_findings: agentResults.robert_findings.length,
+      total_execution_time: agentResults.total_execution_time
+    });
 
-      // CASO ESPECIAL: Plan de ejecución multi-step
-      if (functionName === 'create_execution_plan') {
-        console.log('🎯 Ejecutando plan multi-step:', functionArgs);
-        
-        const { steps, final_goal } = functionArgs;
-        const stepResults = [];
-        let combinedContext = '';
-        
-        try {
-          // Ejecutar cada paso en secuencia
-          for (const step of steps) {
-            console.log(`📋 Ejecutando paso ${step.step_number}: ${step.description}`);
-            
-            // Si el paso depende del anterior, modificar los argumentos con contexto
-            let stepArgs = { ...step.args };
-            if (step.depends_on_previous && combinedContext) {
-              // Modificar query o argumentos basándose en resultados anteriores
-              if (stepArgs.q) {
-                stepArgs.q = `${stepArgs.q} ${combinedContext}`;
-              }
-            }
-            
-            const startTime = Date.now();
-            const stepResult = await mcpService.executeTool(step.tool, stepArgs, req.user);
-            const executionTime = Date.now() - startTime;
-            
-            stepResults.push({
-              step_number: step.step_number,
-              tool: step.tool,
-              args: stepArgs,
-              description: step.description,
-              result: stepResult,
-              execution_time: executionTime,
-              success: stepResult.success
-            });
-            
-            // Actualizar contexto para próximos pasos
-            if (stepResult.success) {
-              if (stepResult.tweets) {
-                combinedContext += ` tweets:${stepResult.tweets.length}`;
-              }
-              if (stepResult.projects) {
-                const projectNames = stepResult.projects.map(p => p.name).join(', ');
-                combinedContext += ` proyectos:${projectNames}`;
-              }
-              if (stepResult.documents) {
-                combinedContext += ` documentos:${stepResult.documents.length}`;
-              }
-              if (stepResult.content) {
-                combinedContext += ` contexto_adicional`;
-              }
-            }
-            
-            console.log(`✅ Paso ${step.step_number} completado. Contexto acumulado: "${combinedContext}"`);
-          }
-          
-          // Contar total de tweets y optimizaciones aplicadas
-          const totalTweetsAnalyzed = stepResults.reduce((total, step) => {
-            return total + (step.result?.tweets?.length || 0);
-          }, 0);
-          
-          const deepSeekOptimizations = stepResults.filter(step => 
-            step.result?.optimization_applied
-          ).length;
-          
-          console.log(`📊 Resumen multi-step: ${stepResults.length} pasos, ${totalTweetsAnalyzed} tweets, ${deepSeekOptimizations} optimizaciones DeepSeek`);
-          
-          // Consolidar TODOS los tweets en una sola entrada
-          const allTweets = stepResults
-            .filter(step => step.success && step.result.tweets)
-            .flatMap(step => step.result.tweets);
-          
-          if (allTweets.length > 0) {
-            // Generar título inteligente para toda la investigación
-            let consolidatedTitle = final_goal;
-            try {
-              const titleCompletion = await openai.chat.completions.create({
-                model: 'gpt-4o-mini',
-                messages: [
-                  {
-                    role: 'system',
-                    content: `Genera un título de máximo 50 caracteres para esta investigación integral.
-
-OBJETIVO: ${final_goal}
-TWEETS ANALIZADOS: ${allTweets.length}
-PASOS COMPLETADOS: ${stepResults.filter(s => s.success).length}
-
-INSTRUCCIONES:
-• Título debe ser específico y descriptivo
-• Máximo 50 caracteres
-• Sin mencionar aspectos técnicos
-• Enfocado en el tema principal
-
-EJEMPLOS:
-• "Marcha del Orgullo LGBT+ Guatemala 2025"
-• "Reacciones: Nuevo Gobierno Arévalo"
-• "Crisis Minera en Izabal - Análisis"
-
-Solo devuelve el título, sin explicaciones.`
-                  },
-                  {
-                    role: 'user',
-                    content: `Genera título para: ${final_goal}`
-                  }
-                ],
-                temperature: 0.3,
-                max_tokens: 30
-              });
-              
-              consolidatedTitle = titleCompletion.choices[0].message.content.trim()
-                .replace(/['"]/g, '').substring(0, 50);
-                
-            } catch (error) {
-              console.log('⚠️ Error generando título consolidado, usando objetivo original');
-              consolidatedTitle = final_goal.substring(0, 50);
-            }
-
-            // Guardar UNA SOLA entrada consolidada
-            await recentScrapesService.saveScrape({
-              queryOriginal: message,
-              queryClean: final_goal,
-              generatedTitle: consolidatedTitle,
-              detectedGroup: 'investigacion-integral',
-              herramienta: 'investigacion_multifuente',
-              categoria: 'Investigación Integral',
-              tweets: allTweets,
-              userId: userId,
-              sessionId: chatSessionId,
-              mcpRequestId: requestId,
-              mcpExecutionTime: stepResults.reduce((sum, step) => sum + step.execution_time, 0),
-              location: 'guatemala',
-              metadata: {
-                steps_executed: stepResults.length,
-                sources_consulted: stepResults.map(s => s.tool).filter((v, i, a) => a.indexOf(v) === i),
-                total_tweets: allTweets.length
-              }
-            });
-            
-            console.log(`💾 Investigación consolidada guardada: "${consolidatedTitle}" con ${allTweets.length} tweets`);
-          }
-          
-          // Generar respuesta final con información sobre optimizaciones DeepSeek
-          const multiStepCompletion = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: [
-              {
-                role: 'system',
-                content: `Eres Vizta, un asistente de análisis social inteligente especializado en investigación integral.
-
-MISIÓN: Analizar y sintetizar los resultados de una investigación multi-facética sobre "${final_goal}".
-
-DATOS DISPONIBLES:
-- Pasos de investigación completados: ${stepResults.filter(step => step.success).length}/${steps.length}
-- Total de tweets analizados: ${totalTweetsAnalyzed}
-- Fuentes consultadas: ${stepResults.map(step => step.tool === 'nitter_context' ? 'redes sociales' : 'web').filter((v, i, a) => a.indexOf(v) === i).join(', ')}
-
-PLAN DE INVESTIGACIÓN EJECUTADO:
-${steps.map(step => `${step.step_number}. ${step.description}`).join('\n')}
-
-INSTRUCCIONES PARA RESPUESTA:
-• Sé CONCISO y DIRECTO (máximo 500 palabras)
-• Usa formato MARKDOWN con secciones claras
-• COMBINA y CONECTA todos los hallazgos
-• Enfócate en insights y patrones encontrados
-• Usa emojis para hacer más visual la información
-• NO menciones aspectos técnicos internos
-
-FORMATO REQUERIDO:
-## 🎯 Análisis Integral: [TEMA PRINCIPAL]
-
-**📋 Investigación completada:** ${steps.length} fuentes consultadas
-**📊 Datos analizados:** ${totalTweetsAnalyzed} tweets + información web
-**🔍 Enfoque:** ${final_goal}
-
-### 📊 Hallazgos principales:
-• [síntesis de todos los resultados encontrados]
-• [conexiones y patrones identificados]
-• [insights más relevantes]
-
-### 💭 Reacciones y sentimientos:
-• [análisis de la opinión pública en redes sociales]
-• [sentimientos predominantes]
-• [tendencias conversacionales]
-
-### 💡 Síntesis integral:
-[análisis completo que conecte información web con reacciones sociales]
-
-### 🎯 Conclusiones:
-[respuesta final clara y directa al objetivo de la investigación]
-
-REGLAS CRÍTICAS:
-- NUNCA menciones herramientas técnicas (Nitter, DeepSeek, APIs, etc.)
-- ENFÓCATE en el contenido, no en el proceso
-- COMBINA web + redes sociales de forma natural
-- Presenta como investigación periodística profesional
-- Usa lenguaje accesible y claro
-
-Datos para analizar: ${JSON.stringify(stepResults, null, 2)}`
-              },
-              {
-                role: 'user',
-                content: message
-              }
-            ],
-            temperature: 0.3,
-            max_tokens: 800
-          });
-
-          const multiStepResponse = multiStepCompletion.choices[0].message.content;
-
-          // Guardar respuesta del asistente en memories para multi-step
-          await memoriesService.saveMessage({
-            sessionId: chatSessionId,
-            userId: userId,
-            role: 'assistant',
-            content: multiStepResponse,
-            messageType: 'message',
-            tokensUsed: (completion.usage?.total_tokens || 0) + (multiStepCompletion.usage?.total_tokens || 0),
-            modelUsed: 'gpt-4o-mini',
-            toolsUsed: stepResults.map(step => step.tool),
-            contextSources: stepResults.some(step => step.result.tweets) ? ['twitter'] : [],
-            metadata: { 
-              requestId: requestId,
-              executionType: 'multi_step_optimized',
-              final_goal: final_goal,
-              steps_completed: stepResults.filter(step => step.success).length,
-              total_steps: steps.length,
-              total_tweets_analyzed: totalTweetsAnalyzed,
-              deepseek_optimizations: deepSeekOptimizations,
-              total_execution_time: stepResults.reduce((sum, step) => sum + step.execution_time, 0),
-              step_results: stepResults.map(step => ({
-                step_number: step.step_number,
-                tool: step.tool,
-                success: step.success,
-                execution_time: step.execution_time,
-                optimization_applied: step.result?.optimization_applied || false
-              }))
-            }
-          });
-
-          // Respuesta exitosa del plan multi-step optimizado
-          return res.json({
-            success: true,
-            response: multiStepResponse,
-            toolsUsed: stepResults.map(step => step.tool),
-            executionPlan: {
-              steps: steps,
-              final_goal: final_goal,
-              results: stepResults,
-              total_execution_time: stepResults.reduce((sum, step) => sum + step.execution_time, 0),
-              total_tweets_analyzed: totalTweetsAnalyzed,
-              deepseek_optimizations: deepSeekOptimizations
-            },
-            sessionId: chatSessionId,
-            requestId: requestId,
-            timestamp: new Date().toISOString(),
-            mode: 'multi_step_optimized',
-            steps_completed: stepResults.filter(step => step.success).length,
-            total_steps: steps.length,
-            total_tweets_analyzed: totalTweetsAnalyzed,
-            deepseek_optimizations_applied: deepSeekOptimizations
-          });
-          
-        } catch (error) {
-          console.error('❌ Error ejecutando plan multi-step:', error);
-          return res.status(500).json({
-            success: false,
-            message: 'Error ejecutando plan multi-step: ' + error.message,
-            executionPlan: {
-              steps: steps,
-              final_goal: final_goal,
-              results: stepResults,
-              error: error.message
-            }
-          });
-        }
-      }
-
-      // CASO NORMAL: Herramienta individual (código existente)
-      const startTime = Date.now();
-      const toolResult = await mcpService.executeTool(functionName, functionArgs, req.user);
-      const executionTime = Date.now() - startTime;
-
-      // Generar título automático inteligente basándose en los resultados
-      let generatedTitle = functionArgs.q || message; // fallback al query original
-      
-      if (toolResult.success && toolResult.tweets && toolResult.tweets.length > 0) {
-        try {
-          const titleCompletion = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: [
-              {
-                role: 'system',
-                content: `Eres un experto en crear títulos concisos para monitoreos de redes sociales en Guatemala.
-
-INSTRUCCIONES:
-• Analiza los tweets encontrados y genera un título descriptivo de máximo 50 caracteres
-• El título debe reflejar el TEMA PRINCIPAL de los tweets, no la query original
-• Usa lenguaje guatemalteco cuando sea apropiado
-• Sé específico: en lugar de "Tweets sobre política", usa "Debate Presidencial 2024" 
-• Si hay un evento específico, menciónalo
-• Si detectas una tendencia o hashtag dominante, inclúyelo
-
-EJEMPLOS:
-• Query: "marcha del orgullo" → Título: "Marcha del Orgullo LGBT+ 2025"
-• Query: "bernardo arevalo" → Título: "Gobierno Arévalo - Últimas Noticias"
-• Query: "guatemala futbol" → Título: "Selección Nacional - Copa Oro"
-
-FORMATO: Solo devuelve el título, sin explicaciones.
-
-Tweets analizados: ${JSON.stringify(toolResult.tweets.slice(0, 5), null, 2)}`
-              },
-              {
-                role: 'user',
-                content: `Query original: "${message}"\nQuery expandido: "${functionArgs.q}"\n\nGenera un título inteligente para este monitoreo.`
-              }
-            ],
-            temperature: 0.3,
-            max_tokens: 60
-          });
-
-          const rawTitle = titleCompletion.choices[0].message.content.trim();
-          // Limpiar y validar título
-          generatedTitle = rawTitle.replace(/['"]/g, '').substring(0, 50);
-          console.log(`🏷️ Título generado: "${generatedTitle}" (original: "${message}")`);
-          
-        } catch (titleError) {
-          console.error('⚠️ Error generando título automático:', titleError);
-          // Usar query expandido como fallback mejorado
-          generatedTitle = functionArgs.q || message;
-        }
-      }
-
-      // Detectar tema/grupo para agrupación inteligente
-      let detectedGroup = null;
-      try {
-        const groupCompletion = await openai.chat.completions.create({
-          model: 'gpt-4o-mini',
-          messages: [
-            {
-              role: 'system',
-              content: `Analiza la búsqueda y clasifícala en una categoría para agrupación inteligente.
-
-CATEGORÍAS DISPONIBLES:
-• "politica-guatemala" - Temas de gobierno, elecciones, políticos guatemaltecos
-• "economia-guatemala" - Temas económicos, precios, empleo, mercado
-• "deportes-guatemala" - Fútbol, olimpiadas, deportes nacionales
-• "cultura-guatemala" - Eventos culturales, festivales, tradiciones
-• "social-guatemala" - Marchas, protestas, movimientos sociales
-• "tecnologia" - Tech, innovación, redes sociales
-• "internacional" - Noticias mundiales, política internacional
-• "entretenimiento" - Música, cine, celebridades
-• "general" - Todo lo demás
-
-INSTRUCCIONES:
-• Devuelve SOLO la categoría, sin explicaciones
-• Si hay duda, usa "general"
-• Prioriza categorías guatemaltecas cuando sea relevante
-
-Query: "${message}"
-Título generado: "${generatedTitle}"`
-            }
-          ],
-          temperature: 0.1,
-          max_tokens: 20
-        });
-
-        detectedGroup = groupCompletion.choices[0].message.content.trim().toLowerCase();
-        console.log(`🏷️ Grupo detectado: "${detectedGroup}"`);
-        
-      } catch (groupError) {
-        console.error('⚠️ Error detectando grupo:', groupError);
-        detectedGroup = 'general';
-      }
-
-      // Generar respuesta final con contexto
-      const finalCompletion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: `Eres Vizta, un asistente de investigación especializado en análisis social de Guatemala. El usuario hizo una consulta y obtuviste datos usando la herramienta ${functionName}.
-
-INSTRUCCIONES PARA RESPUESTA:
-• Sé CONCISO y DIRECTO (máximo 300 palabras)
-• Usa formato MARKDOWN para mejor legibilidad
-• Estructura tu respuesta con secciones claras
-• Enfócate en lo MÁS RELEVANTE, no en todo
-• Usa emojis para hacer más visual la información
-
-FORMATO REQUERIDO:
-## 📊 Análisis de [TEMA]
-
-**🔍 Búsqueda realizada:** [explicar brevemente qué se buscó]
-
-### 📈 Hallazgos principales:
-• [máximo 3 puntos clave]
-• [usar bullets para fácil lectura]
-• [incluir datos específicos si son relevantes]
-
-### 💭 Sentimiento general:
-[describir en 1-2 líneas el sentimiento predominante]
-
-### ⚡ Insights clave:
-[máximo 2 insights importantes]
-
-### 🎯 Conclusión:
-[resumen en 1-2 líneas]
-
-REGLAS IMPORTANTES:
-- NO incluyas todos los tweets encontrados
-- NO repitas información del prompt de búsqueda 
-- SÍ menciona los números más relevantes (ej: "En 15 tweets analizados...")
-- SÍ incluye hashtags o términos trending si son relevantes
-- ENFÓCATE en el valor para el usuario, no en el proceso técnico
-
-Datos obtenidos: ${JSON.stringify(toolResult, null, 2)}`
-          },
-          {
-            role: 'user',
-            content: message
-          }
-        ],
-        temperature: 0.3, // Más determinístico para formato consistente
-        max_tokens: 600   // Limitar longitud de respuesta
-      });
-
-      const finalResponse = finalCompletion.choices[0].message.content;
-
-      // Formatear respuesta para mejor experiencia de usuario
-      const formattedResponse = formatChatResponse(finalResponse, toolResult);
-
-      // 6. Guardar respuesta del asistente en memories
-      await memoriesService.saveMessage({
-        sessionId: chatSessionId,
-        userId: userId,
-        role: 'assistant',
-        content: formattedResponse,
-        messageType: 'message',
-        tokensUsed: (completion.usage?.total_tokens || 0) + (finalCompletion.usage?.total_tokens || 0),
-        modelUsed: 'gpt-4o-mini',
-        toolsUsed: [functionName],
-        contextSources: toolResult.tweets ? ['twitter'] : [],
-        metadata: { 
-          requestId: requestId,
-          toolArgs: functionArgs,
-          executionTime: executionTime,
-          toolResult: toolResult.success ? 'success' : 'error',
-          responseFormatted: true, // Indicar que se aplicó formato
-          generatedTitle: generatedTitle,
-          detectedGroup: detectedGroup
-        }
-      });
-
-      res.json({
-        success: true,
-        response: formattedResponse,
-        toolUsed: functionName,
-        toolArgs: functionArgs,
-        toolResult: toolResult,
-        sessionId: chatSessionId,
+    // 6. Guardar respuesta del asistente en memories
+    await memoriesService.saveMessage({
+      sessionId: chatSessionId,
+      userId: userId,
+      role: 'assistant',
+      content: finalResponse,
+      messageType: 'message',
+      modelUsed: 'gpt-4o-mini',
+      metadata: {
         requestId: requestId,
-        executionTime: executionTime,
-        timestamp: new Date().toISOString(),
-        responseMetadata: {
-          originalLength: finalResponse.length,
-          formattedLength: formattedResponse.length,
-          formatApplied: true,
-          tweetsAnalyzed: toolResult.tweets_found || 0
-        }
-      });
+        agentOrchestration: true,
+        lauraTasks: agentResults.laura_findings.length,
+        robertTasks: agentResults.robert_findings.length,
+        orchestrationTime: orchestrationTime,
+        totalExecutionTime: agentResults.total_execution_time
+      }
+    });
 
-    } else {
-      // 5. Respuesta directa sin usar herramientas
-      const directResponse = assistantMessage.content;
-      
-      // Formatear respuesta directa también
-      const formattedDirectResponse = formatChatResponse(directResponse);
-
-      // Guardar respuesta del asistente en memories
-      await memoriesService.saveMessage({
-        sessionId: chatSessionId,
-        userId: userId,
-        role: 'assistant',
-        content: formattedDirectResponse,
-        messageType: 'message',
-        tokensUsed: completion.usage?.total_tokens || 0,
-        modelUsed: 'gpt-4o-mini',
-        toolsUsed: [],
-        contextSources: [],
-        metadata: { 
-          requestId: requestId,
-          responseType: 'direct',
-          responseFormatted: true
-        }
-      });
-
-      res.json({
-        success: true,
-        response: formattedDirectResponse,
-        toolUsed: null,
-        sessionId: chatSessionId,
-        requestId: requestId,
-        timestamp: new Date().toISOString(),
-        responseMetadata: {
-          originalLength: directResponse.length,
-          formattedLength: formattedDirectResponse.length,
-          formatApplied: true,
-          responseType: 'direct'
-        }
-      });
-    }
+    // 7. Responder al usuario
+    return res.json({
+      success: true,
+      response: finalResponse,
+      toolUsed: 'agentes_colaborativos',
+      toolArgs: { query: message },
+      toolResult: agentResults,
+      sessionId: chatSessionId,
+      requestId: requestId,
+      executionTime: orchestrationTime + agentResults.total_execution_time,
+      timestamp: new Date().toISOString(),
+      mode: 'agent_orchestration',
+      agentMetrics: {
+        lauraTasks: agentResults.laura_findings.length,
+        robertTasks: agentResults.robert_findings.length,
+        orchestrationTime: orchestrationTime,
+        totalAgentTime: agentResults.total_execution_time
+      }
+    });
 
   } catch (error) {
     console.error('❌ Error en consulta Vizta Chat:', error);
     res.status(500).json({
       success: false,
-      message: 'Error procesando consulta',
+      message: 'Error procesando consulta con agentes',
       error: error.message
     });
   }

@@ -396,6 +396,17 @@ function setupTrendsRoutes(app) {
         });
       }
       
+      // Helper to sanitize trend names (removes trailing digits+K and trims)
+      function sanitizeName(rawName = '') {
+        return rawName.replace(/(\d+)[kK]$/, '').trim();
+      }
+
+      // Asegurar que todos los nombres estén sanitizados (por si algún caso se escapó)
+      trends = trends.map(t => ({
+        ...t,
+        name: sanitizeName(t.name)
+      }));
+
       if (trends.length === 0) {
         console.log('❌ Error: No se pudieron extraer tendencias del formato proporcionado');
         return res.status(400).json({

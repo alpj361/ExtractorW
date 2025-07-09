@@ -259,25 +259,36 @@ function expandSearchTerms(originalQuery) {
     return originalQuery;
   }
 
+  // Limpiar términos problemáticos antes de expandir
+  let cleanedQuery = originalQuery;
+  const problematicTerms = ['GT', 'game', 'gaming', 'gamer'];
+  
+  problematicTerms.forEach(term => {
+    if (cleanedQuery.includes(term) && !cleanedQuery.toLowerCase().includes('guatemala')) {
+      cleanedQuery = cleanedQuery.replace(new RegExp(`\\b${term}\\b`, 'gi'), '');
+      console.log(`🧹 Removido término problemático: "${term}" → "${cleanedQuery}"`);
+    }
+  });
+  
   // Para queries simples, agregar solo variaciones lógicas
-  const words = originalQuery.split(' ').filter(word => word.length > 2);
+  const words = cleanedQuery.split(' ').filter(word => word.length > 2);
   if (words.length === 1) {
     const word = words[0].toLowerCase();
     // Solo agregar "guatemala" si no es obvio que ya es guatemalteco
     const needsContext = !['guatemala', 'guate', 'chapin', 'gt'].some(geoTerm => 
-      originalQuery.toLowerCase().includes(geoTerm)
+      cleanedQuery.toLowerCase().includes(geoTerm)
     );
     
     if (needsContext) {
-      const contextualQuery = `${originalQuery} OR ${originalQuery} guatemala`;
-      console.log(`📍 Agregando contexto guatemalteco: "${originalQuery}" → "${contextualQuery}"`);
+      const contextualQuery = `${cleanedQuery} OR ${cleanedQuery} guatemala`;
+      console.log(`📍 Agregando contexto guatemalteco: "${cleanedQuery}" → "${contextualQuery}"`);
       return contextualQuery;
     }
   }
 
-  // Si no necesita expansión, usar query original
-  console.log(`✅ Query original sin cambios: "${originalQuery}"`);
-  return originalQuery;
+  // Si no necesita expansión, usar query limpia
+  console.log(`✅ Query final: "${cleanedQuery}"`);
+  return cleanedQuery.trim() || originalQuery;
 }
 
 /**
