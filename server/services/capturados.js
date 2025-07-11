@@ -4,6 +4,7 @@ const supabaseUtil = require('../utils/supabase');
 const { analyzeDocument } = require('./documentAnalysis');
 const { normalizeGeographicInfoWithAI } = require('../utils/geographic-ai-detector');
 const { normalizeGeographicInfo: manualNormalize } = require('../utils/guatemala-geography');
+const { normalizeString } = require('../utils/coverageNormalization');
 let supabase = supabaseUtil;
 
 // Instanciar Gemini para análisis de texto
@@ -537,6 +538,10 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
     // =============================================
 
     async function getOrCreateCoverage({ projectId, city, department, pais }) {
+      // Normalizar valores para evitar variaciones de mayúsculas/minúsculas o espacios
+      city = normalizeString(city);
+      department = normalizeString(department);
+      pais = normalizeString(pais);
       // Prioridad: ciudad > departamento > país
       let coverageRow = null;
       if (city) {
@@ -689,6 +694,10 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
     // AGREGAR COVERAGE_ID TAMBIÉN EN EL FALLBACK
     // =============================================
     async function getOrCreateCoverageFallback({ projectId, city, department, pais }) {
+      // Normalizar valores para evitar variaciones
+      city = normalizeString(city);
+      department = normalizeString(department);
+      pais = normalizeString(pais);
       // Misma lógica que la función principal
       let coverageRow = null;
       if (city) {

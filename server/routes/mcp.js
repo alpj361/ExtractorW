@@ -206,6 +206,45 @@ router.post('/nitter_profile', verifyUserAccess, async (req, res) => {
 });
 
 /**
+ * POST /api/mcp/project_decisions
+ * Endpoint directo para herramienta project_decisions - obtiene decisiones de un proyecto
+ */
+router.post('/project_decisions', verifyUserAccess, async (req, res) => {
+  try {
+    const { project_id } = req.body;
+    const user = req.user;
+    
+    if (!project_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'El parámetro project_id es requerido'
+      });
+    }
+    
+    console.log(`🔧 MCP project_decisions solicitado por usuario ${user.email}: proyecto ${project_id}`);
+    
+    const result = await mcpService.executeTool('project_decisions', { 
+      project_id: project_id
+    }, user);
+    
+    res.json({
+      success: true,
+      message: `Decisiones del proyecto ${project_id} obtenidas exitosamente`,
+      project_id: project_id,
+      result: result,
+      execution_time: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error ejecutando project_decisions MCP:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo decisiones del proyecto',
+      error: error.message
+    });
+  }
+});
+
+/**
  * GET /api/mcp/status
  * Estado del MCP Server
  */
@@ -328,6 +367,30 @@ router.get('/capabilities', async (req, res) => {
             "Métricas de engagement por tweet",
             "Múltiples instancias Nitter como fallback"
           ]
+        },
+        {
+          "name": "project_decisions",
+          "description": "Obtiene decisiones detalladas de un proyecto específico organizadas por capas (enfoque, alcance, configuración)",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "project_id": {
+                "type": "string",
+                "description": "ID del proyecto del cual obtener las decisiones",
+                "pattern": "^[a-f0-9-]{36}$"
+              }
+            },
+            "required": ["project_id"]
+          },
+          "features": [
+            "Acceso completo a decisiones por capas",
+            "Detalles de enfoque, alcance y configuración",
+            "Información de objetivos y próximos pasos",
+            "Fechas límite y metodologías",
+            "Referencias y fuentes de datos",
+            "Histórico ordenado por fecha de creación",
+            "Requiere autenticación del usuario"
+          ]
         }
       ]
     };
@@ -389,6 +452,18 @@ router.post('/call', async (req, res) => {
                 required: ["q"]
               }
             };
+          } else if (tool.name === 'project_decisions') {
+            return {
+              name: tool.name,
+              description: tool.description,
+              inputSchema: {
+                type: "object",
+                properties: {
+                  project_id: { type: "string", description: "ID del proyecto", pattern: "^[a-f0-9-]{36}$" }
+                },
+                required: ["project_id"]
+              }
+            };
           } else {
             return {
               name: tool.name,
@@ -413,6 +488,11 @@ router.post('/call', async (req, res) => {
         // Por ahora, retornamos error pidiendo usar endpoint autenticado
         res.status(401).json({
           error: 'nitter_profile requiere autenticación. Use /api/mcp/nitter_profile con token JWT'
+        });
+      } else if (name === 'project_decisions') {
+        // project_decisions requiere autenticación obligatoria
+        res.status(401).json({
+          error: 'project_decisions requiere autenticación. Use /api/mcp/project_decisions con token JWT'
         });
       } else {
         res.status(404).json({

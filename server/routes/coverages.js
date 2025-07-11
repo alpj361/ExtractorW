@@ -9,6 +9,7 @@ const { verifyUserAccess } = require('../middlewares/auth');
 const { logUsage } = require('../services/logs');
 const { normalizeGeographicInfoWithAI, batchNormalizeGeography } = require('../utils/geographic-ai-detector');
 const { normalizeGeographicInfo: manualNormalize, getDepartmentForCity } = require('../utils/guatemala-geography');
+const { normalizeCoverageInput } = require('../utils/coverageNormalization');
 
 const router = express.Router();
 
@@ -114,15 +115,26 @@ router.post('/', verifyUserAccess, async (req, res) => {
             source_item_id
         } = req.body;
 
+        // Normalizar campos clave para evitar duplicados por variaciones de formato
+        const normalized = normalizeCoverageInput({
+            coverage_type,
+            name,
+            parent_name
+        });
+
+        const normalizedType = normalized.coverage_type;
+        const normalizedName = normalized.name;
+        const normalizedParent = normalized.parent_name;
+
         // Validaciones básicas
-        if (!project_id || !coverage_type || !name) {
+        if (!project_id || !normalizedType || !normalizedName) {
             return res.status(400).json({
                 error: 'project_id, coverage_type y name son requeridos'
             });
         }
 
         const validTypes = ['pais', 'departamento', 'ciudad', 'zona', 'region'];
-        if (!validTypes.includes(coverage_type)) {
+        if (!validTypes.includes(normalizedType)) {
             return res.status(400).json({
                 error: `coverage_type debe ser uno de: ${validTypes.join(', ')}`
             });
@@ -156,9 +168,9 @@ router.post('/', verifyUserAccess, async (req, res) => {
             .from('project_coverages')
             .insert({
                 project_id,
-                coverage_type,
-                name: name.trim(),
-                parent_name: parent_name?.trim() || null,
+                coverage_type: normalizedType,
+                name: normalizedName,
+                parent_name: normalizedParent,
                 description: description?.trim() || null,
                 relevance,
                 coordinates: coordinates || null,

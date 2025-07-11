@@ -288,6 +288,20 @@ function expandSearchTerms(originalQuery) {
 
   // Si no necesita expansión, usar query limpia
   console.log(`✅ Query final: "${cleanedQuery}"`);
+  // NUEVO: Para consultas con múltiples términos (>1 palabra) sin operadores OR,
+  // convertir la búsqueda a un formato "palabra OR palabra" para imitar el
+  // comportamiento palabra-por-palabra usado en la rutina de trending. Esto
+  // incrementa la cobertura cuando el usuario envía frases largas.
+
+  const tokens = cleanedQuery.split(/\s+/).filter(w => w.length > 2 && !w.startsWith('#'));
+
+  if (tokens.length > 1 && !cleanedQuery.includes(' OR ')) {
+    const orQuery = tokens.join(' OR ');
+    const finalOrQuery = `${orQuery} Guatemala`;
+    console.log(`🔀 Query convertida a formato OR palabra-por-palabra: "${finalOrQuery}"`);
+    return finalOrQuery.trim();
+  }
+
   return cleanedQuery.trim() || originalQuery;
 }
 
@@ -517,6 +531,30 @@ const AVAILABLE_TOOLS = {
       'Que dice @CashLuna en sus tweets recientes',
       'Analiza la actividad de @MPguatemala'
     ]
+  },
+  
+  project_decisions: {
+    name: 'project_decisions',
+    description: 'Obtiene todas las decisiones de un proyecto específico con detalles completos de cada capa (enfoque, alcance, configuración)',
+    parameters: {
+      project_id: {
+        type: 'string',
+        required: true,
+        description: 'ID del proyecto para obtener sus decisiones'
+      }
+    },
+    service_endpoint: '/api/project_decisions',
+    service_url: 'internal',
+    category: 'user_data',
+    usage_credits: 1,
+    features: [
+      'Acceso completo a decisiones por capas',
+      'Detalles de enfoque, alcance y configuración',
+      'Información de objetivos y próximos pasos',
+      'Fechas límite y metodologías',
+      'Referencias y fuentes de datos',
+      'Histórico ordenado por fecha de creación'
+    ]
   }
 };
 
@@ -636,6 +674,11 @@ async function executeTool(toolName, parameters = {}, user = null) {
           limit || 10,
           include_retweets || false,
           include_replies || false,
+          user
+        );
+      case 'project_decisions':
+        return await executeProjectDecisions(
+          parameters.project_id,
           user
         );
       default:
@@ -824,33 +867,71 @@ async function executeNitterContext(query, location = 'guatemala', limit = 10, s
       throw new Error('Usuario autenticado requerido para ejecutar nitter_context');
     }
     
-    // Desactivar completamente la optimización con DeepSeek.
-    // Siempre usaremos expansión estándar; se mantiene la estructura para no romper referencias posteriores.
-    const deepSeekOptimization = {
-      optimized: false,
-      final_query: query,
-      strategy: 'disabled',
-      reasoning: null,
-      success_probability: null
-    };
+    // DETECCIÓN DE QUERY OPTIMIZADA POR LLM (Laura)
+    // Si la query contiene hashtags, emojis o jerga específica, es de Laura y NO debe modificarse
+    const isLLMOptimized = query.includes('#') || 
+                          query.includes('⚽') || 
+                          query.includes('chapin') || 
+                          query.includes('guate') ||
+                          query.includes('crema') ||
+                          query.includes('rojo') ||
+                          /[🎯🏆⚽🏀🎾🥅]/g.test(query);
     
-    // PASO 2: EXPANSIÓN ESTÁNDAR como backup
-    const standardExpansion = expandSearchTerms(query);
+    let finalQuery;
     const optimizedLimit = optimizeTweetLimit(query, limit);
     
-    // Decidir qué query usar: DeepSeek si está optimizada, sino expansión estándar
-    const finalQuery = deepSeekOptimization.optimized ? 
-      deepSeekOptimization.final_query : 
-      standardExpansion;
-    
-    console.log(`🎯 Query original: "${query}"`);
-    if (deepSeekOptimization.optimized) {
-      console.log(`🧠 Query optimizada por DeepSeek: "${finalQuery}"`);
-      console.log(`📋 Estrategia aplicada: ${deepSeekOptimization.strategy}`);
-      console.log(`🎲 Probabilidad de éxito: ${deepSeekOptimization.success_probability}`);
+    if (isLLMOptimized) {
+      // La query viene con hashtags/jerga (optimizada por LLM), pero si contiene
+      // varias palabras separadas por espacios **y** no contiene operadores
+      // OR, la convertimos a formato "palabra OR palabra" para imitar la
+      // búsqueda palabra-por-palabra que usa el proceso de trending.
+
+      const containsOR = /\sOR\s/i.test(query);
+      const rawTokens = query.split(/\s+/).filter(t => t.length > 1);
+      const meaningfulTokens = rawTokens.filter(t => !t.startsWith('#'));
+
+      if (!containsOR && meaningfulTokens.length > 1) {
+        const orQuery = meaningfulTokens.join(' OR ');
+        // Mantener hashtags al final para no perder contexto viral
+        const hashtags = rawTokens.filter(t => t.startsWith('#')).join(' ');
+        finalQuery = `${orQuery} Guatemala ${hashtags}`.trim();
+        console.log(`🔀 Query LLM optimizada convertida a OR palabra-por-palabra: "${finalQuery}"`);
+      } else {
+        // Sin modificación si ya contiene OR o es término único
+        finalQuery = query;
+        console.log(`🧠 Query optimizada por LLM preservada: "${finalQuery}"`);
+      }
     } else {
-      console.log(`🚀 Query expandida estándar: "${finalQuery}"`);
+      // SOLO PARA QUERIES SIMPLES: aplicar expansión estándar
+      console.log(`🔧 Query simple detectada - aplicando expansión estándar`);
+      
+      // Desactivar completamente la optimización con DeepSeek para queries simples también
+      const deepSeekOptimization = {
+        optimized: false,
+        final_query: query,
+        strategy: 'disabled',
+        reasoning: null,
+        success_probability: null
+      };
+      
+      // PASO 2: EXPANSIÓN ESTÁNDAR como backup
+      const standardExpansion = expandSearchTerms(query);
+      
+      // Decidir qué query usar: DeepSeek si está optimizada, sino expansión estándar
+      finalQuery = deepSeekOptimization.optimized ? 
+        deepSeekOptimization.final_query : 
+        standardExpansion;
+      
+      console.log(`🎯 Query original: "${query}"`);
+      if (deepSeekOptimization.optimized) {
+        console.log(`🧠 Query optimizada por DeepSeek: "${finalQuery}"`);
+        console.log(`📋 Estrategia aplicada: ${deepSeekOptimization.strategy}`);
+        console.log(`🎲 Probabilidad de éxito: ${deepSeekOptimization.success_probability}`);
+      } else {
+        console.log(`🚀 Query expandida estándar: "${finalQuery}"`);
+      }
     }
+    
     console.log(`📊 Límite optimizado: ${optimizedLimit} tweets`);
     
     // Generar session_id si no se proporciona
@@ -883,23 +964,23 @@ async function executeNitterContext(query, location = 'guatemala', limit = 10, s
         tweets_found: result.data.tweets_found,
         query_original: query,
         query_final: finalQuery,
-        optimization_applied: deepSeekOptimization.optimized,
-        deepseek_strategy: deepSeekOptimization.strategy,
-        deepseek_reasoning: deepSeekOptimization.reasoning,
-        success_probability: deepSeekOptimization.success_probability,
+        optimization_applied: !isLLMOptimized,
+        llm_optimized: isLLMOptimized,
+        deepseek_strategy: isLLMOptimized ? 'llm_preserved' : 'standard_expansion',
+        deepseek_reasoning: isLLMOptimized ? 'Query optimizada por LLM preservada sin modificaciones' : 'Query expandida con método estándar',
+        success_probability: isLLMOptimized ? 'alta' : 'media',
         limit_requested: limit,
         limit_used: optimizedLimit,
         session_id: finalSessionId,
-        formatted_context: `BÚSQUEDA OPTIMIZADA CON DEEPSEEK:
+        formatted_context: `BÚSQUEDA INTELIGENTE CON PRESERVACIÓN LLM:
 Query original del usuario: "${query}"
-${deepSeekOptimization.optimized ? 
-  `🧠 Query optimizada por DeepSeek: "${finalQuery}"
-📋 Estrategia aplicada: ${deepSeekOptimization.strategy}
-🎯 Razonamiento: ${deepSeekOptimization.reasoning}
-📊 Probabilidad de éxito estimada: ${deepSeekOptimization.success_probability}
-${deepSeekOptimization.hashtags_included?.length > 0 ? `🏷️ Hashtags incluidos: ${deepSeekOptimization.hashtags_included.join(', ')}` : ''}
-${deepSeekOptimization.key_terms_added?.length > 0 ? `🔑 Términos clave agregados: ${deepSeekOptimization.key_terms_added.join(', ')}` : ''}` :
-  `🚀 Query expandida estándar: "${finalQuery}" (DeepSeek no disponible)`}
+${isLLMOptimized ? 
+  `🧠 Query optimizada por LLM PRESERVADA: "${finalQuery}"
+📋 Estrategia aplicada: preservación_inteligente
+🎯 Razonamiento: Laura detectó y optimizó la query con jerga, hashtags y contexto específico
+📊 Probabilidad de éxito estimada: alta (query pre-optimizada por IA)
+🏷️ Elementos detectados: ${query.includes('#') ? 'hashtags' : ''}${query.includes('chapin') || query.includes('guate') ? ', jerga guatemalteca' : ''}${/[🎯🏆⚽🏀🎾🥅]/g.test(query) ? ', emojis contextuales' : ''}` :
+  `🚀 Query expandida estándar: "${finalQuery}" (sin optimización LLM previa)`}
 Tweets analizados: ${result.data.tweets_found}/${optimizedLimit}
 Ubicación: ${location}
 
@@ -907,18 +988,19 @@ TWEETS ENCONTRADOS Y ANALIZADOS:
 ${formattedTweets}
 
 ANÁLISIS CONTEXTUAL:
-${deepSeekOptimization.optimized ? 
-  `- Se aplicó optimización inteligente con DeepSeek para maximizar resultados
-- La estrategia "${deepSeekOptimization.strategy}" fue seleccionada tras análisis contextual
-- ${deepSeekOptimization.justification}` :
+${isLLMOptimized ? 
+  `- Laura (LLM) pre-optimizó la query con jerga y hashtags guatemaltecos
+- Se preservó la optimización inteligente sin modificaciones adicionales
+- Query contiene elementos específicos de redes sociales guatemaltecas` :
   `- Se expandió automáticamente la consulta con métodos estándar`}
 - Se optimizó el límite basado en el tipo de análisis requerido
 - Todos los tweets incluyen análisis de sentimiento e intención comunicativa
 - Las entidades mencionadas han sido extraídas automáticamente`,
         analysis_metadata: {
-          deepseek_optimization: deepSeekOptimization.optimized,
-          optimization_strategy: deepSeekOptimization.strategy,
-          original_vs_optimized: deepSeekOptimization.optimized,
+          deepseek_optimization: false,
+          llm_optimization: isLLMOptimized,
+          optimization_strategy: isLLMOptimized ? 'llm_preserved' : 'standard_expansion',
+          original_vs_optimized: isLLMOptimized,
           limit_optimization_applied: optimizedLimit !== limit,
           tweets_analyzed: result.data.tweets_found,
           sentiment_distribution: result.data.tweets.reduce((acc, tweet) => {
@@ -1376,6 +1458,97 @@ Total de items disponibles en tu Codex personal.`;
 }
 
 /**
+ * Ejecuta la herramienta project_decisions: obtiene decisiones de un proyecto específico
+ * @param {string} projectId - ID del proyecto
+ * @param {Object} user - Usuario autenticado
+ * @returns {Object} Resultados de las decisiones del proyecto
+ */
+async function executeProjectDecisions(projectId, user = null) {
+  try {
+    if (!user || !user.id) {
+      throw new Error('Usuario no autenticado. Se requiere autenticación para acceder a decisiones de proyectos.');
+    }
+
+    if (!projectId || typeof projectId !== 'string') {
+      throw new Error('Se requiere un project_id válido para obtener las decisiones.');
+    }
+
+    console.log(`🎯 Ejecutando project_decisions para proyecto: ${projectId}, usuario: ${user.email}`);
+    
+    const result = await getProjectDecisions(projectId, user.id);
+    
+    if (!result || !result.project) {
+      throw new Error('Proyecto no encontrado o sin permisos para acceder.');
+    }
+
+    const { project, decisions } = result;
+
+    // Formatear respuesta para el agente AI
+    const formattedResponse = `DECISIONES DEL PROYECTO: ${project.title} (ID: ${projectId})
+
+RESUMEN:
+• Total de decisiones: ${decisions.length}
+• Proyecto: ${project.title}
+• Usuario: ${user.email}
+
+DECISIONES POR CAPAS:
+${decisions.map((decision, index) => `
+🔹 DECISIÓN ${index + 1}: ${decision.title} [${decision.decision_type.toUpperCase()}]
+   Tipo: ${decision.decision_type} | Creada: ${new Date(decision.created_at).toLocaleDateString('es-ES')}
+   ${decision.description ? `Descripción: ${decision.description}` : ''}
+   ${decision.change_description ? `Cambio: ${decision.change_description}` : ''}
+   ${decision.objective ? `Objetivo: ${decision.objective}` : ''}
+   ${decision.next_steps ? `Próximos pasos: ${decision.next_steps}` : ''}
+   ${decision.deadline ? `Fecha límite: ${new Date(decision.deadline).toLocaleDateString('es-ES')}` : ''}
+   
+   ${decision.decision_type === 'enfoque' ? `
+   📍 DETALLES DE ENFOQUE:
+   ${decision.focus_area ? `• Área de enfoque: ${decision.focus_area}` : ''}
+   ${decision.focus_context ? `• Contexto: ${decision.focus_context}` : ''}` : ''}
+   
+   ${decision.decision_type === 'alcance' ? `
+   🌐 DETALLES DE ALCANCE:
+   ${decision.geographic_scope ? `• Alcance geográfico: ${decision.geographic_scope}` : ''}
+   ${decision.monetary_scope ? `• Alcance monetario: ${decision.monetary_scope}` : ''}
+   ${decision.time_period_start ? `• Período: ${decision.time_period_start} - ${decision.time_period_end || 'Abierto'}` : ''}
+   ${decision.target_entities ? `• Entidades objetivo: ${decision.target_entities}` : ''}
+   ${decision.scope_limitations ? `• Limitaciones: ${decision.scope_limitations}` : ''}` : ''}
+   
+   ${decision.decision_type === 'configuracion' ? `
+   ⚙️ DETALLES DE CONFIGURACIÓN:
+   ${decision.output_format && decision.output_format.length > 0 ? `• Formatos de salida: ${decision.output_format.join(', ')}` : ''}
+   ${decision.methodology ? `• Metodología: ${decision.methodology}` : ''}
+   ${decision.data_sources ? `• Fuentes de datos: ${decision.data_sources}` : ''}
+   ${decision.search_locations ? `• Ubicaciones de búsqueda: ${decision.search_locations}` : ''}
+   ${decision.tools_required ? `• Herramientas requeridas: ${decision.tools_required}` : ''}
+   ${decision.references && decision.references.length > 0 ? `• Referencias: ${decision.references.join(', ')}` : ''}` : ''}
+`).join('\n')}
+
+Las decisiones están ordenadas de más reciente a más antigua.`;
+
+    return {
+      success: true,
+      user_id: user.id,
+      user_email: user.email,
+      project_id: projectId,
+      project_title: project.title,
+      total_decisions: decisions.length,
+      decisions: decisions,
+      formatted_response: formattedResponse,
+      metadata: {
+        service: 'project_decisions',
+        execution_time: new Date().toISOString(),
+        data_source: 'supabase'
+      }
+    };
+
+  } catch (error) {
+    console.error(`❌ Error ejecutando project_decisions MCP:`, error);
+    throw error;
+  }
+}
+
+/**
  * Valida los parámetros de una herramienta
  * @param {Object} tool - Configuración de la herramienta
  * @param {Object} parameters - Parámetros a validar
@@ -1583,6 +1756,7 @@ module.exports = {
   executePerplexitySearch,
   executeUserProjects,
   executeUserCodex,
+  executeProjectDecisions,
   executeNitterProfile,
   getServerStatus,
   expandSearchTerms,
