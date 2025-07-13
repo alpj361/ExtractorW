@@ -116,7 +116,7 @@ Siempre responde en JSON estructurado:
 - perplexity_search: Contexto adicional OPCIONAL cuando sea necesario
 
 **PALABRAS CLAVE GUATEMALA:**
-Guatemala, Guate, Chapin, GuatemalaGob, CongresoGt, MPguatemala, TSE, política guatemalteca, etc.
+Guatemala, Guate, Chapin, GuatemalaGob, MPguatemala, TSE, política guatemalteca, etc.
 
 Tu trabajo es ser los ojos y oídos de Pulse Jornal en el ecosistema digital guatemalteco.`;
   }
@@ -132,16 +132,33 @@ Dispones de herramientas:
 - perplexity_search(query): Búsqueda web y noticias actualizadas
 
 **ESTRATEGIA PRINCIPAL: ANÁLISIS PALABRA POR PALABRA**
-Para consultas complejas como "reacciones sobre deportes guatemaltecos", usa SIEMPRE la acción "word_by_word_analysis" que:
+Para consultas complejas como "reacciones sobre deportes guatemaltecos", usa la acción "word_by_word_analysis" que:
 1. Analiza cada concepto por separado con perplexity_search
 2. Combina los contextos obtenidos
 3. Ejecuta búsqueda social optimizada con nitter_context
+
+**IMPORTANTE: NO uses word_by_word_analysis para:**
+- Solicitudes de tweets de usuarios específicos (congreso, presidente, ministro, etc.)
+- Peticiones directas como "tweets del [USUARIO]" - usa direct_execution con nitter_profile
 
 **INSTRUCCIONES PARA OPTIMIZAR QUERIES:**
 - SIEMPRE optimiza la query 'q' usando jerga de redes sociales, hashtags populares, slang guatemalteco y términos específicos de Twitter/X.
 - Enfócate en Guatemala: Usa términos como #Guate, Chapin, GT (solo para Guatemala, no gaming), selección nacional, etc.
 - Para temas vagos, expande con sinónimos, emojis comunes y hashtags relevantes (e.g., para deportes: #FutbolGT, crema vs rojo, selección guate).
 - Evita queries literales; transfórmalas en cómo la gente habla en Twitter.
+
+**CRITERIOS PARA ELECCIÓN DE HERRAMIENTAS:**
+- nitter_profile: Para tweets de UN USUARIO específico (congreso, presidente, ministro, diputado, empresa, persona)
+- nitter_context: Para BUSCAR tweets sobre un tema, evento o conversación general
+
+**RESOLUCIÓN DE USUARIOS AMBIGUOS:**
+- Para referencias como "usuario del congreso", "cuenta del presidente", "ministro de X", etc., usa la descripción exacta como username
+- El sistema automáticamente resolverá usuarios ambiguos usando Perplexity antes de ejecutar nitter_profile
+- NO hardcodees usernames específicos (@CongresoGt, etc.) - deja que el sistema los resuelva dinámicamente
+
+**EJEMPLOS CLAVE:**
+- "tweets del congreso" → nitter_profile (usuario específico)
+- "qué dice la gente sobre el congreso" → nitter_context (conversación general)
 
 Tu objetivo es producir un JSON con el plan de acción y seguimiento necesario.
 
@@ -261,6 +278,42 @@ Output: {
   },
   "follow_up": null,
   "thought": "Solicitud clara de análisis de perfil específico, procedo con monitoreo directo"
+}
+
+Input: "extraeme tweets del usuario del congreso"
+Output: {
+  "plan": {
+    "action": "direct_execution",
+    "tool": "nitter_profile",
+    "args": {"username": "Congreso de Guatemala", "limit": 20},
+    "reasoning": "Uso nitter_profile para obtener tweets del Congreso de Guatemala (el sistema resolverá automáticamente el username oficial)"
+  },
+  "follow_up": null,
+  "thought": "Usuario ambiguo detectado - el sistema usará Perplexity para resolver username automáticamente"
+}
+
+Input: "tweets del congreso"  
+Output: {
+  "plan": {
+    "action": "direct_execution", 
+    "tool": "nitter_profile",
+    "args": {"username": "Congreso de Guatemala", "limit": 20},
+    "reasoning": "Uso nitter_profile para obtener tweets del Congreso de Guatemala (el sistema resolverá automáticamente el username oficial)"
+  },
+  "follow_up": null,
+  "thought": "Usuario ambiguo detectado - el sistema usará Perplexity para resolver username automáticamente"
+}
+
+Input: "extraeme los tweets del congreso de Guatemala"
+Output: {
+  "plan": {
+    "action": "direct_execution",
+    "tool": "nitter_profile", 
+    "args": {"username": "Congreso de Guatemala", "limit": 20},
+    "reasoning": "Uso nitter_profile para obtener tweets del Congreso de Guatemala (el sistema resolverá automáticamente el username oficial)"
+  },
+  "follow_up": null,
+  "thought": "Solicitud específica de tweets de un usuario - el sistema usará Perplexity para resolver username automáticamente"
 }
 
 Input: "¿Qué está pasando?"
@@ -639,7 +692,40 @@ Formato:
             if (llmPlan.plan.tool === 'nitter_context' && llmPlan.plan.args?.q) {
               llmPlan.plan.args.q = this.enforceSocialJargon(llmPlan.plan.args.q);
             }
+            
+            // NUEVO: Resolución de usuarios ambiguos ANTES de nitter_profile
+            if (llmPlan.plan.tool === 'nitter_profile' && llmPlan.plan.args?.username) {
+              console.log(`[LAURA] 🔍 Verificando si usuario es ambiguo: "${llmPlan.plan.args.username}"`);
+              const resolvedUsername = await this.resolveAmbiguousUser(llmPlan.plan.args.username, user);
+              if (resolvedUsername && resolvedUsername !== llmPlan.plan.args.username) {
+                console.log(`[LAURA] 🔄 Usuario resuelto: "${llmPlan.plan.args.username}" → "@${resolvedUsername}"`);
+                llmPlan.plan.args.username = resolvedUsername;
+              } else {
+                console.log(`[LAURA] ✅ Usuario no es ambiguo o no se pudo resolver: "${llmPlan.plan.args.username}"`);
+              }
+            }
+            
             finalResult = await mcpService.executeTool(llmPlan.plan.tool, llmPlan.plan.args, user);
+            
+            // NUEVO: Enhancement Perplexity para nitter_profile en reasoning engine
+            if (llmPlan.plan.tool === 'nitter_profile' && llmPlan.plan.args?.username) {
+              console.log(`[LAURA] 🎯 reasoning engine: Ejecutando nitter_profile con enhancement Perplexity`);
+              console.log(`[LAURA] 🔍 reasoning engine: Getting web context for profile @${llmPlan.plan.args.username}`);
+              
+              const perplexityContext = await this.enhanceProfileWithPerplexity(
+                llmPlan.plan.args.username,
+                user
+              );
+              
+              if (perplexityContext) {
+                finalResult.perplexity_context = perplexityContext;
+                executionSteps.push('perplexity_profile_enhancement_reasoning');
+                console.log(`[LAURA] ✅ reasoning engine: Perplexity context añadido a finalResult`);
+              } else {
+                console.log(`[LAURA] ⚠️  reasoning engine: No se pudo obtener contexto Perplexity`);
+              }
+            }
+            
             // Filtrar tweets recientes
             finalResult.tweets = this.filterRecentTweets(finalResult.tweets, 45);
             executionSteps.push('gemini_reasoned_execution');
@@ -809,7 +895,8 @@ Formato:
             console.log(`[LAURA] 🔍 executeTask: Getting web context for profile @${task.args.username}`);
             
             const perplexityContext = await this.enhanceProfileWithPerplexity(
-              task.args.username
+              task.args.username,
+              user
             );
             
             if (perplexityContext) {
@@ -912,7 +999,8 @@ Formato:
           console.log(`[LAURA] 🔧 processToolResult: Intentando enhancement para @${toolResult.profile.username}`);
           
           const perplexityContext = await this.enhanceProfileWithPerplexity(
-            toolResult.profile.username
+            toolResult.profile.username,
+            user
           );
           
           if (perplexityContext) {
@@ -978,7 +1066,108 @@ Formato:
     };
   }
 
-  async enhanceProfileWithPerplexity(username) {
+  async resolveAmbiguousUser(username, user) {
+    try {
+      // Detectar si el username es ambiguo (descripción en lugar de @username)
+      const usernameLower = username.toLowerCase();
+      const isAmbiguous = !username.startsWith('@') && (
+        usernameLower.includes('congreso') ||
+        usernameLower.includes('presidente') ||
+        usernameLower.includes('ministro') ||
+        usernameLower.includes('diputado') ||
+        usernameLower.includes('gobierno') ||
+        usernameLower.includes('oficial')
+      );
+      
+      if (!isAmbiguous) {
+        console.log(`[LAURA] ✅ Usuario NO es ambiguo: "${username}"`);
+        return username; // No es ambiguo, devolver tal como está
+      }
+      
+      console.log(`[LAURA] 🔍 Detectado usuario ambiguo: "${username}" - resolviendo con Perplexity...`);
+      
+      const perplexityQuery = `¿Cuál es el usuario oficial de Twitter/X del ${username} de Guatemala? Devuelve solo el @username exacto`;
+      console.log(`[LAURA] 📝 Query resolución: "${perplexityQuery}"`);
+      
+      const perplexityResult = await mcpService.executeTool('perplexity_search', {
+        query: perplexityQuery,
+        location: 'guatemala',
+        focus: 'user_resolution'
+      }, user);
+      
+      if (perplexityResult?.content || perplexityResult?.formatted_response) {
+        const content = perplexityResult.content || perplexityResult.formatted_response;
+        console.log(`[LAURA] 📄 Contenido Perplexity recibido: "${content.substring(0, 300)}..."`);
+        
+        // Buscar patrones de @username en el contenido
+        const usernameMatches = content.match(/@[a-zA-Z0-9_]+/g);
+        console.log(`[LAURA] 🔍 Matches @username encontrados:`, usernameMatches);
+        
+        if (usernameMatches && usernameMatches.length > 0) {
+          // Filtrar matches genéricos y quedarse con usernames reales
+          const filteredMatches = usernameMatches.filter(match => {
+            const username = match.toLowerCase();
+            return !username.includes('@username') && 
+                   !username.includes('@user') && 
+                   !username.includes('@example') &&
+                   username.length > 3; // Mínimo 4 caracteres (incluyendo @)
+          });
+          
+          console.log(`[LAURA] 🔍 Matches filtrados:`, filteredMatches);
+          
+          if (filteredMatches.length > 0) {
+            // Remover el @ del primer match válido encontrado
+            const resolvedUsername = filteredMatches[0].substring(1);
+            console.log(`[LAURA] ✅ Usuario resuelto exitosamente: ${resolvedUsername}`);
+            return resolvedUsername;
+          }
+        }
+        
+        // Fallback: buscar patrones alternativos sin @
+        const alternativePatterns = [
+          /CongresoGt/gi,
+          /congresoguate/gi,
+          /Congreso_?GT/gi,
+          /Guatemala_?Congreso/gi,
+          /congreso.*guatemala/gi
+        ];
+        
+        for (const pattern of alternativePatterns) {
+          const matches = content.match(pattern);
+          if (matches && matches.length > 0) {
+            console.log(`[LAURA] 🔍 Patrón alternativo encontrado:`, matches[0]);
+            // Devolver el username encontrado exactamente como aparece
+            const foundUsername = matches[0];
+            console.log(`[LAURA] ✅ Usuario resuelto por patrón alternativo: ${foundUsername}`);
+            return foundUsername;
+          }
+        }
+        
+        console.log(`[LAURA] ❌ No se encontraron patrones de usuario en el contenido`);
+      } else {
+        console.log(`[LAURA] ❌ Perplexity no devolvió contenido válido:`, perplexityResult);
+      }
+      
+      // Fallback hardcodeado como última opción para casos conocidos
+      if (usernameLower.includes('congreso')) {
+        console.log(`[LAURA] 🔄 Usando fallback hardcodeado para congreso: CongresoGt`);
+        return 'CongresoGt';
+      }
+      
+      console.log(`[LAURA] ⚠️  No se pudo resolver usuario ambiguo: "${username}"`);
+      return username; // Fallback al username original
+      
+    } catch (error) {
+      console.error(`[LAURA] ❌ Error resolviendo usuario ambiguo: "${username}":`, {
+        error: error.message,
+        stack: error.stack?.split('\n').slice(0, 3).join('\n'),
+        timestamp: new Date().toISOString()
+      });
+      return username; // Fallback al username original
+    }
+  }
+
+  async enhanceProfileWithPerplexity(username, user) {
     try {
       console.log(`[LAURA] 🔍 Iniciando enhancement de perfil para @${username}`);
       
@@ -990,7 +1179,7 @@ Formato:
         query: perplexityQuery,
         location: 'guatemala',
         focus: 'profile_context'
-      });
+      }, user);
       const responseTime = Date.now() - startTime;
       
       console.log(`[LAURA] ⏱️  Perplexity response time: ${responseTime}ms`);
