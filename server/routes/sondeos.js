@@ -23,7 +23,7 @@ router.post('/api/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
     console.log('📝 Request body:', JSON.stringify(req.body, null, 2));
     console.log('👤 Usuario:', req.user.profile.email);
     
-    const { pregunta, selectedContexts, contextos, configuracion = {} } = req.body;
+    const { pregunta, selectedContexts, contextos, configuracion = {}, selectedMonitoreoIds = [] } = req.body;
     
     // Aceptar tanto selectedContexts como contextos para compatibilidad
     const contextosFinales = selectedContexts || contextos;
@@ -46,7 +46,7 @@ router.post('/api/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
       });
     }
 
-    const contextosValidos = ['tendencias', 'tweets', 'noticias', 'codex'];
+    const contextosValidos = ['tendencias', 'tweets', 'noticias', 'codex', 'monitoreos'];
     const contextosInvalidos = contextosFinales.filter(ctx => !contextosValidos.includes(ctx));
     
     if (contextosInvalidos.length > 0) {
@@ -63,7 +63,7 @@ router.post('/api/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
 
     // FASE 2: Construir contexto completo
     console.log('🔨 FASE 2: Construyendo contexto completo...');
-    const contextoCompleto = await construirContextoCompleto(contextosFinales);
+    const contextoCompleto = await construirContextoCompleto(contextosFinales, req.user.id, selectedMonitoreoIds);
     console.log('✅ FASE 2 completada. Estadísticas:', contextoCompleto.estadisticas);
 
     if (contextoCompleto.estadisticas.fuentes_con_datos === 0) {
@@ -346,7 +346,7 @@ router.post('/api/sondeo/costo', verifyUserAccess, async (req, res) => {
     }
 
     // Construir contexto simulado para calcular costo
-    const contextoSimulado = await construirContextoCompleto(contextosFinales);
+    const contextoSimulado = await construirContextoCompleto(contextosFinales, req.user?.id, selectedMonitoreoIds);
     
     const { calculateSondeoCost } = require('../middlewares/credits');
     const costoEstimado = calculateSondeoCost(contextoSimulado);

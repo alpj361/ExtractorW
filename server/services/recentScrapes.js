@@ -35,6 +35,55 @@ async function saveScrape(scrapeData) {
 
     const avgEngagement = tweetCount > 0 ? Math.round(totalEngagement / tweetCount) : 0;
 
+    // Verificar si ya existe un scrape para la misma sesión y categoría
+    const { data: existingScrapes, error: existingError } = await supabase
+      .from('recent_scrapes')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('session_id', sessionId)
+      .eq('categoria', categoria)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (existingError) {
+      throw new Error(`Error verificando scrape existente: ${existingError.message}`);
+    }
+
+    if (existingScrapes && existingScrapes.length > 0) {
+      // Actualizar scrape existente agregando tweets únicos
+      const existing = existingScrapes[0];
+      const existingTweets = existing.tweets || [];
+      const tweetMap = new Map();
+      existingTweets.forEach(tw => tweetMap.set(tw.tweet_id || tw.id || JSON.stringify(tw), tw));
+      tweets.forEach(tw => {
+        const key = tw.tweet_id || tw.id || JSON.stringify(tw);
+        if (!tweetMap.has(key)) tweetMap.set(key, tw);
+      });
+      const mergedTweets = Array.from(tweetMap.values());
+      const newTweetCount = mergedTweets.length;
+      const newTotalEngagement = mergedTweets.reduce((sum, tw) => sum + ((tw.likes || 0) + (tw.retweets || 0) + (tw.replies || 0)), 0);
+      const newAvgEngagement = newTweetCount > 0 ? Math.round(newTotalEngagement / newTweetCount) : 0;
+
+      console.log(`🔄 Actualizando scrape existente ID: ${existing.id} – tweets ${existing.tweet_count} → ${newTweetCount}`);
+
+      const { error: updateError } = await supabase
+        .from('recent_scrapes')
+        .update({
+          tweets: mergedTweets,
+          tweet_count: newTweetCount,
+          total_engagement: newTotalEngagement,
+          avg_engagement: newAvgEngagement,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existing.id);
+
+      if (updateError) {
+        throw new Error(`Error actualizando scrape: ${updateError.message}`);
+      }
+
+      return { success: true, scrapeId: existing.id, data: { ...existing, tweets: mergedTweets, tweet_count: newTweetCount, total_engagement: newTotalEngagement, avg_engagement: newAvgEngagement } };
+    }
+
     // Preparar datos para insertar
     const insertData = {
       query_original: queryOriginal,

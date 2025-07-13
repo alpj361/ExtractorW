@@ -277,7 +277,7 @@ async function getAboutFromPerplexityIndividual(trendName, location = 'Guatemala
       `"${trendName}" trending ${currentMonth} 2025` // Búsqueda exacta
     ];
     
-    // Prompt mejorado con fecha dinámica, contexto de tweets y mejor enfoque en la razón exacta
+    // Prompt mejorado con fecha dinámica, contexto de tweets y análisis de controversia integrado
     const prompt = `Analiza la tendencia "${trendName}" y explica POR QUÉ está siendo tendencia ESPECÍFICAMENTE en ${currentMonth} ${currentYear}.
 
 FECHA ACTUAL: ${currentDate}
@@ -320,6 +320,14 @@ INSTRUCCIONES ESPECÍFICAS:
 7. NO digas "no hay información" - busca más profundo
 8. SÉ ESPECÍFICO sobre el evento que causó la tendencia
 
+ANÁLISIS DE CONTROVERSIA:
+Además del análisis básico, evalúa también:
+- ¿Qué tan polarizante es este tema?
+- ¿Genera debate o división de opiniones?
+- ¿Qué factores causan controversia?
+- ¿Qué porcentaje de reacciones son positivas vs negativas?
+- ¿Qué grupos o bandos se oponen?
+
 EJEMPLOS DE ANÁLISIS PRECISO:
 - Si es deportes: ¿Retiro? ¿Transferencia? ¿Lesión? ¿Partido importante?
 - Si es apodo de jugador: ¿Quién es realmente? ¿Qué pasó con él?
@@ -337,15 +345,38 @@ Responde en formato JSON:
   "contexto_local": true/false,
   "razon_tendencia": "DEBE SER MUY ESPECÍFICA: Evento exacto con fecha, acción concreta, anuncio específico, etc. NO generalidades.",
   "fecha_evento": "Fecha aproximada del evento que causó la tendencia",
-  "palabras_clave": ["palabra1", "palabra2", "palabra3"]
+  "palabras_clave": ["palabra1", "palabra2", "palabra3"],
+  "controversy_analysis": {
+    "controversy_score": "1-10 (1=no controversial, 10=muy controversial)",
+    "controversy_level": "muy_baja|baja|media|alta|muy_alta",
+    "polarization_factors": [
+      {
+        "factor": "Nombre del factor que causa polarización",
+        "intensity": "1-10",
+        "description": "Descripción del factor"
+      }
+    ],
+    "sentiment_distribution": {
+      "positive": "Porcentaje de sentimientos positivos (0-100)",
+      "negative": "Porcentaje de sentimientos negativos (0-100)",
+      "neutral": "Porcentaje de sentimientos neutrales (0-100)"
+    },
+    "opposing_sides": [
+      {
+        "side": "Nombre del bando/grupo",
+        "percentage": "Porcentaje de apoyo (0-100)",
+        "main_arguments": ["Argumento principal 1", "Argumento principal 2"]
+      }
+    ]
+  }
 }`;
 
     const payload = {
       model: 'sonar',
       messages: [
-        {
-          role: 'system',
-          content: `Eres un analista de tendencias especializado en identificar POR QUÉ algo es tendencia en redes sociales EN ESTE MOMENTO (${currentMonth} ${currentYear}). Tu expertise incluye:
+                  {
+            role: 'system',
+            content: `Eres un analista de tendencias especializado en identificar POR QUÉ algo es tendencia en redes sociales EN ESTE MOMENTO (${currentMonth} ${currentYear}). Tu expertise incluye:
 
 - Detectar eventos actuales ESPECÍFICOS que generan tendencias (lanzamientos, controversias, partidos, noticias, anuncios)
 - Identificar APODOS y nombres reales de personas famosas (especialmente deportistas)
@@ -355,6 +386,7 @@ Responde en formato JSON:
 - No rendirse fácilmente - buscar información profundamente
 - Ser PRECISO sobre la relevancia real para el público de ${location}
 - Enfocarte en EVENTOS ESPECÍFICOS no generalidades
+- ANÁLISIS DE CONTROVERSIA: Evaluar qué tan polarizante es cada tema, factores que generan debate, distribución de sentimientos, y grupos que se oponen
 
 FECHA ACTUAL: ${currentDate}
 Enfócate en la ACTUALIDAD y en eventos ESPECÍFICOS Y EXACTOS que explican por qué algo es tendencia AHORA.
@@ -362,7 +394,12 @@ Enfócate en la ACTUALIDAD y en eventos ESPECÍFICOS Y EXACTOS que explican por 
 IMPORTANTE: 
 - Si "${trendName}" parece ser un apodo, busca tanto el apodo como el nombre real de la persona.
 - Si tienes contexto de tweets reales, úsalos para entender mejor la conversación actual y la razón específica de la tendencia.
-- La "razon_tendencia" DEBE ser específica con fechas, eventos concretos, anuncios exactos - NO generalidades.`
+- La "razon_tendencia" DEBE ser específica con fechas, eventos concretos, anuncios exactos - NO generalidades.
+- SIEMPRE incluye análisis de controversia evaluando el nivel de polarización y debate que genera el tema.
+- RESPONDE SOLO CON JSON VÁLIDO, SIN EXPLICACIONES ADICIONALES.
+- Limita el campo "resumen" a **máximo 2 oraciones** y **≤280 caracteres**.
+- Limita las listas polarization_factors, opposing_sides y palabras_clave a **máximo 3 elementos** cada una.
+- NO uses "..." para cortar información; responde el JSON COMPLETO.`
         },
         {
           role: 'user',
@@ -373,19 +410,43 @@ IMPORTANTE:
         search_queries: [searchQuery, ...alternativeQueries]
       },
       temperature: 0.3,
-      max_tokens: 500
+      max_tokens: 1200 // Aumentar tokens para evitar cortes
     };
 
     console.log(`   📡 Realizando consulta a Perplexity...`);
     
-    const response = await fetch('https://api.perplexity.ai/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
+    // Implementar retry con backoff exponencial
+    let response;
+    let retryCount = 0;
+    const maxRetries = 3;
+    
+    while (retryCount < maxRetries) {
+      try {
+        response = await fetch('https://api.perplexity.ai/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+        
+        if (response.ok) {
+          break; // Éxito, salir del loop
+        } else {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+      } catch (fetchError) {
+        retryCount++;
+        if (retryCount >= maxRetries) {
+          throw new Error(`Falló después de ${maxRetries} intentos: ${fetchError.message}`);
+        }
+        
+        const delay = Math.pow(2, retryCount) * 1000; // Backoff exponencial
+        console.log(`   ⏳ Intento ${retryCount} falló, reintentando en ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
 
     if (response.ok) {
       const data = await response.json();
@@ -394,11 +455,89 @@ IMPORTANTE:
         console.log(`   ✅ Respuesta recibida para ${trendName}`);
         
         try {
-          // Intentar extraer JSON de la respuesta
-          const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            console.log(`   🔍 JSON encontrado, parseando...`);
-            const parsed = JSON.parse(jsonMatch[0]);
+          // Mejorar la extracción de JSON - buscar múltiples patrones
+          let jsonString = null;
+          
+          // Patrón 1: JSON completo entre llaves
+          const jsonMatch1 = rawResponse.match(/\{[\s\S]*\}/);
+          if (jsonMatch1) {
+            jsonString = jsonMatch1[0];
+            console.log(`   🔍 JSON encontrado (patrón 1), parseando...`);
+          }
+          
+          // Patrón 2: JSON después de ``` (código JSON)
+          if (!jsonString) {
+            const jsonMatch2 = rawResponse.match(/```json\s*(\{[\s\S]*?\})\s*```/);
+            if (jsonMatch2) {
+              jsonString = jsonMatch2[1];
+              console.log(`   🔍 JSON encontrado (patrón 2 - markdown), parseando...`);
+            }
+          }
+          
+          // Patrón 3: JSON después de cualquier código
+          if (!jsonString) {
+            const jsonMatch3 = rawResponse.match(/```\s*(\{[\s\S]*?\})\s*```/);
+            if (jsonMatch3) {
+              jsonString = jsonMatch3[1];
+              console.log(`   🔍 JSON encontrado (patrón 3 - código), parseando...`);
+            }
+          }
+          
+          if (jsonString) {
+            // Limpiar JSON antes de parsear
+            jsonString = jsonString.trim();
+            
+            // Intentar reparar JSON común con problemas
+            jsonString = jsonString.replace(/,\s*}/g, '}'); // Quitar comas finales
+            jsonString = jsonString.replace(/,\s*]/g, ']'); // Quitar comas finales en arrays
+            
+            console.log(`   🧹 JSON limpiado, intentando parsear...`);
+            
+            let parsed;
+            try {
+              parsed = JSON.parse(jsonString);
+            } catch (firstParseError) {
+              console.log(`   ⚠️ Primer intento falló, intentando reparar JSON...`);
+              
+              // Intentar reparar JSON incompleto
+              if (!jsonString.endsWith('}')) {
+                // Si no termina con }, intentar cerrarlo
+                const openBraces = (jsonString.match(/\{/g) || []).length;
+                const closeBraces = (jsonString.match(/\}/g) || []).length;
+                const missingBraces = openBraces - closeBraces;
+                
+                if (missingBraces > 0) {
+                  jsonString += '}'.repeat(missingBraces);
+                  console.log(`   🔧 Agregadas ${missingBraces} llaves faltantes`);
+                }
+              }
+              
+              try {
+                parsed = JSON.parse(jsonString);
+                console.log(`   ✅ JSON reparado exitosamente`);
+              } catch (secondParseError) {
+                throw new Error(`No se pudo reparar el JSON: ${secondParseError.message}`);
+              }
+            }
+            
+            // Validar que el JSON tenga las propiedades mínimas requeridas
+            if (!parsed || typeof parsed !== 'object') {
+              throw new Error('JSON parseado no es un objeto válido');
+            }
+            
+            // Asegurar propiedades mínimas
+            const requiredFields = ['nombre', 'categoria', 'resumen', 'relevancia'];
+            const missingFields = requiredFields.filter(field => !parsed[field]);
+            
+            if (missingFields.length > 0) {
+              console.log(`   ⚠️ Campos faltantes: ${missingFields.join(', ')}, agregando defaults...`);
+              
+              // Agregar campos faltantes con defaults
+              if (!parsed.nombre) parsed.nombre = trendName;
+              if (!parsed.categoria) parsed.categoria = 'Otros';
+              if (!parsed.resumen) parsed.resumen = `Información sobre ${trendName}`;
+              if (!parsed.relevancia) parsed.relevancia = 'media';
+            }
             
             // Forzar la normalización de la categoría aquí, justo después de recibir la respuesta
             const originalCategory = parsed.categoria || 'Otros';
@@ -428,17 +567,19 @@ IMPORTANTE:
             console.log(`   📊 ${trendName}: Categoría FINAL=${enriched.categoria}, Relevancia=${enriched.relevancia}`);
             return enriched;
           } else {
-            console.log(`   ⚠️ No se encontró JSON en la respuesta`);
+            console.log(`   ⚠️ No se encontró JSON en ningún patrón`);
+            console.log(`   🔍 Respuesta completa: ${rawResponse.substring(0, 300)}...`);
           }
         } catch (parseError) {
           console.error(`   ⚠️  Error parseando JSON para ${trendName}:`, parseError.message);
+          console.log(`   🔍 Respuesta raw que falló: ${rawResponse.substring(0, 200)}...`);
         }
         
         // Si no se puede parsear JSON, crear estructura manual
         return {
           nombre: trendName,
           tipo: 'hashtag',
-          categoria: parsed.categoria,
+          categoria: normalizarCategoria('Otros'),
           resumen: rawResponse.substring(0, 300),
           relevancia: 'media',
           contexto_local: rawResponse.toLowerCase().includes('guatemala'),
@@ -586,7 +727,7 @@ async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
       
       const processedTrend = {
         name: trendName,
-        volume: trend.volume || trend.count || 1,
+        volume: trend.volume ?? trend.count ?? 1,
         category: normalizedCategory, // Usar la categoría ya normalizada
         about: {
           nombre: aboutInfo.nombre || trendName,
@@ -601,7 +742,15 @@ async function processWithPerplexityIndividual(trends, location = 'Guatemala') {
             trendName.toLowerCase().includes(location.toLowerCase()) : 
             aboutInfo.contexto_local,
           source: aboutInfo.source || 'perplexity-individual',
-          model: aboutInfo.model || 'sonar'
+          model: aboutInfo.model || 'sonar',
+          // NUEVO: Análisis de controversia integrado
+          controversy_analysis: aboutInfo.controversy_analysis || {
+            controversy_score: 1,
+            controversy_level: 'muy_baja',
+            polarization_factors: [],
+            sentiment_distribution: { positive: 60, negative: 20, neutral: 20 },
+            opposing_sides: []
+          }
         },
         metadata: {
           timestamp: new Date().toISOString(),

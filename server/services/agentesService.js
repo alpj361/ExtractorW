@@ -640,6 +640,8 @@ Formato:
               llmPlan.plan.args.q = this.enforceSocialJargon(llmPlan.plan.args.q);
             }
             finalResult = await mcpService.executeTool(llmPlan.plan.tool, llmPlan.plan.args, user);
+            // Filtrar tweets recientes
+            finalResult.tweets = this.filterRecentTweets(finalResult.tweets, 45);
             executionSteps.push('gemini_reasoned_execution');
             
             // Guardar el razonamiento del LLM
@@ -665,7 +667,8 @@ Formato:
                   ...step.args,
                   q: preciseQuery
                 }, user);
-                finalResult.tweets = nitterResult.tweets || finalResult.tweets;
+                const allTweetsTmp = nitterResult.tweets || [];
+                finalResult.tweets = this.filterRecentTweets((finalResult.tweets || []).concat(allTweetsTmp), 45);
                 finalResult.webContext = nitterResult.webContext || finalResult.webContext;
                 finalResult.sources = nitterResult.sources || finalResult.sources;
                 finalResult.content = nitterResult.content || finalResult.webContext;
@@ -675,6 +678,8 @@ Formato:
             finalResult.llm_reasoning = llmPlan.plan.reasoning;
             finalResult.llm_thought = llmPlan.thought;
             finalResult.llm_model = llmPlan._metrics?.model || 'unknown';
+            // Marcar éxito si se obtuvieron tweets o contenido relevante
+            finalResult.success = !!(finalResult.tweets && finalResult.tweets.length > 0);
           } else if (llmPlan.plan.action === 'word_by_word_analysis') {
             // Nuevo flujo palabra por palabra: ejecutar cada paso según su herramienta.
             let combinedContexts = [];
@@ -699,6 +704,13 @@ Formato:
 
                 if (nitterResult.tweets?.length) {
                   collectedTweets = collectedTweets.concat(nitterResult.tweets);
+                }
+
+                // Evaluar si ya hay suficientes tweets relevantes para detenerse temprano
+                const currentRelevance = this.assessRelevance({tweets: collectedTweets}, task.originalQuery);
+                if (collectedTweets.length >= 15 && currentRelevance >= 7) {
+                  console.log(`[LAURA] ✅ Datos suficientes tras paso ${currentStep} (${collectedTweets.length} tweets, relevancia ${currentRelevance}/10) - terminando temprano`);
+                  break;
                 }
 
                 executionSteps.push(`nitter_word_${currentStep}`);
@@ -726,6 +738,14 @@ Formato:
                 finalResult.webContext = nitterResult.webContext || finalResult.webContext;
                 finalResult.sources = nitterResult.sources || finalResult.sources;
 
+                // Validar duplicados y relevancia
+                const currentRelevance = this.assessRelevance({tweets: collectedTweets}, task.originalQuery);
+
+                if (collectedTweets.length >= 15 && currentRelevance >= 7) {
+                  console.log(`[LAURA] ✅ Datos suficientes (${collectedTweets.length} tweets, relevancia ${currentRelevance}/10) - terminando temprano`);
+                  break;
+                }
+
                 executionSteps.push(`nitter_context_step_${currentStep}`);
               } else {
                 console.log(`[LAURA] ⚠️ Herramienta desconocida en word_by_word_analysis: ${step.tool}`);
@@ -740,13 +760,16 @@ Formato:
               }
             }
 
-            finalResult.tweets = Array.from(uniqueTweetsMap.values());
+            finalResult.tweets = this.filterRecentTweets(Array.from(uniqueTweetsMap.values()), 45);
             finalResult.combinedContexts = combinedContexts;
             finalResult.llm_reasoning = llmPlan.plan.reasoning;
             finalResult.llm_thought = llmPlan.thought;
             finalResult.llm_model = llmPlan._metrics?.model || 'unknown';
             finalResult.analysis_type = 'word_by_word';
 
+            // Marcar éxito si se obtuvieron tweets
+            finalResult.success = !!(finalResult.tweets && finalResult.tweets.length > 0);
+            
             console.log(`[LAURA] 🎉 Análisis palabra por palabra completado: ${finalResult.tweets.length} tweets únicos obtenidos`);
           }
         } catch (llmError) {
@@ -776,6 +799,31 @@ Formato:
           
           finalResult = await mcpService.executeTool(task.tool, filteredArgs, user);
           executionSteps.push('intelligent_filtered_search');
+        } else if (task.tool === 'nitter_profile') {
+          // Manejo especial para nitter_profile con contexto Perplexity
+          console.log(`[LAURA] 🎯 executeTask: Ejecutando nitter_profile con enhancement Perplexity`);
+          finalResult = await mcpService.executeTool(task.tool, task.args, user);
+          
+          // Agregar contexto Perplexity si el perfil tiene username
+          if (task.args?.username) {
+            console.log(`[LAURA] 🔍 executeTask: Getting web context for profile @${task.args.username}`);
+            
+            const perplexityContext = await this.enhanceProfileWithPerplexity(
+              task.args.username
+            );
+            
+            if (perplexityContext) {
+              finalResult.perplexity_context = perplexityContext;
+              executionSteps.push('perplexity_profile_enhancement');
+              console.log(`[LAURA] ✅ executeTask: Perplexity context añadido a finalResult`);
+            } else {
+              console.log(`[LAURA] ⚠️  executeTask: No se pudo obtener contexto Perplexity en executeTask`);
+            }
+          } else {
+            console.log(`[LAURA] ⚠️  executeTask: No username en task.args para nitter_profile`);
+          }
+          
+          executionSteps.push('direct_tool_execution');
         } else {
           // Para otras herramientas
           finalResult = await mcpService.executeTool(task.tool, task.args, user);
@@ -813,7 +861,7 @@ Formato:
         agent: 'Laura',
         task_id: task.id,
         analysis_type: task.type,
-        findings: this.processToolResult(finalResult, task.type),
+        findings: await this.processToolResult(finalResult, task.type),
         context_note: this.generateContextNote(finalResult, task.type, relevanceScore),
         source_ids: [task.tool, task.args],
         relevance_score: relevanceScore,
@@ -834,7 +882,7 @@ Formato:
     }
   }
 
-  processToolResult(toolResult, analysisType) {
+  async processToolResult(toolResult, analysisType) {
     if (!toolResult.success) return null;
 
     switch (analysisType) {
@@ -846,17 +894,39 @@ Formato:
           sentiment: this.calculateSentiment(toolResult.tweets),
           momentum: this.calculateMomentum(toolResult.tweets),
           top_posts: toolResult.tweets?.slice(0, 5) || [],
+          all_posts: toolResult.tweets || [],
           key_actors: this.extractKeyActors(toolResult.tweets),
           geographic_focus: 'guatemala'
         };
       
       case 'profile':
-        return {
+        const baseProfile = {
           user_profile: toolResult.profile || {},
           recent_activity: toolResult.tweets?.slice(0, 10) || [],
           influence_metrics: this.calculateInfluence(toolResult),
           activity_pattern: this.analyzeActivityPattern(toolResult.tweets)
         };
+        
+        // Add Perplexity context enhancement
+        if (toolResult.profile?.username) {
+          console.log(`[LAURA] 🔧 processToolResult: Intentando enhancement para @${toolResult.profile.username}`);
+          
+          const perplexityContext = await this.enhanceProfileWithPerplexity(
+            toolResult.profile.username
+          );
+          
+          if (perplexityContext) {
+            baseProfile.web_context = perplexityContext;
+            baseProfile.enhanced_with_web = true;
+            console.log(`[LAURA] ✅ processToolResult: Profile enhanced exitosamente`);
+          } else {
+            console.log(`[LAURA] ⚠️  processToolResult: No se pudo obtener contexto Perplexity`);
+          }
+        } else {
+          console.log(`[LAURA] ⚠️  processToolResult: No username en profile data`);
+        }
+        
+        return baseProfile;
       
       case 'web_research':
         return {
@@ -906,6 +976,58 @@ Formato:
       peak_hours: [],
       consistency_score: 0
     };
+  }
+
+  async enhanceProfileWithPerplexity(username) {
+    try {
+      console.log(`[LAURA] 🔍 Iniciando enhancement de perfil para @${username}`);
+      
+      const perplexityQuery = `@${username} Twitter perfil Guatemala contexto actual información background`;
+      console.log(`[LAURA] 📝 Query Perplexity: "${perplexityQuery}"`);
+      
+      const startTime = Date.now();
+      const perplexityResult = await mcpService.executeTool('perplexity_search', {
+        query: perplexityQuery,
+        location: 'guatemala',
+        focus: 'profile_context'
+      });
+      const responseTime = Date.now() - startTime;
+      
+      console.log(`[LAURA] ⏱️  Perplexity response time: ${responseTime}ms`);
+      console.log(`[LAURA] 📊 Perplexity result status:`, {
+        hasContent: !!perplexityResult?.content,
+        contentLength: perplexityResult?.content?.length || 0,
+        hasSources: !!perplexityResult?.sources,
+        sourcesCount: perplexityResult?.sources?.length || 0
+      });
+
+      if (perplexityResult?.content) {
+        const contextData = {
+          web_context: perplexityResult.content,
+          sources: perplexityResult.sources || [],
+          enhanced: true,
+          context_summary: perplexityResult.content.substring(0, 200) + '...'
+        };
+        
+        console.log(`[LAURA] ✅ Profile context enhanced para @${username}:`, {
+          contextLength: contextData.web_context.length,
+          sourcesFound: contextData.sources.length,
+          summaryPreview: contextData.context_summary.substring(0, 100)
+        });
+        
+        return contextData;
+      } else {
+        console.log(`[LAURA] ⚠️  Sin contenido de Perplexity para @${username}`);
+        return null;
+      }
+    } catch (error) {
+      console.error(`[LAURA] ❌ Error enhancing profile para @${username}:`, {
+        error: error.message,
+        stack: error.stack?.substring(0, 200),
+        timestamp: new Date().toISOString()
+      });
+      return null;
+    }
   }
 
   extractKeyPoints(content) {
@@ -1503,6 +1625,18 @@ Formato:
     console.log(`[LAURA] 📊 Términos por categoría: específicos=${specificTerms.length}, eventos=${eventTerms.length}, técnicos=${technicalTerms.length}, reacciones=${reactionTerms.length}`);
     
     return finalQuery.trim();
+  }
+
+  // NUEVA FUNCIÓN: Filtra tweets para mantener solo los más recientes (últimos X días)
+  filterRecentTweets(tweets = [], maxAgeDays = 45) {
+    if (!tweets || tweets.length === 0) return [];
+    const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
+    return tweets.filter(tw => {
+      const dateStr = tw.fecha_tweet || tw.fecha || tw.date || tw.timestamp;
+      if (!dateStr) return false;
+      const tweetDate = new Date(dateStr).getTime();
+      return !isNaN(tweetDate) && tweetDate >= cutoff;
+    });
   }
 }
 
