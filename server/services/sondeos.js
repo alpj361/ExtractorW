@@ -478,6 +478,10 @@ async function cargarContextoEspecifico(selectedItems) {
     // Separar items por tipo
     const tweetIds = [];
     const trendNames = [];
+    const trendIds = [];
+    
+    // Regex para detectar UUIDs (formato: 8-4-4-4-12 caracteres hexadecimales)
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     
     selectedItems.forEach(item => {
       if (typeof item === 'string') {
@@ -485,6 +489,20 @@ async function cargarContextoEspecifico(selectedItems) {
           // Extract numeric ID from "tweet_7061" format
           const numericId = item.replace('tweet_', '');
           tweetIds.push(numericId);
+        } else if (item.startsWith('trend_')) {
+          // Handle format "trend_UUID_TrendName" or "trend_UUID"
+          const parts = item.replace('trend_', '').split('_');
+          const potentialUuid = parts[0];
+          
+          if (uuidRegex.test(potentialUuid)) {
+            trendIds.push(potentialUuid);
+          } else {
+            // If not a valid UUID, treat as trend name
+            trendNames.push(item);
+          }
+        } else if (uuidRegex.test(item)) {
+          // Direct UUID format
+          trendIds.push(item);
         } else {
           // Treat as trend name
           trendNames.push(item);
@@ -494,6 +512,7 @@ async function cargarContextoEspecifico(selectedItems) {
     
     console.log('📊 IDs de tweets a cargar:', tweetIds);
     console.log('📊 Nombres de tendencias a cargar:', trendNames);
+    console.log('📊 IDs de tendencias a cargar:', trendIds);
     
     const resultados = [];
     
@@ -507,6 +526,12 @@ async function cargarContextoEspecifico(selectedItems) {
     if (trendNames.length > 0) {
       const trendsData = await cargarTendenciasPorNombres(trendNames);
       resultados.push(...trendsData);
+    }
+    
+    // Cargar tendencias específicas por ID
+    if (trendIds.length > 0) {
+      const trendsDataById = await cargarTendenciasPorIds(trendIds);
+      resultados.push(...trendsDataById);
     }
     
     console.log(`✅ Contexto específico cargado: ${resultados.length} items`);
@@ -825,6 +850,7 @@ async function cargarTendenciasPorNombres(trendNames) {
         if (matchingTrends.length > 0) {
           matchingTrends.forEach(matchedTrend => {
             matchedTrends.push({
+              id: trend.id, // Include the trend record ID
               trend_name: matchedTrend.trend || matchedTrend.name,
               volume: matchedTrend.volume || matchedTrend.tweet_volume,
               timestamp: trend.timestamp,
@@ -846,6 +872,78 @@ async function cargarTendenciasPorNombres(trendNames) {
     
   } catch (error) {
     console.error('❌ Error en cargarTendenciasPorNombres:', error);
+    return [];
+  }
+}
+
+/**
+ * Carga tendencias específicas por sus IDs
+ */
+async function cargarTendenciasPorIds(trendIds) {
+  try {
+    console.log('📈 Cargando tendencias por IDs:', trendIds);
+    
+    const { data: trends, error } = await supabase
+      .from('trends')
+      .select('*')
+      .in('id', trendIds);
+    
+    if (error) {
+      console.error('❌ Error cargando tendencias por ID:', error);
+      return [];
+    }
+    
+    if (!trends || trends.length === 0) {
+      console.log('⚠️ No se encontraron tendencias con los IDs especificados');
+      return [];
+    }
+    
+    const processedTrends = [];
+    
+    trends.forEach(trend => {
+      try {
+        let trendData = {};
+        
+        if (trend.raw_data) {
+          const rawData = typeof trend.raw_data === 'string' 
+            ? JSON.parse(trend.raw_data) 
+            : trend.raw_data;
+          
+          if (rawData.twitter_trends) {
+            trendData = rawData.twitter_trends;
+          } else if (Array.isArray(rawData)) {
+            trendData = { trends: rawData };
+          } else {
+            trendData = rawData;
+          }
+        }
+        
+        // Process all trends in this record
+        const trendList = trendData.trends || [];
+        trendList.forEach(trendItem => {
+          processedTrends.push({
+            id: trend.id, // Include the trend record ID
+            trend_name: trendItem.trend || trendItem.name,
+            volume: trendItem.volume || trendItem.tweet_volume,
+            timestamp: trend.timestamp,
+            about: trend.about,
+            category: trend.category_data,
+            keywords: trend.top_keywords,
+            type: 'trend',
+            source: 'trends'
+          });
+        });
+        
+      } catch (parseError) {
+        console.error('❌ Error procesando trend por ID:', parseError);
+      }
+    });
+    
+    console.log(`✅ ${processedTrends.length} tendencias encontradas por ID`);
+    return processedTrends;
+    
+  } catch (error) {
+    console.error('❌ Error en cargarTendenciasPorIds:', error);
     return [];
   }
 }
@@ -1176,8 +1274,7 @@ async function obtenerContextoAdicionalPerplexity(pregunta, contextoBase) {
             const uniqueTweets = allTweets
               .filter((tweet, index, self) => 
                 index === self.findIndex(t => t.texto === tweet.texto)
-              )
-              .slice(0, 8); // Limit to 8 unique tweets
+              ); // Show all selected tweets
             
             const tweetsFormateados = uniqueTweets.map(tweet => {
               const engagement = (tweet.likes || 0) + (tweet.retweets || 0) + (tweet.replies || 0);
@@ -1349,10 +1446,15 @@ INSTRUCCIONES CRÍTICAS PARA ANÁLISIS DE DATOS REALES:
 
 Al final incluye un bloque JSON con datos para visualización que DEBE incluir estos campos específicos BASADOS EN EL CONTEXTO REAL:
 
+🎯 INSTRUCCIONES ESPECÍFICAS PARA EL JSON:
+1. Para "temas_relevantes": USA LAS TENDENCIAS ESPECÍFICAS incluidas en "📈 TENDENCIAS ACTUALES CON DETALLES"
+2. Para "distribucion_categorias": USA LAS CATEGORÍAS REALES de las tendencias, tweets y noticias proporcionadas
+3. NO uses ejemplos genéricos - USA DATOS REALES del contexto
+
 \`\`\`json
 {
-  "temas_relevantes": [{"tema": "Nombre del contexto", "valor": 85}],
-  "distribucion_categorias": [{"categoria": "Categoría real", "valor": 35}],
+  "temas_relevantes": [{"tema": "Nombre REAL de tendencia del contexto", "valor": 85}],
+  "distribucion_categorias": [{"categoria": "Categoría REAL del contexto", "valor": 35}],
   "evolucion_sentimiento": [
     {"tiempo": "Lun", "positivo": 45, "neutral": 30, "negativo": 25, "fecha": "2024-01-01"},
     {"tiempo": "Mar", "positivo": 48, "neutral": 32, "negativo": 20, "fecha": "2024-01-02"},
@@ -1361,11 +1463,11 @@ Al final incluye un bloque JSON con datos para visualización que DEBE incluir e
   "cronologia_eventos": [
     {
       "id": "1",
-      "fecha": "2024-01-03",
-      "titulo": "Evento real del contexto",
-      "descripcion": "Descripción basada en datos reales del contexto",
+      "fecha": "FECHA REAL del contexto",
+      "titulo": "EVENTO REAL basado en las tendencias del contexto",
+      "descripcion": "Descripción basada en los datos REALES del contexto",
       "impacto": "alto",
-      "categoria": "categoria_real", 
+      "categoria": "CATEGORÍA REAL del contexto", 
       "sentimiento": "positivo",
       "keywords": ["keyword1_real", "keyword2_real"],
       "fuentes": ["Fuente real 1", "Fuente real 2"]
@@ -1427,18 +1529,29 @@ IMPORTANTE: Los campos 'evolucion_sentimiento' y 'cronologia_eventos' DEBEN basa
     // Extraer datos JSON para visualizaciones
     let datosVisualizacion = null;
     const jsonPatterns = [
-      /```json\n([\s\S]*?)\n```/, // Formato estándar ```json
-      /```\n([\s\S]*?)\n```/,     // Formato sin especificar lenguaje
-      /`([\s\S]*?)`/              // Formato de bloque simple
+      /```json\s*\n([\s\S]*?)\n\s*```/i, // Formato estándar ```json con espacios
+      /```json([\s\S]*?)```/i,           // Formato ```json sin salto de línea
+      /```\s*\n([\s\S]*?)\n\s*```/,      // Formato sin especificar lenguaje
+      /```([\s\S]*?)```/,                // Formato simple
+      /\{[\s\S]*"temas_relevantes"[\s\S]*?\}/m, // Buscar JSON directo por estructura
+      /`([\s\S]*?)`/                     // Formato de bloque simple
     ];
 
+    console.log('🔍 Buscando JSON en respuesta de GPT-4o...');
     let jsonText = null;
-    for (const pattern of jsonPatterns) {
+    for (let i = 0; i < jsonPatterns.length; i++) {
+      const pattern = jsonPatterns[i];
       const match = respuestaIA.match(pattern);
       if (match && match[1]) {
         jsonText = match[1];
+        console.log(`✅ JSON encontrado con patrón ${i + 1}: ${jsonText.substring(0, 100)}...`);
         break;
       }
+    }
+    
+    if (!jsonText) {
+      console.log('❌ No se encontró JSON en la respuesta de GPT-4o');
+      console.log('📋 Respuesta completa:', respuestaIA.substring(0, 500) + '...');
     }
 
     if (jsonText) {
@@ -1453,13 +1566,28 @@ IMPORTANTE: Los campos 'evolucion_sentimiento' y 'cronologia_eventos' DEBEN basa
 
         datosVisualizacion = JSON.parse(cleanedJson);
 
-        // Limpiar la respuesta eliminando el JSON
-        respuestaIA = respuestaIA.replace(/```json\n[\s\S]*?\n```/, '')
-                                 .replace(/```\n[\s\S]*?\n```/, '')
-                                 .replace(/`[\s\S]*?`/, '')
-                                 .trim();
+        // Validar que el JSON tenga la estructura esperada
+        const requiredFields = ['temas_relevantes', 'distribucion_categorias', 'evolucion_sentimiento', 'cronologia_eventos'];
+        const hasValidStructure = requiredFields.every(field => 
+          datosVisualizacion.hasOwnProperty(field) && Array.isArray(datosVisualizacion[field])
+        );
 
-        console.log('✅ Datos para visualizaciones extraídos correctamente:', Object.keys(datosVisualizacion));
+        if (!hasValidStructure) {
+          console.log('⚠️ JSON extraído no tiene estructura válida para gráficos');
+          console.log('📊 Campos encontrados:', Object.keys(datosVisualizacion));
+          console.log('📊 Campos requeridos:', requiredFields);
+          datosVisualizacion = null;
+        } else {
+          console.log('✅ JSON validado con estructura correcta para gráficos');
+          
+          // Limpiar la respuesta eliminando el JSON
+          respuestaIA = respuestaIA.replace(/```json[\s\S]*?```/gi, '')
+                                   .replace(/```[\s\S]*?```/g, '')
+                                   .replace(/`[\s\S]*?`/g, '')
+                                   .trim();
+
+          console.log('✅ Datos para visualizaciones extraídos correctamente:', Object.keys(datosVisualizacion));
+        }
       } catch (jsonError) {
         console.error('❌ Error parseando JSON de visualizaciones:', jsonError);
         datosVisualizacion = null;
@@ -2981,7 +3109,7 @@ function construirPromptSondeo(pregunta, contexto, configuracion) {
   
   // 2. AGREGAR TWEETS DIRECTAMENTE SI EXISTEN EN EL CONTEXTO
   if (contexto.data && contexto.data.tweets && contexto.data.tweets.length > 0) {
-    const tweetsResumen = contexto.data.tweets.slice(0, 8).map((tweet, index) => {
+    const tweetsResumen = contexto.data.tweets.map((tweet, index) => {
       const autor = tweet.author || tweet.usuario || 'Usuario';
       const texto = (tweet.text || tweet.texto || 'Sin texto').substring(0, 150);
       const engagement = (tweet.metrics?.engagement || tweet.likes || 0) + (tweet.retweets || 0);
@@ -2998,14 +3126,21 @@ function construirPromptSondeo(pregunta, contexto, configuracion) {
   if (contexto.data) {
     // Resumir tendencias con información temporal y de sentimiento
     if (contexto.data.tendencias && contexto.data.tendencias.length > 0) {
-      const tendenciasTop = contexto.data.tendencias.slice(0, 5).map((t, index) => {
+      const tendenciasTop = contexto.data.tendencias.map((t, index) => {
         // Manejar casos donde las tendencias vengan anidadas en t.trends
-        let nombre = t.nombre || t.trend || t.keyword || t.name || t.query;
-        let categoria = t.categoria;
+        let nombre = t.nombre || t.trend || t.keyword || t.name || t.query || t.trend_name;
+        let categoria = t.categoria || t.category;
         let volumen = t.volumen || t.volume;
         let fecha = t.fecha || t.timestamp;
+        let trendId = t.id || 'N/A';
         let sentimiento = 'neutral';
         let about = '';
+
+        // Fix category display - convert object to string if needed
+        if (categoria && typeof categoria === 'object') {
+          categoria = JSON.stringify(categoria);
+        }
+        categoria = categoria || 'Sin categoría';
 
         if (!nombre && t.trends && Array.isArray(t.trends) && t.trends.length > 0) {
           const first = t.trends[0];
@@ -3021,23 +3156,41 @@ function construirPromptSondeo(pregunta, contexto, configuracion) {
         
         // Extraer información de about para enriquecer el contexto
         if (t.about) {
+          console.log(`🔍 DEBUG - Processing about for trend: ${nombre}`);
+          console.log('🔍 DEBUG - About data:', JSON.stringify(t.about, null, 2));
+          
           if (Array.isArray(t.about) && t.about.length > 0) {
-            const firstAbout = t.about[0];
-            if (typeof firstAbout === 'string') {
-              about = ` - ${firstAbout.substring(0, 150)}`;
-            } else if (typeof firstAbout === 'object') {
-              about = ` - ${(firstAbout.resumen || firstAbout.summary || firstAbout.description || '')}`.substring(0, 150);
-              sentimiento = firstAbout.sentimiento || firstAbout.sentiment || sentimiento;
+            // Buscar en el array el about específico para esta tendencia
+            const specificAbout = t.about.find(item => 
+              item.nombre === nombre || 
+              item.trend_name === nombre ||
+              item.name === nombre
+            ) || t.about[0]; // Fallback al primero si no encuentra específico
+            
+            console.log(`📋 DEBUG - Selected about item for ${nombre}:`, JSON.stringify(specificAbout, null, 2));
+            
+            if (typeof specificAbout === 'string') {
+              about = ` - ${specificAbout.substring(0, 150)}`;
+            } else if (typeof specificAbout === 'object' && specificAbout) {
+              const description = specificAbout.resumen || specificAbout.summary || specificAbout.description || specificAbout.texto || specificAbout.content || specificAbout.razon_tendencia || '';
+              about = description ? ` - ${description.substring(0, 150)}` : '';
+              sentimiento = specificAbout.sentimiento || specificAbout.sentiment || sentimiento;
             }
           } else if (typeof t.about === 'string') {
             about = ` - ${t.about.substring(0, 150)}`;
-          } else if (typeof t.about === 'object') {
-            about = ` - ${(t.about.resumen || t.about.summary || t.about.description || '')}`.substring(0, 150);
+          } else if (typeof t.about === 'object' && t.about) {
+            console.log('📝 DEBUG - About object keys:', Object.keys(t.about));
+            const description = t.about.resumen || t.about.summary || t.about.description || t.about.texto || t.about.content || t.about.razon_tendencia || '';
+            about = description ? ` - ${description.substring(0, 150)}` : '';
             sentimiento = t.about.sentimiento || t.about.sentiment || sentimiento;
           }
+          
+          console.log(`✅ DEBUG - Final about for ${nombre}:`, about);
+        } else {
+          console.log('❌ DEBUG - No about data found for trend:', nombre);
         }
         
-        return `${nombre} (${categoria}, Vol: ${volumen}, Fecha: ${fecha}, Sentimiento: ${sentimiento})${about}`;
+        return `${nombre} (ID: ${trendId}, ${categoria}, Vol: ${volumen}, Fecha: ${fecha}, Sentimiento: ${sentimiento})${about}`;
       }).join('\n• ');
       resumenContexto += `\n\n📈 TENDENCIAS ACTUALES CON DETALLES:\n• ${tendenciasTop}`;
     }
@@ -3164,7 +3317,43 @@ FORMATO DE RESPUESTA:
 - Párrafo 2: Análisis del contexto actual (tendencias, conversaciones sociales)
 - Párrafo 3: Conclusiones y recomendaciones prácticas
 
+DESPUÉS DEL ANÁLISIS, INCLUYE OBLIGATORIAMENTE UN BLOQUE JSON PARA VISUALIZACIONES:
+
+\`\`\`json
+{
+  "temas_relevantes": [
+    {"tema": "Nombre del tema", "valor": 85},
+    {"tema": "Segundo tema", "valor": 72}
+  ],
+  "distribucion_categorias": [
+    {"categoria": "Política", "valor": 35, "color": "#3B82F6"},
+    {"categoria": "Deportes", "valor": 28, "color": "#10B981"}
+  ],
+  "evolucion_sentimiento": [
+    {"tiempo": "Lun", "positivo": 45, "neutral": 30, "negativo": 25, "fecha": "2025-07-15"},
+    {"tiempo": "Mar", "positivo": 52, "neutral": 28, "negativo": 20, "fecha": "2025-07-16"}
+  ],
+  "cronologia_eventos": [
+    {
+      "id": "evento_1",
+      "fecha": "2025-07-19",
+      "titulo": "Evento principal detectado",
+      "descripcion": "Descripción basada en los datos del contexto",
+      "impacto": "alto",
+      "categoria": "política",
+      "fuentes": ["Twitter", "Noticias"]
+    }
+  ],
+  "conclusiones": "Resumen de insights clave basados en los datos analizados",
+  "metodologia": "Análisis basado en datos reales del contexto proporcionado",
+  "sources_used": ["tendencias", "tweets", "noticias"]
+}
+\`\`\`
+
 IMPORTANTE: 
+- SIEMPRE incluye el bloque JSON al final con datos reales del contexto
+- Los valores numéricos deben basarse en volúmenes/engagement reales
+- Las fechas deben corresponder a las del contexto
 - NO inventes datos que no estén en el contexto
 - SI hay tweets relevantes, menciona qué está diciendo la gente
 - SI hay información web actualizada, úsala para dar contexto específico
