@@ -43,6 +43,12 @@ app.use(cors({
   maxAge: 86400 // 24 horas
 }));
 
+// Middleware de logging para todas las rutas
+app.use((req, res, next) => {
+  console.log(`🌐 Solicitud recibida: ${req.method} ${req.path}`);
+  next();
+});
+
 // Configurar middlewares
 app.use(express.json());
 setupMiddlewares(app);

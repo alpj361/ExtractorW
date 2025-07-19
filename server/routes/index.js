@@ -48,7 +48,7 @@ function setupRoutes(app) {
   adminRoutes(app);
   
   // Configurar rutas de sondeos
-  app.use('/', sondeosRoutes);
+  app.use('/api', sondeosRoutes);
   
   // Configurar rutas de sugerencias de proyectos
   app.use('/api/project-suggestions', projectSuggestionsRoutes);

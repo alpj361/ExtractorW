@@ -5,7 +5,8 @@ const { checkCredits } = require('../middlewares/credits');
 const { 
   construirContextoCompleto,
   obtenerContextoAdicionalPerplexity,
-  procesarSondeoConChatGPT
+  procesarSondeoConChatGPT,
+  construirPromptSondeo
 } = require('../services/sondeos');
 
 /**
@@ -17,7 +18,7 @@ const {
  * POST /api/sondeo - Endpoint principal para procesar sondeos
  * Requiere autenticación y verificación de créditos
  */
-router.post('/api/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
+router.post('/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
   try {
     console.log('🎯 INICIO: Procesando sondeo');
     console.log('📝 Request body:', JSON.stringify(req.body, null, 2));
@@ -106,6 +107,40 @@ router.post('/api/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
       ...contextoCompleto,
       contexto_adicional: contextoAdicional
     };
+
+    // 🔍 MODO PREVIEW: Permite a usuarios admin revisar el contexto y el prompt antes de enviar a GPT
+    const isPreviewRequested = configuracionCompleta?.preview_context === true || configuracionCompleta?.revisar_contexto === true;
+    const isAdminUser = req.user?.profile?.role === 'admin' || req.user?.profile?.is_admin;
+
+    console.log('🔍 PREVIEW DEBUG:', {
+      isPreviewRequested,
+      isAdminUser,
+      userRole: req.user?.profile?.role,
+      userEmail: req.user?.profile?.email,
+      previewContextFlag: configuracionCompleta?.revisar_contexto,
+      previewContextValue: configuracionCompleta?.preview_context,
+      requestBody: req.body  // Agregar esto para ver el cuerpo completo de la solicitud
+    });
+
+    if (isPreviewRequested && isAdminUser) {
+      // Construir prompt sin llamar a GPT
+      const promptPreview = construirPromptSondeo(pregunta, contextoEnriquecido, configuracionCompleta);
+      console.log('🔎 [PREVIEW] Prompt construido (long:', promptPreview.length, 'chars)');
+
+      return res.json({
+        success: true,
+        preview: true,
+        message: 'Vista previa de contexto y prompt — no se llamó a GPT-4o',
+        prompt_length: promptPreview.length,
+        prompt_preview: promptPreview,
+        contexto_stats: {
+          fuentes_utilizadas: contextoEnriquecido.fuentes_utilizadas,
+          total_items: contextoEnriquecido.estadisticas?.total_items,
+          fuentes_con_datos: contextoEnriquecido.estadisticas?.fuentes_con_datos
+        },
+        contexto_truncado: JSON.stringify(contextoEnriquecido).substring(0, 5000)
+      });
+    }
     
     const resultadoFinal = await procesarSondeoConChatGPT(
       pregunta, 
