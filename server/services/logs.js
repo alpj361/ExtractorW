@@ -25,6 +25,14 @@ async function logUsage(user, operation, credits, req) {
   }
 
   try {
+    console.log('📊 LOGGING: Registrando uso detallado de la operación:', {
+      operation,
+      user_email: user.email,
+      credits,
+      path: req?.path,
+      method: req?.method
+    });
+    
     // Verificar si ya se ha registrado un log para esta solicitud
     if (req && req.usage_logged) {
       console.log(`ℹ️ No se registra uso duplicado para ${operation}, ya existe un log`);
@@ -41,15 +49,38 @@ async function logUsage(user, operation, credits, req) {
       ip: req?.ip || req?.headers?.['x-forwarded-for'] || 'unknown'
     };
 
+    // Enhanced logging for sondeos with detailed processing information
+    let processingDetails = {};
+    
+    if (operation === '/api/sondeo' && req?.body) {
+      const body = req.body;
+      processingDetails = {
+        pregunta: body.pregunta || '',
+        pregunta_length: (body.pregunta || '').length,
+        contextos_seleccionados: body.selectedContexts || body.contextos || [],
+        configuracion: {
+          detalle_nivel: body.configuracion?.detalle_nivel || 'no especificado',
+          incluir_recomendaciones: body.configuracion?.incluir_recomendaciones || false,
+          incluir_visualizaciones: body.configuracion?.incluir_visualizaciones || false,
+          tipo_analisis: body.configuracion?.tipo_analisis || 'no especificado'
+        },
+        contexto_original_disponible: !!body.configuracion?.contexto_original,
+        tiene_monitoreos_seleccionados: !!(body.selectedMonitoreoIds && body.selectedMonitoreoIds.length > 0)
+      };
+      
+      console.log('📊 LOGGING: Detalles del sondeo para logs:', processingDetails);
+    }
+
     // Crear registro de uso completo
     const logEntry = {
       user_id: user.id,
       user_email: user.email,
       operation: operation,
       credits_consumed: credits,
-      current_credits: user.profile.credits || 0, // Agregar current_credits
+      current_credits: user.profile.credits || 0,
       timestamp: new Date().toISOString(),
-      request_params: requestParams
+      request_params: requestParams,
+      processing_details: Object.keys(processingDetails).length > 0 ? processingDetails : null
     };
 
     // Agregar métricas de tokens y costo si existen en la request
@@ -58,6 +89,12 @@ async function logUsage(user, operation, credits, req) {
     }
     if (req.dollars_consumed !== undefined) {
       logEntry.dollars_consumed = req.dollars_consumed;
+    }
+    
+    // Add detailed response metrics if available
+    if (req.response_metrics) {
+      logEntry.response_metrics = req.response_metrics;
+      console.log('📊 LOGGING: Métricas de respuesta incluidas:', req.response_metrics);
     }
 
     const { error } = await supabase
@@ -85,6 +122,7 @@ async function logUsage(user, operation, credits, req) {
       }
     } else {
       console.log(`✅ Uso registrado: ${user.email} - ${operation} - ${credits} créditos`);
+      console.log('📊 LOGGING: Log entry guardado exitosamente con detalles completos');
       
       // Marcar que ya se ha registrado un log para esta solicitud
       if (req) {

@@ -63,8 +63,7 @@ router.post('/api/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
 
     // FASE 2: Construir contexto completo
     console.log('🔨 FASE 2: Construyendo contexto completo...');
-    console.log('🔧 Configuración recibida:', configuracion);
-    const contextoCompleto = await construirContextoCompleto(contextosFinales, req.user.id, selectedMonitoreoIds, configuracion);
+    const contextoCompleto = await construirContextoCompleto(contextosFinales, req.user.id, selectedMonitoreoIds);
     console.log('✅ FASE 2 completada. Estadísticas:', contextoCompleto.estadisticas);
 
     if (contextoCompleto.estadisticas.fuentes_con_datos === 0) {
@@ -119,12 +118,6 @@ router.post('/api/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
       keysResultado: Object.keys(resultadoFinal)
     });
 
-    // 🔍 OPCIÓN: Incluir contexto bruto para depuración
-    const incluirContextoRaw = configuracionCompleta?.incluir_contexto_raw === true || process.env.INCLUIR_CONTEXTO_RAW === 'true';
-    if (incluirContextoRaw) {
-      console.log('📊 LOGGING: Contexto completo que se enviará al modelo:', JSON.stringify(contextoEnriquecido, null, 2).substring(0, 10000));
-    }
-
     // FASE 5: Preparar respuesta final
     console.log('🎯 FASE 5: Preparando respuesta final');
     const respuestaCompleta = {
@@ -138,11 +131,7 @@ router.post('/api/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
       contexto: {
         estadisticas: contextoCompleto.estadisticas,
         fuentes_utilizadas: contextoCompleto.fuentes_utilizadas,
-        sources_used: resultadoFinal.metadata?.sources_used || contextoCompleto.fuentes_utilizadas,
-        aggregated_stats: contextoCompleto.aggregated_stats || {},
-        contexto_adicional: contextoAdicional,
-        data_quality: resultadoFinal.metadata?.data_quality || 'unknown',
-        has_sufficient_data: resultadoFinal.metadata?.has_sufficient_data !== false
+        contexto_adicional: contextoAdicional
       },
       resultado: {
         respuesta: resultadoFinal.respuesta,
@@ -160,17 +149,9 @@ router.post('/api/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
       metadata: {
         procesado_en: new Date().toISOString(),
         version: '2.0',
-        modelo_ia: 'ChatGPT-4o + Perplexity',
-        sources_used: resultadoFinal.metadata?.sources_used || contextoCompleto.fuentes_utilizadas,
-        data_quality: resultadoFinal.metadata?.data_quality || 'unknown',
-        has_warning: !!resultadoFinal.datos_visualizacion?.warning
+        modelo_ia: 'ChatGPT-4o + Perplexity'
       }
     };
-
-    // Adjuntar contexto bruto al payload de salida si está habilitado
-    if (incluirContextoRaw) {
-      respuestaCompleta.contexto.contexto_base = contextoEnriquecido;
-    }
 
     console.log('✅ FASE 5 completada. Respuesta preparada:', {
       success: respuestaCompleta.success,
@@ -186,26 +167,6 @@ router.post('/api/sondeo', verifyUserAccess, checkCredits, async (req, res) => {
     console.log('💳 FASE 6: Registrando uso y debitando créditos...');
     try {
       const { logUsage } = require('../services/logs');
-      
-      // Prepare detailed response metrics for logging
-      req.response_metrics = {
-        tokens_utilizados: resultadoFinal.metadata?.tokens_utilizados || 0,
-        tokens_prompt: resultadoFinal.metadata?.tokens_prompt || 0,
-        tokens_completion: resultadoFinal.metadata?.tokens_completion || 0,
-        fuentes_utilizadas: contextoCompleto.fuentes_utilizadas,
-        sources_used: resultadoFinal.metadata?.sources_used || [],
-        data_quality: resultadoFinal.metadata?.data_quality || 'unknown',
-        has_sufficient_data: resultadoFinal.metadata?.has_sufficient_data !== false,
-        contexto_items: contextoCompleto.estadisticas?.total_items || 0,
-        fuentes_con_datos: contextoCompleto.estadisticas?.fuentes_con_datos || 0,
-        engagement_total: contextoCompleto.estadisticas?.total_engagement || 0,
-        tiene_visualizaciones: !!(resultadoFinal.datos_visualizacion && Object.keys(resultadoFinal.datos_visualizacion).length > 0),
-        tiene_warning: !!resultadoFinal.datos_visualizacion?.warning,
-        modelo_utilizado: resultadoFinal.metadata?.modelo || 'unknown',
-        processing_time_ms: Date.now() - new Date(respuestaCompleta.sondeo.timestamp).getTime()
-      };
-      
-      console.log('📊 LOGGING: Métricas de respuesta preparadas para logs:', req.response_metrics);
       
       // SIEMPRE registrar log de uso (tanto para admin como usuarios normales)
       await logUsage(req.user, req.path, costoCalculado, req);
@@ -385,7 +346,7 @@ router.post('/api/sondeo/costo', verifyUserAccess, async (req, res) => {
     }
 
     // Construir contexto simulado para calcular costo
-    const contextoSimulado = await construirContextoCompleto(contextosFinales, req.user?.id, selectedMonitoreoIds, req.body.configuracion || {});
+    const contextoSimulado = await construirContextoCompleto(contextosFinales, req.user?.id, selectedMonitoreoIds);
     
     const { calculateSondeoCost } = require('../middlewares/credits');
     const costoEstimado = calculateSondeoCost(contextoSimulado);

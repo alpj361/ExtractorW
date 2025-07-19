@@ -2,8 +2,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { createClient } = require('@supabase/supabase-js');
 const supabaseUtil = require('../utils/supabase');
 const { analyzeDocument } = require('./documentAnalysis');
-const { normalizeGeographicInfoWithAI } = require('../utils/geographic-ai-detector');
-const { normalizeGeographicInfo: manualNormalize } = require('../utils/guatemala-geography');
+const { normalizeGeographicInfoSync } = require('./mapsAgent');
 const { normalizeString } = require('../utils/coverageNormalization');
 let supabase = supabaseUtil;
 
@@ -394,10 +393,10 @@ async function ensureDocumentAnalysis(codexItem, userId) {
  * @returns {Promise<Array<Object>>} Registros insertados
  */
 async function createCardsFromCodex({ codexItemId, projectId, userId }) {
-  // 1. Obtener información completa del item
+  // 1. Obtener información completa del item (incluyendo campos de enlaces)
   const { data: codexItem, error: codexError } = await supabase
     .from('codex_items')
-    .select('id, audio_transcription, document_analysis, tipo, titulo, nombre_archivo, storage_path, proyecto, project_id')
+    .select('id, audio_transcription, document_analysis, transcripcion, descripcion, url, tipo, titulo, nombre_archivo, storage_path, proyecto, project_id')
     .eq('id', codexItemId)
     .single();
 
@@ -409,7 +408,7 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
     throw new Error('El codex_item no existe');
   }
 
-  // 2. Determinar qué contenido usar para extracción
+  // 2. Determinar qué contenido usar para extracción (incluyendo enlaces)
   let contentToAnalyze = null;
   let contentType = 'unknown';
 
@@ -417,10 +416,23 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
     contentToAnalyze = codexItem.audio_transcription;
     contentType = 'audio_transcription';
     console.log(`📄 Procesando transcripción de audio para item: ${codexItem.titulo}`);
+  } else if (codexItem.transcripcion && codexItem.transcripcion.trim()) {
+    contentToAnalyze = codexItem.transcripcion;
+    contentType = 'transcripcion';
+    console.log(`📄 Procesando transcripción para item: ${codexItem.titulo}`);
   } else if (codexItem.document_analysis && codexItem.document_analysis.trim()) {
     contentToAnalyze = codexItem.document_analysis;
     contentType = 'document_analysis';
     console.log(`📋 Procesando análisis de documento existente para item: ${codexItem.titulo}`);
+  } else if (codexItem.tipo === 'enlace' && codexItem.descripcion && codexItem.descripcion.trim()) {
+    // 🆕 NUEVO: Procesar enlaces con descripción/análisis básico
+    let linkContent = `ENLACE ANALIZADO: ${codexItem.titulo}\n`;
+    linkContent += `URL: ${codexItem.url || 'No disponible'}\n`;
+    linkContent += `DESCRIPCIÓN/ANÁLISIS: ${codexItem.descripcion}\n`;
+    
+    contentToAnalyze = linkContent;
+    contentType = 'link_basic_analysis';
+    console.log(`🔗 Procesando enlace con análisis básico para item: ${codexItem.titulo}`);
   } else if (codexItem.tipo === 'documento') {
     // 3. Intentar análisis automático de documento si no hay análisis previo
     console.log(`📄 Documento sin análisis detectado, intentando análisis automático...`);
@@ -437,7 +449,7 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
       throw new Error('No se pudo generar análisis automático del documento');
     }
   } else {
-    throw new Error('El codex_item no contiene audio_transcription, document_analysis, ni es un documento analizable');
+    throw new Error('El codex_item no contiene contenido analizable (audio_transcription, transcripcion, document_analysis, descripción de enlace, o documento)');
   }
 
   console.log(`🎯 Tipo de contenido detectado: ${contentType} (${contentToAnalyze.length} caracteres)`);
@@ -538,10 +550,11 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
     // =============================================
 
     async function getOrCreateCoverage({ projectId, city, department, pais }) {
-      // Normalizar valores para evitar variaciones de mayúsculas/minúsculas o espacios
-      city = normalizeString(city);
-      department = normalizeString(department);
-      pais = normalizeString(pais);
+      // Normalizar usando mapsAgent
+      const norm = normalizeGeographicInfoSync({ city, department, pais });
+      city = norm.city;
+      department = norm.department;
+      pais = norm.pais;
       // Prioridad: ciudad > departamento > país
       let coverageRow = null;
       if (city) {
@@ -694,10 +707,11 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
     // AGREGAR COVERAGE_ID TAMBIÉN EN EL FALLBACK
     // =============================================
     async function getOrCreateCoverageFallback({ projectId, city, department, pais }) {
-      // Normalizar valores para evitar variaciones
-      city = normalizeString(city);
-      department = normalizeString(department);
-      pais = normalizeString(pais);
+      // Normalizar usando mapsAgent
+      const norm = normalizeGeographicInfoSync({ city, department, pais });
+      city = norm.city;
+      department = norm.department;
+      pais = norm.pais;
       // Misma lógica que la función principal
       let coverageRow = null;
       if (city) {
@@ -827,7 +841,12 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
 }
 
 /**
- * Procesa todos los codex_items de audio/video con transcripción o documentos que aún no tengan capturado_cards
+ * Procesa todos los codex_items con contenido analizable que aún no tengan capturado_cards
+ * Tipos soportados:
+ * - Audio/Video: Con transcripción en audio_transcription
+ * - Enlaces/Videos: Con transcripción en transcripcion
+ * - Documentos: Con análisis en document_analysis o para análisis automático
+ * - Enlaces básicos: Con descripción/análisis en descripcion
  * @param {string} projectId - ID del proyecto
  * @param {string} userId - ID del usuario (requerido para análisis automático de documentos)
  * @param {string[]} [codexItemIds] - Opcional: Array de IDs de codex_items a procesar. Si no se provee, procesa todos los pendientes.
@@ -837,7 +856,7 @@ async function bulkCreateCardsForProject(projectId, userId, codexItemIds) {
   
   let query = supabase
     .from('codex_items')
-    .select('id, tipo, titulo, audio_transcription, document_analysis, storage_path')
+    .select('id, tipo, titulo, audio_transcription, transcripcion, document_analysis, descripcion, url, storage_path')
     .eq('project_id', projectId);
 
   // Si se especifican IDs, solo procesar esos.
@@ -857,7 +876,7 @@ async function bulkCreateCardsForProject(projectId, userId, codexItemIds) {
       query = query.not('id', 'in', `(${capturedIds.join(',')})`);
     }
 
-    query = query.or('audio_transcription.not.is.null,document_analysis.not.is.null,and(tipo.eq.documento,storage_path.not.is.null)');
+    query = query.or('audio_transcription.not.is.null,transcripcion.not.is.null,document_analysis.not.is.null,and(tipo.eq.enlace,descripcion.not.is.null),and(tipo.eq.documento,storage_path.not.is.null)');
   }
 
   const { data: allItems, error: errorAllItems } = await query;

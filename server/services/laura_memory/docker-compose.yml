@@ -1,0 +1,18 @@
+services:
+  laura-memory:
+    build: .
+    ports:
+      - "5001:5001"
+    environment:
+      - ZEP_API_KEY=${ZEP_API_KEY}
+      - ZEP_URL=${ZEP_URL:-https://api.getzep.com}
+      - LAURA_SESSION_ID=${LAURA_SESSION_ID:-public/global}
+      - FLASK_ENV=production
+    volumes:
+      - ./tests/cassettes:/app/tests/cassettes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

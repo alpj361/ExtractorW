@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   extractorw:
     build: .
@@ -18,6 +16,10 @@ services:
       - transcriptions:/tmp
     networks:
       - extractorw-network
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+      - 1.1.1.1
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s
@@ -38,4 +40,10 @@ volumes:
 
 networks:
   extractorw-network:
-    driver: bridge 
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-extractorw
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16 

@@ -1,0 +1,40 @@
+⚠️ Using placeholder API key - service may not work properly
+⚠️ Configuración no lista para producción
+ * Serving Flask app 'server'
+ * Debug mode: on
+INFO:werkzeug:[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5001
+ * Running on http://192.168.1.19:5001
+INFO:werkzeug:[33mPress CTRL+C to quit[0m
+INFO:werkzeug: * Restarting with stat
+⚠️ Using placeholder API key - service may not work properly
+⚠️ Configuración no lista para producción
+WARNING:werkzeug: * Debugger is active!
+INFO:werkzeug: * Debugger PIN: 384-857-584
+INFO:werkzeug:127.0.0.1 - - [16/Jul/2025 02:23:59] "GET /health HTTP/1.1" 200 -
+WARNING:memory:⚠️ Usando API key de prueba - funcionalidad limitada
+INFO:memory:✅ Cliente Zep inicializado correctamente
+WARNING:memory:⏳ Intento 1 falló, reintentando en 1.0s: MemoryClient.search() got an unexpected keyword argument 'query'
+WARNING:memory:⏳ Intento 2 falló, reintentando en 2.0s: MemoryClient.search() got an unexpected keyword argument 'query'
+WARNING:memory:⏳ Intento 3 falló, reintentando en 4.0s: MemoryClient.search() got an unexpected keyword argument 'query'
+ERROR:memory:❌ Error buscando en memoria: MemoryClient.search() got an unexpected keyword argument 'query'
+INFO:werkzeug:127.0.0.1 - - [16/Jul/2025 02:24:12] "POST /api/laura-memory/search HTTP/1.1" 200 -
+INFO:httpx:HTTP Request: GET https://api.getzep.com/api/v2/sessions/laura_memory_session/memory "HTTP/1.1 401 Unauthorized"
+ERROR:memory:❌ Error obteniendo estadísticas: status_code: 401, body: unauthorized
+
+INFO:werkzeug:127.0.0.1 - - [16/Jul/2025 02:24:17] "GET /api/laura-memory/stats HTTP/1.1" 200 -
+INFO:httpx:HTTP Request: POST https://api.getzep.com/api/v2/sessions/laura_memory_session/memory "HTTP/1.1 401 Unauthorized"
+ERROR:memory:❌ Error guardando en memoria: status_code: 401, body: unauthorized
+
+ERROR:integration:❌ Error guardando usuario en memoria: Error al guardar en memoria pública: status_code: 401, body: unauthorized
+
+INFO:werkzeug:127.0.0.1 - - [16/Jul/2025 02:25:22] "POST /api/laura-memory/save-user-discovery HTTP/1.1" 200 -
+INFO:werkzeug: * Detected change in '/Users/pj/Desktop/Pulse Journal/ExtractorW/server/services/laura_memory/memory.py', reloading
+INFO:werkzeug: * Restarting with stat
+⚠️ Using placeholder API key - service may not work properly
+⚠️ Configuración no lista para producción
+WARNING:werkzeug: * Debugger is active!
+INFO:werkzeug: * Debugger PIN: 384-857-584
+/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/multiprocessing/resource_tracker.py:277: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown: {'/mp-myh4xe8y'}
+  warnings.warn(

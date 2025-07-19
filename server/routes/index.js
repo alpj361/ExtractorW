@@ -11,6 +11,7 @@ const nitterContextRoutes = require('./nitterContext');
 const nitterProfileRoutes = require('./nitterProfile');
 const pendingAnalysisRoutes = require('./pendingAnalysis');
 const aiRoutes = require('./ai');
+const mapsRoutes = require('./maps');
 const path = require('path');
 const capturadosRoutes = require('./capturados');
 const coveragesRoutes = require('./coverages');
@@ -66,6 +67,9 @@ function setupRoutes(app) {
   
   // Configurar rutas híbridas de coberturas geográficas con IA
   app.use('/api/hybrid-coverages', hybridCoveragesRoutes);
+  
+  // Configurar rutas del agente Maps (experto en geografía guatemalteca)
+  app.use('/api/maps', mapsRoutes);
   
   // Configurar rutas del MCP Server
   app.use('/api/mcp', mcpRoutes);

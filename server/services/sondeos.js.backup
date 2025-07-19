@@ -10,17 +10,10 @@ const { getUserScrapes } = require('./recentScrapes');
 /**
  * Obtiene contexto de tendencias desde la tabla trends
  */
-async function obtenerContextoTendencias(limite = 10, selectedItems = null) {
+async function obtenerContextoTendencias(limite = 10) {
   try {
-    console.log(`📊 Obteniendo contexto de tendencias (límite: ${limite}, items seleccionados: ${selectedItems ? selectedItems.length : 0})`);
+    console.log(`📊 Obteniendo contexto de tendencias (límite: ${limite})`);
     
-    // If specific items are selected, process them differently
-    if (selectedItems && selectedItems.length > 0) {
-      console.log('📋 Procesando items específicos seleccionados:', selectedItems);
-      return await cargarContextoEspecifico(selectedItems);
-    }
-    
-    // Default behavior: get recent trends
     const { data: trends, error } = await supabase
       .from('trends')
       .select('*')
@@ -154,77 +147,14 @@ async function obtenerContextoTweetsTrending(limite = 20) {
 /**
  * Obtiene contexto de noticias desde la tabla news
  */
-async function obtenerContextoNoticias(limite = 15, selectedItems = null) {
+async function obtenerContextoNoticias(limite = 15) {
   try {
-    console.log(`📰 Obteniendo contexto de noticias (límite: ${limite}, items seleccionados: ${selectedItems?.length || 0})`);
-    
-    // If specific items are selected, load them specifically
-    if (selectedItems && selectedItems.length > 0) {
-      console.log('📋 Cargando noticias específicas seleccionadas:', selectedItems);
-      // Si los elementos no son strings/UUIDs, asumir que son objetos noticia completos provenientes del frontend o strings JSON
-      // A veces el frontend envía los objetos de noticia como cadenas "{...}" en vez de objetos reales.
-      // Intentar detectar y parsear ese caso primero.
-      let itemsAreObjects = typeof selectedItems[0] === 'object';
-      if (!itemsAreObjects && typeof selectedItems[0] === 'string') {
-        try {
-          const maybeObj = JSON.parse(selectedItems[0]);
-          if (typeof maybeObj === 'object') {
-            // Parsear todos los elementos
-            selectedItems = selectedItems.map(s => {
-              if (typeof s === 'string') {
-                try { return JSON.parse(s); } catch { return s; }
-              }
-              return s;
-            });
-            itemsAreObjects = true;
-          }
-        } catch {
-          // No es JSON, continuar
-        }
-      }
-
-      if (itemsAreObjects) {
-        console.log('📰 Los elementos recibidos ya son objetos de noticia completos. Se usarán directamente.');
-        // Normalizar estructura mínima esperada por el resto del sistema
-        const normalizadas = selectedItems.map((n, idx) => ({
-          id: n.id || `frontend_${idx}`,
-          title: n.titulo || n.title || 'Sin título',
-          titulo: n.titulo || n.title || 'Sin título',
-          description: n.resumen || n.contenido || '',
-          resumen: n.resumen || n.contenido || '',
-          content: n.contenido || n.resumen || '',
-          url: n.url || '',
-          source: n.fuente || n.source || 'Desconocida',
-          fuente: n.fuente || n.source || 'Desconocida',
-          published_at: n.fecha || null,
-          fecha: n.fecha || null,
-          category: n.categoria || 'General',
-          categoria: n.categoria || 'General',
-          raw_data: n,
-          type: 'news',
-          source_table: 'frontend',
-          created_at: n.fecha || new Date().toISOString()
-        }));
-        return normalizadas;
-      }
-      // Caso normal: recibir array de IDs válidos UUID
-      return await cargarNoticiasEspecificas(selectedItems);
-    }
+    console.log(`📰 Obteniendo contexto de noticias (límite: ${limite})`);
     
     const { data: news, error } = await supabase
       .from('news')
-      .select(`
-        id,
-        titulo,
-        resumen,
-        fuente,
-        url,
-        fecha,
-        categoria,
-        raw,
-        created_at
-      `)
-      .order('created_at', { ascending: false })
+      .select('*')
+      .order('published_at', { ascending: false })
       .limit(limite);
 
     if (error) {
@@ -240,22 +170,15 @@ async function obtenerContextoNoticias(limite = 15, selectedItems = null) {
     // Formatear noticias para contexto
     const contextoNoticias = news.map(noticia => ({
       id: noticia.id,
-      title: noticia.titulo,
-      titulo: noticia.titulo,
-      description: noticia.resumen,
-      resumen: noticia.resumen,
-      content: noticia.resumen, // Using resumen as content
+      title: noticia.title,
+      description: noticia.description,
+      content: noticia.content,
       url: noticia.url,
-      source: noticia.fuente,
-      fuente: noticia.fuente,
-      published_at: noticia.fecha,
-      fecha: noticia.fecha,
-      category: noticia.categoria || 'General',
-      categoria: noticia.categoria || 'General',
-      raw_data: noticia.raw,
-      type: 'news',
-      source_table: 'news',
-      created_at: noticia.created_at
+      source: noticia.source,
+      published_at: noticia.published_at,
+      category: noticia.category || 'General',
+      keywords: noticia.keywords || [],
+      sentiment: noticia.sentiment_score
     }));
 
     console.log(`✅ Contexto de noticias obtenido: ${contextoNoticias.length} noticias`);
@@ -268,37 +191,15 @@ async function obtenerContextoNoticias(limite = 15, selectedItems = null) {
 }
 
 /**
- * Obtiene contexto de documentos desde la tabla codex_items
+ * Obtiene contexto de documentos desde la tabla codex
  */
-async function obtenerContextoCodex(limite = 10, selectedItems = null) {
+async function obtenerContextoCodex(limite = 10) {
   try {
-    console.log(`📚 Obteniendo contexto de codex (límite: ${limite}, items seleccionados: ${selectedItems?.length || 0})`);
-    
-    // If specific items are selected, load them specifically
-    if (selectedItems && selectedItems.length > 0) {
-      console.log('📋 Cargando documentos específicos seleccionados:', selectedItems);
-      return await cargarCodexEspecificos(selectedItems);
-    }
+    console.log(`📚 Obteniendo contexto de codex (límite: ${limite})`);
     
     const { data: codex, error } = await supabase
-      .from('codex_items')
-      .select(`
-        id,
-        titulo,
-        descripcion,
-        etiquetas,
-        proyecto,
-        storage_path,
-        url,
-        nombre_archivo,
-        tamano,
-        fecha,
-        tipo,
-        audio_transcription,
-        document_analysis,
-        transcripcion,
-        created_at
-      `)
+      .from('codex')
+      .select('*')
       .order('created_at', { ascending: false })
       .limit(limite);
 
@@ -315,32 +216,14 @@ async function obtenerContextoCodex(limite = 10, selectedItems = null) {
     // Formatear documentos para contexto
     const contextoCodex = codex.map(doc => ({
       id: doc.id,
-      title: doc.titulo,
-      titulo: doc.titulo,
-      content: doc.audio_transcription || doc.document_analysis || doc.transcripcion || doc.descripcion,
-      description: doc.descripcion,
-      descripcion: doc.descripcion,
-      transcription: doc.audio_transcription || doc.transcripcion,
-      analysis: doc.document_analysis,
-      audio_transcription: doc.audio_transcription,
-      document_analysis: doc.document_analysis,
-      transcripcion: doc.transcripcion,
-      summary: doc.descripcion,
-      category: doc.tipo || 'General',
-      tipo: doc.tipo,
-      tags: doc.etiquetas || [],
-      etiquetas: doc.etiquetas || [],
-      project: doc.proyecto,
-      proyecto: doc.proyecto,
-      file_name: doc.nombre_archivo,
-      file_size: doc.tamano,
-      file_path: doc.storage_path,
-      url: doc.url,
-      date: doc.fecha,
-      fecha: doc.fecha,
+      title: doc.title,
+      content: doc.content,
+      summary: doc.summary,
+      category: doc.category || 'General',
+      tags: doc.tags || [],
       created_at: doc.created_at,
-      type: 'codex_item',
-      source_table: 'codex_items'
+      updated_at: doc.updated_at,
+      metadata: doc.metadata || {}
     }));
 
     console.log(`✅ Contexto de codex obtenido: ${contextoCodex.length} documentos`);
@@ -469,423 +352,24 @@ async function obtenerContextoMonitoreos(userId, limite = 15, selectedMonitoreoI
 }
 
 /**
- * Carga contexto específico basado en items seleccionados (tweets, trends, etc.)
- */
-async function cargarContextoEspecifico(selectedItems) {
-  try {
-    console.log('🔍 Cargando contexto específico para items:', selectedItems);
-    
-    // Separar items por tipo
-    const tweetIds = [];
-    const trendNames = [];
-    
-    selectedItems.forEach(item => {
-      if (typeof item === 'string') {
-        if (item.startsWith('tweet_')) {
-          // Extract numeric ID from "tweet_7061" format
-          const numericId = item.replace('tweet_', '');
-          tweetIds.push(numericId);
-        } else {
-          // Treat as trend name
-          trendNames.push(item);
-        }
-      }
-    });
-    
-    console.log('📊 IDs de tweets a cargar:', tweetIds);
-    console.log('📊 Nombres de tendencias a cargar:', trendNames);
-    
-    const resultados = [];
-    
-    // Cargar tweets específicos por ID
-    if (tweetIds.length > 0) {
-      const tweetsData = await cargarTweetsPorIds(tweetIds);
-      resultados.push(...tweetsData);
-    }
-    
-    // Cargar tendencias específicas por nombre
-    if (trendNames.length > 0) {
-      const trendsData = await cargarTendenciasPorNombres(trendNames);
-      resultados.push(...trendsData);
-    }
-    
-    console.log(`✅ Contexto específico cargado: ${resultados.length} items`);
-    return resultados;
-    
-  } catch (error) {
-    console.error('❌ Error cargando contexto específico:', error);
-    return [];
-  }
-}
-
-/**
- * Carga noticias específicas por sus IDs
- */
-async function cargarNoticiasEspecificas(noticiasIds) {
-  try {
-    console.log('📰 Cargando noticias específicas por IDs:', noticiasIds);
-    
-    // Sanear IDs: aceptar tanto UUID plano como formato "noticia_<uuid>"
-    const sanitizedIds = (noticiasIds || []).map(id => {
-      if (typeof id === 'string' && id.startsWith('noticia_')) {
-        return id.replace(/^noticia_/, '');
-      }
-      return id;
-    });
-    
-    console.log('📰 Cargando noticias específicas por IDs (sanitized):', sanitizedIds);
-    
-    const { data: noticias, error } = await supabase
-      .from('news')
-      .select(`
-        id,
-        titulo,
-        resumen,
-        fuente,
-        url,
-        fecha,
-        categoria,
-        raw,
-        created_at
-      `)
-      .in('id', sanitizedIds);
-    
-    if (error) {
-      console.error('❌ Error cargando noticias específicas:', error);
-      return [];
-    }
-    
-    if (!noticias || noticias.length === 0) {
-      console.log('⚠️ No se encontraron noticias con esos IDs');
-      return [];
-    }
-    
-    // Format noticias for context
-    const formattedNoticias = noticias.map(noticia => ({
-      id: noticia.id,
-      title: noticia.titulo,
-      titulo: noticia.titulo,
-      description: noticia.resumen,
-      resumen: noticia.resumen,
-      content: noticia.resumen,
-      url: noticia.url,
-      source: noticia.fuente,
-      fuente: noticia.fuente,
-      published_at: noticia.fecha,
-      fecha: noticia.fecha,
-      category: noticia.categoria || 'General',
-      categoria: noticia.categoria || 'General',
-      raw_data: noticia.raw,
-      type: 'news',
-      source_table: 'news',
-      created_at: noticia.created_at
-    }));
-    
-    console.log(`✅ ${formattedNoticias.length} noticias específicas cargadas`);
-    return formattedNoticias;
-    
-  } catch (error) {
-    console.error('❌ Error en cargarNoticiasEspecificas:', error);
-    return [];
-  }
-}
-
-/**
- * Carga documentos específicos del codex por sus IDs
- */
-async function cargarCodexEspecificos(codexIds) {
-  try {
-    console.log('📚 Cargando documentos específicos del codex por IDs:', codexIds);
-    
-    const { data: documentos, error } = await supabase
-      .from('codex_items')
-      .select(`
-        id,
-        titulo,
-        descripcion,
-        etiquetas,
-        proyecto,
-        storage_path,
-        url,
-        nombre_archivo,
-        tamano,
-        fecha,
-        tipo,
-        audio_transcription,
-        document_analysis,
-        transcripcion,
-        created_at
-      `)
-      .in('id', codexIds);
-    
-    if (error) {
-      console.error('❌ Error cargando documentos específicos del codex:', error);
-      return [];
-    }
-    
-    if (!documentos || documentos.length === 0) {
-      console.log('⚠️ No se encontraron documentos con esos IDs');
-      return [];
-    }
-    
-    // Format documentos for context
-    const formattedDocumentos = documentos.map(doc => ({
-      id: doc.id,
-      title: doc.titulo,
-      titulo: doc.titulo,
-      content: doc.audio_transcription || doc.document_analysis || doc.transcripcion || doc.descripcion,
-      description: doc.descripcion,
-      descripcion: doc.descripcion,
-      transcription: doc.audio_transcription || doc.transcripcion,
-      analysis: doc.document_analysis,
-      audio_transcription: doc.audio_transcription,
-      document_analysis: doc.document_analysis,
-      transcripcion: doc.transcripcion,
-      summary: doc.descripcion,
-      category: doc.tipo || 'General',
-      tipo: doc.tipo,
-      tags: doc.etiquetas || [],
-      etiquetas: doc.etiquetas || [],
-      project: doc.proyecto,
-      proyecto: doc.proyecto,
-      file_name: doc.nombre_archivo,
-      file_size: doc.tamano,
-      file_path: doc.storage_path,
-      url: doc.url,
-      date: doc.fecha,
-      fecha: doc.fecha,
-      created_at: doc.created_at,
-      type: 'codex_item',
-      source_table: 'codex_items'
-    }));
-    
-    console.log(`✅ ${formattedDocumentos.length} documentos específicos del codex cargados`);
-    return formattedDocumentos;
-    
-  } catch (error) {
-    console.error('❌ Error en cargarCodexEspecificos:', error);
-    return [];
-  }
-}
-
-/**
- * Carga tweets específicos desde recent_scrapes por sus IDs
- */
-async function cargarTweetsPorIds(tweetIds) {
-  try {
-    console.log('🐦 Cargando tweets por IDs:', tweetIds);
-    
-    // Convert string IDs to integers for trending_tweets table
-    const numericIds = tweetIds.map(id => parseInt(id, 10)).filter(id => !isNaN(id));
-    
-    if (numericIds.length === 0) {
-      console.log('⚠️ No se encontraron IDs numéricos válidos');
-      return [];
-    }
-    
-    console.log('📊 IDs numéricos a buscar:', numericIds);
-    
-    const { data: tweets, error } = await supabase
-      .from('trending_tweets')
-      .select(`
-        id,
-        tweet_id,
-        usuario,
-        fecha_tweet,
-        texto,
-        enlace,
-        likes,
-        retweets,
-        replies,
-        verified,
-        sentimiento,
-        score_sentimiento,
-        categoria,
-        trend_original,
-        created_at,
-        intencion_comunicativa,
-        entidades_mencionadas,
-        propagacion_viral
-      `)
-      .in('id', numericIds);
-    
-    if (error) {
-      console.error('❌ Error cargando tweets por IDs:', error);
-      return [];
-    }
-    
-    if (!tweets || tweets.length === 0) {
-      console.log('⚠️ No se encontraron tweets con esos IDs en trending_tweets');
-      return [];
-    }
-    
-    // Format tweets for context
-    const formattedTweets = tweets.map(tweet => ({
-      id: tweet.id,
-      tweet_id: tweet.tweet_id,
-      title: tweet.texto, // Use tweet content as title
-      content: tweet.texto,
-      texto: tweet.texto, // Keep original field name for compatibility
-      author: tweet.usuario,
-      usuario: tweet.usuario, // Keep original field name
-      timestamp: tweet.fecha_tweet || tweet.created_at,
-      fecha: tweet.fecha_tweet || tweet.created_at,
-      url: tweet.enlace,
-      enlace: tweet.enlace,
-      metrics: {
-        likes: tweet.likes || 0,
-        retweets: tweet.retweets || 0,
-        replies: tweet.replies || 0
-      },
-      likes: tweet.likes || 0,
-      retweets: tweet.retweets || 0,
-      replies: tweet.replies || 0,
-      sentiment: tweet.sentimiento,
-      sentimiento: tweet.sentimiento,
-      sentiment_score: tweet.score_sentimiento,
-      score_sentimiento: tweet.score_sentimiento,
-      category: tweet.categoria,
-      categoria: tweet.categoria,
-      trend: tweet.trend_original,
-      trend_context: tweet.trend_original,
-      trend_original: tweet.trend_original,
-      intent: tweet.intencion_comunicativa,
-      intencion_comunicativa: tweet.intencion_comunicativa,
-      entities: tweet.entidades_mencionadas,
-      entidades_mencionadas: tweet.entidades_mencionadas,
-      propagation: tweet.propagacion_viral,
-      propagacion_viral: tweet.propagacion_viral,
-      verified: tweet.verified,
-      type: 'trending_tweet',
-      source: 'trending_tweets',
-      created_at: tweet.created_at
-    }));
-    
-    console.log(`✅ ${formattedTweets.length} tweets trending cargados por ID`);
-    return formattedTweets;
-    
-  } catch (error) {
-    console.error('❌ Error en cargarTweetsPorIds:', error);
-    return [];
-  }
-}
-
-/**
- * Carga tendencias específicas por nombres
- */
-async function cargarTendenciasPorNombres(trendNames) {
-  try {
-    console.log('📈 Cargando tendencias por nombres:', trendNames);
-    
-    const { data: trends, error } = await supabase
-      .from('trends')
-      .select('*')
-      .order('timestamp', { ascending: false })
-      .limit(50); // Get more recent trends to search within
-    
-    if (error) {
-      console.error('❌ Error cargando tendencias:', error);
-      return [];
-    }
-    
-    if (!trends || trends.length === 0) {
-      console.log('⚠️ No se encontraron tendencias');
-      return [];
-    }
-    
-    const matchedTrends = [];
-    
-    trends.forEach(trend => {
-      try {
-        let trendData = {};
-        
-        if (trend.raw_data) {
-          const rawData = typeof trend.raw_data === 'string' 
-            ? JSON.parse(trend.raw_data) 
-            : trend.raw_data;
-          
-          if (rawData.twitter_trends) {
-            trendData = rawData.twitter_trends;
-          } else if (Array.isArray(rawData)) {
-            trendData = { trends: rawData };
-          } else {
-            trendData = rawData;
-          }
-        }
-        
-        // Check if any of the selected trend names match
-        const trendList = trendData.trends || [];
-        const matchingTrends = trendList.filter(t => 
-          trendNames.some(name => 
-            name.toLowerCase().includes(t.trend?.toLowerCase() || t.name?.toLowerCase() || '') ||
-            (t.trend?.toLowerCase() || t.name?.toLowerCase() || '').includes(name.toLowerCase())
-          )
-        );
-        
-        if (matchingTrends.length > 0) {
-          matchingTrends.forEach(matchedTrend => {
-            matchedTrends.push({
-              trend_name: matchedTrend.trend || matchedTrend.name,
-              volume: matchedTrend.volume || matchedTrend.tweet_volume,
-              timestamp: trend.timestamp,
-              about: trend.about,
-              category: trend.category_data,
-              keywords: trend.top_keywords,
-              type: 'trend',
-              source: 'trends'
-            });
-          });
-        }
-      } catch (parseError) {
-        console.error('❌ Error procesando trend:', parseError);
-      }
-    });
-    
-    console.log(`✅ ${matchedTrends.length} tendencias encontradas por nombre`);
-    return matchedTrends;
-    
-  } catch (error) {
-    console.error('❌ Error en cargarTendenciasPorNombres:', error);
-    return [];
-  }
-}
-
-/**
  * Construye el contexto completo basado en las fuentes seleccionadas
  */
-async function construirContextoCompleto(selectedContexts, userId = null, selectedMonitoreoIds = [], configuracion = {}) {
+async function construirContextoCompleto(selectedContexts, userId = null, selectedMonitoreoIds = []) {
   try {
     console.log('🔨 Construyendo contexto completo:', selectedContexts);
-    console.log('📊 LOGGING: Iniciando construcción de contexto con parámetros:', {
-      selectedContexts,
-      userId: userId || 'no proporcionado',
-      selectedMonitoreoIds: selectedMonitoreoIds.length > 0 ? selectedMonitoreoIds : 'ninguno'
-    });
     
     const contexto = {
       fuentes_utilizadas: selectedContexts,
       timestamp: new Date().toISOString(),
-      data: {},
-      aggregated_stats: {
-        total_sentiment_positive: 0,
-        total_sentiment_neutral: 0,
-        total_sentiment_negative: 0,
-        total_engagement: 0,
-        date_range: { start: null, end: null },
-        categories: {},
-        keywords: {},
-        sources: []
-      }
+      data: {}
     };
 
-    // Obtain data from each selected source
+    // Obtener datos de cada fuente seleccionada
     const promises = [];
 
     if (selectedContexts.includes('tendencias')) {
-      // Check if specific items are selected from the modal
-      const selectedItems = configuracion?.contexto_original?.tendencias;
       promises.push(
-        obtenerContextoTendencias(10, selectedItems).then(data => ({ tipo: 'tendencias', data }))
+        obtenerContextoTendencias(10).then(data => ({ tipo: 'tendencias', data }))
       );
     }
 
@@ -896,16 +380,14 @@ async function construirContextoCompleto(selectedContexts, userId = null, select
     }
 
     if (selectedContexts.includes('noticias')) {
-      const selectedNoticias = configuracion?.contexto_original?.noticias;
       promises.push(
-        obtenerContextoNoticias(15, selectedNoticias).then(data => ({ tipo: 'noticias', data }))
+        obtenerContextoNoticias(15).then(data => ({ tipo: 'noticias', data }))
       );
     }
 
     if (selectedContexts.includes('codex')) {
-      const selectedCodex = configuracion?.contexto_original?.codex;
       promises.push(
-        obtenerContextoCodex(10, selectedCodex).then(data => ({ tipo: 'codex', data }))
+        obtenerContextoCodex(10).then(data => ({ tipo: 'codex', data }))
       );
     }
 
@@ -919,148 +401,24 @@ async function construirContextoCompleto(selectedContexts, userId = null, select
       }
     }
 
-    // Execute all queries in parallel
+    // Ejecutar todas las consultas en paralelo
     const resultados = await Promise.all(promises);
 
-    // Organize results by type and aggregate statistics
+    // Organizar resultados por tipo
     resultados.forEach(resultado => {
       contexto.data[resultado.tipo] = resultado.data;
-      
-      // Aggregate statistics for better insights
-      if (Array.isArray(resultado.data)) {
-        resultado.data.forEach(item => {
-          // Aggregate sentiment data
-          if (item.sentiment || item.sentimiento) {
-            const sentiment = item.sentiment || item.sentimiento;
-            if (typeof sentiment === 'string') {
-              if (sentiment === 'positive' || sentiment === 'positivo') {
-                contexto.aggregated_stats.total_sentiment_positive++;
-              } else if (sentiment === 'negative' || sentiment === 'negativo') {
-                contexto.aggregated_stats.total_sentiment_negative++;
-              } else {
-                contexto.aggregated_stats.total_sentiment_neutral++;
-              }
-            }
-          }
-          
-          // Aggregate engagement data
-          if (item.total_engagement || item.engagement || item.metrics?.engagement) {
-            const engagement = item.total_engagement || item.engagement || item.metrics?.engagement || 0;
-            contexto.aggregated_stats.total_engagement += engagement;
-          }
-          
-          // Track date range
-          const itemDate = item.created_at || item.published_at || item.timestamp || item.fecha;
-          if (itemDate) {
-            const date = new Date(itemDate).toISOString().split('T')[0];
-            if (!contexto.aggregated_stats.date_range.start || date < contexto.aggregated_stats.date_range.start) {
-              contexto.aggregated_stats.date_range.start = date;
-            }
-            if (!contexto.aggregated_stats.date_range.end || date > contexto.aggregated_stats.date_range.end) {
-              contexto.aggregated_stats.date_range.end = date;
-            }
-          }
-          
-          // Aggregate categories
-          const category = item.category || item.categoria || 'general';
-          contexto.aggregated_stats.categories[category] = (contexto.aggregated_stats.categories[category] || 0) + 1;
-          
-          // Aggregate keywords with proper handling of different types
-          if (item.keywords) {
-            let keywordArray = [];
-            
-            if (Array.isArray(item.keywords)) {
-              keywordArray = item.keywords;
-            } else if (typeof item.keywords === 'string') {
-              keywordArray = [item.keywords];
-            } else if (typeof item.keywords === 'object' && item.keywords !== null) {
-              // Handle keyword objects
-              keywordArray = Object.values(item.keywords).filter(k => typeof k === 'string');
-            }
-            
-            keywordArray.forEach(keyword => {
-              if (typeof keyword === 'string' && keyword.trim().length > 0) {
-                const cleanKeyword = keyword.trim();
-                contexto.aggregated_stats.keywords[cleanKeyword] = (contexto.aggregated_stats.keywords[cleanKeyword] || 0) + 1;
-              } else if (typeof keyword === 'object' && keyword !== null) {
-                // Extract string value from keyword object
-                const keywordStr = keyword.name || keyword.keyword || keyword.term || keyword.value || String(keyword);
-                if (keywordStr && keywordStr.length > 0) {
-                  contexto.aggregated_stats.keywords[keywordStr] = (contexto.aggregated_stats.keywords[keywordStr] || 0) + 1;
-                }
-              }
-            });
-          }
-          
-          // Track sources
-          const source = item.source || item.fuente || resultado.tipo;
-          if (!contexto.aggregated_stats.sources.includes(source)) {
-            contexto.aggregated_stats.sources.push(source);
-          }
-        });
-      }
     });
 
-    // Calculate context statistics
+    // Calcular estadísticas del contexto
     contexto.estadisticas = {
       total_fuentes: selectedContexts.length,
       total_items: Object.values(contexto.data).reduce((acc, items) => acc + (Array.isArray(items) ? items.length : 0), 0),
       fuentes_con_datos: Object.keys(contexto.data).filter(key => 
         Array.isArray(contexto.data[key]) && contexto.data[key].length > 0
-      ).length,
-      sentiment_distribution: {
-        positive: contexto.aggregated_stats.total_sentiment_positive,
-        neutral: contexto.aggregated_stats.total_sentiment_neutral,
-        negative: contexto.aggregated_stats.total_sentiment_negative
-      },
-      total_engagement: contexto.aggregated_stats.total_engagement,
-      date_range: contexto.aggregated_stats.date_range,
-      top_categories: Object.entries(contexto.aggregated_stats.categories)
-        .sort(([,a], [,b]) => b - a)
-        .slice(0, 5)
-        .map(([cat, count]) => ({ category: cat, count })),
-      top_keywords: Object.entries(contexto.aggregated_stats.keywords)
-        .sort(([,a], [,b]) => b - a)
-        .slice(0, 10)
-        .map(([keyword, count]) => ({ keyword, count }))
+      ).length
     };
-    
-    // Detailed logging of context construction results
-    console.log('📊 LOGGING: Contexto construido - Estadísticas detalladas:', {
-      total_fuentes: contexto.estadisticas.total_fuentes,
-      total_items: contexto.estadisticas.total_items,
-      fuentes_con_datos: contexto.estadisticas.fuentes_con_datos,
-      sentiment_totals: contexto.estadisticas.sentiment_distribution,
-      engagement_total: contexto.estadisticas.total_engagement,
-      date_range: contexto.estadisticas.date_range,
-      top_3_categories: contexto.estadisticas.top_categories.slice(0, 3),
-      top_5_keywords: contexto.estadisticas.top_keywords.slice(0, 5)
-    });
-    
-    // Log data by source type
-    Object.entries(contexto.data).forEach(([sourceType, sourceData]) => {
-      if (Array.isArray(sourceData)) {
-        console.log(`📊 LOGGING: Fuente "${sourceType}": ${sourceData.length} elementos`);
-        if (sourceData.length > 0) {
-          const sample = sourceData[0];
-          console.log(`📊 LOGGING: Muestra de "${sourceType}":`, {
-            id: sample.id || 'no disponible',
-            title: sample.title || sample.titulo || sample.name || sample.trend || 'no disponible',
-            category: sample.category || sample.categoria || 'no disponible',
-            created_at: sample.created_at || sample.timestamp || sample.fecha || 'no disponible'
-          });
-        }
-      }
-    });
 
     console.log(`✅ Contexto completo construido:`, contexto.estadisticas);
-    console.log('📊 LOGGING: Tamaño final del contexto:', {
-      data_size_bytes: JSON.stringify(contexto.data).length,
-      aggregated_stats_keys: Object.keys(contexto.aggregated_stats),
-      sources_with_data: Object.keys(contexto.data).filter(key => 
-        Array.isArray(contexto.data[key]) && contexto.data[key].length > 0
-      )
-    });
     return contexto;
 
   } catch (error) {
@@ -1110,54 +468,33 @@ async function obtenerContextoAdicionalPerplexity(pregunta, contextoBase) {
       if (tendenciasNombres.length > 0) {
         // Buscar tweets en la tabla trending_tweets usando palabras clave de las tendencias
         try {
-          // Sanitize search terms to prevent SQL injection and syntax errors
-          const sanitizedTerms = tendenciasNombres.map(tendencia => 
-            tendencia.replace(/[%_'"\\]/g, '').trim()
-          ).filter(term => term.length > 2); // Only use terms longer than 2 characters
-          
-          if (sanitizedTerms.length === 0) {
-            console.log('📭 No hay términos válidos para búsqueda de tweets');
-            contextoTweets = '';
-          } else {
-            // Build individual OR conditions for each sanitized term
-            const orConditions = [];
-            sanitizedTerms.forEach(term => {
-              orConditions.push(`texto.ilike.*${term}*`);
-              orConditions.push(`usuario.ilike.*${term}*`);
-              if (term.length > 5) { // Only search trend_clean for longer terms
-                orConditions.push(`trend_clean.ilike.*${term}*`);
-              }
+          const { data: tweets, error } = await supabase
+            .from('trending_tweets')
+            .select('texto, usuario, likes, retweets, replies, verified, fecha_tweet, sentimiento')
+            .or(tendenciasNombres.map(tendencia => 
+              `texto.ilike.%${tendencia}%,usuario.ilike.%${tendencia}%,trend_clean.ilike.%${tendencia}%`
+            ).join(','))
+            .order('fecha_captura', { ascending: false })
+            .limit(10);
+
+          if (error) {
+            console.error('❌ Error buscando tweets:', error);
+          } else if (tweets && tweets.length > 0) {
+            // Formatear tweets encontrados
+            const tweetsFormateados = tweets.map(tweet => {
+              const engagement = (tweet.likes || 0) + (tweet.retweets || 0) + (tweet.replies || 0);
+              const verificado = tweet.verified ? ' ✓' : '';
+              return `@${tweet.usuario}${verificado}: ${tweet.texto} (${engagement} interacciones)`;
             });
             
-            const { data: tweets, error } = await supabase
-              .from('trending_tweets')
-              .select('texto, usuario, likes, retweets, replies, verified, fecha_tweet, sentimiento')
-              .or(orConditions.join(','))
-              .order('fecha_captura', { ascending: false })
-              .limit(10);
-
-            if (error) {
-              console.error('❌ Error buscando tweets:', error);
-              console.log('📭 Usando búsqueda alternativa debido a error SQL');
-              contextoTweets = '';
-            } else if (tweets && tweets.length > 0) {
-              // Formatear tweets encontrados
-              const tweetsFormateados = tweets.map(tweet => {
-                const engagement = (tweet.likes || 0) + (tweet.retweets || 0) + (tweet.replies || 0);
-                const verificado = tweet.verified ? ' ✓' : '';
-                return `@${tweet.usuario}${verificado}: ${tweet.texto} (${engagement} interacciones)`;
-              });
-              
-              contextoTweets = tweetsFormateados.join('\n\n');
-              console.log(`✅ Encontrados ${tweets.length} tweets relevantes para las tendencias`);
-            } else {
-              console.log(`📭 No se encontraron tweets para las tendencias actuales`);
-            }
+            contextoTweets = tweetsFormateados.join('\n\n');
+            console.log(`✅ Encontrados ${tweets.length} tweets relevantes para las tendencias`);
+          } else {
+            console.log(`📭 No se encontraron tweets para las tendencias actuales`);
           }
         } catch (tweetError) {
           console.error('❌ Error en búsqueda de tweets:', tweetError);
-          console.log('📭 Fallback: continuando sin tweets adicionales');
-          contextoTweets = '';
+          console.log(`📭 No se encontraron tweets para las tendencias actuales`);
         }
       } else {
         console.log(`📭 No se encontraron nombres de tendencias válidos`);
@@ -1253,14 +590,6 @@ function extraerKeywords(pregunta) {
 async function procesarSondeoConChatGPT(pregunta, contexto, configuracion = {}) {
   try {
     console.log('🤖 Procesando sondeo con ChatGPT 4o');
-    console.log('📊 LOGGING: Iniciando procesamiento con ChatGPT:', {
-      pregunta_length: pregunta.length,
-      contexto_keys: Object.keys(contexto),
-      fuentes_utilizadas: contexto.fuentes_utilizadas || [],
-      tiene_contexto_adicional: !!contexto.contexto_adicional,
-      configuracion_keys: Object.keys(configuracion),
-      costo_calculado: configuracion.costo_calculado || 'no disponible'
-    });
     
     // Verificar que la API key esté configurada
     if (!process.env.OPENAI_API_KEY) {
@@ -1270,17 +599,8 @@ async function procesarSondeoConChatGPT(pregunta, contexto, configuracion = {}) 
     // Construir prompt para ChatGPT
     const prompt = construirPromptSondeo(pregunta, contexto, configuracion);
     
-    console.log('📊 LOGGING: Prompt construido para ChatGPT:', {
-      prompt_length: prompt.length,
-      prompt_preview: prompt.substring(0, 200) + '...',
-      contexto_web_incluido: prompt.includes('CONTEXTO WEB'),
-      contexto_tweets_incluido: prompt.includes('CONVERSACIÓN SOCIAL'),
-      estadisticas_incluidas: prompt.includes('ESTADÍSTICAS')
-    });
-    
     // Determinar el tipo de contexto principal
     const tipoContextoPrincipal = contexto.fuentes_utilizadas[0] || 'tendencias';
-    console.log('📊 LOGGING: Tipo de contexto principal determinado:', tipoContextoPrincipal);
     
     // Preparar payload para OpenAI (optimizado para límites de tokens)
     const payload = {
@@ -1432,26 +752,13 @@ IMPORTANTE: Los campos 'evolucion_sentimiento' y 'cronologia_eventos' DEBEN basa
             // Si no se pudieron extraer datos, generar datos basados en contexto real
         if (!datosVisualizacion) {
           console.log('⚠️ No se encontraron datos estructurados en la respuesta, generando datos basados en contexto real');
-          datosVisualizacion = fusionarDatosConContextoReal(pregunta, tipoContextoPrincipal, contexto);
+          datosVisualizacion = generarDatosVisualizacionDesdeContexto(pregunta, tipoContextoPrincipal, contexto);
         } else {
           // Si se extrajeron datos, enriquecerlos con información del contexto real
           console.log('✅ Datos extraídos de ChatGPT, enriqueciendo con contexto real');
           datosVisualizacion = enriquecerDatosConContexto(datosVisualizacion, contexto);
         }
 
-    // Integrate Perplexity data into visualizations if available
-    if (datosVisualizacion && contexto.contexto_adicional) {
-      console.log('📊 LOGGING: Integrando datos de Perplexity en visualizaciones');
-      const datosAntesIntegracion = Object.keys(datosVisualizacion);
-      datosVisualizacion = integrarDatosPerplexityEnVisualizaciones(datosVisualizacion, contexto.contexto_adicional);
-      console.log('📊 LOGGING: Integración Perplexity completada:', {
-        keys_antes: datosAntesIntegracion,
-        keys_despues: Object.keys(datosVisualizacion),
-        sources_used_final: datosVisualizacion.sources_used || [],
-        metodologia_enriquecida: datosVisualizacion.metodologia ? datosVisualizacion.metodologia.includes('Enriquecido') : false
-      });
-    }
-    
     // Construir respuesta estructurada
     const respuestaEstructurada = {
       respuesta: respuestaIA,
@@ -1462,11 +769,8 @@ IMPORTANTE: Los campos 'evolucion_sentimiento' y 'cronologia_eventos' DEBEN basa
         tokens_prompt: tokensInfo.prompt || 0,
         tokens_completion: tokensInfo.completion || 0,
         fuentes_utilizadas: contexto.fuentes_utilizadas,
-        sources_used: datosVisualizacion?.sources_used || contexto.fuentes_utilizadas,
         timestamp: new Date().toISOString(),
-        configuracion_utilizada: configuracion,
-        has_sufficient_data: !datosVisualizacion?.warning,
-        data_quality: datosVisualizacion?.warning ? 'insufficient' : 'adequate'
+        configuracion_utilizada: configuracion
       },
       
       // Datos estructurados para visualización
@@ -1474,20 +778,11 @@ IMPORTANTE: Los campos 'evolucion_sentimiento' y 'cronologia_eventos' DEBEN basa
       
       estadisticas: {
         contexto_procesado: contexto.estadisticas,
-        costo_creditos: configuracion.costo_calculado || 15,
-        aggregated_stats: contexto.aggregated_stats || {}
+        costo_creditos: configuracion.costo_calculado || 15
       }
     };
 
     console.log('✅ Sondeo procesado exitosamente con ChatGPT 4o');
-    console.log('📊 LOGGING: Respuesta final estructurada:', {
-      respuesta_length: respuestaEstructurada.respuesta ? respuestaEstructurada.respuesta.length : 0,
-      metadata_keys: Object.keys(respuestaEstructurada.metadata || {}),
-      datos_visualizacion_keys: Object.keys(respuestaEstructurada.datos_visualizacion || {}),
-      tokens_utilizados: respuestaEstructurada.metadata?.tokens_utilizados || 0,
-      sources_used: respuestaEstructurada.metadata?.sources_used || [],
-      data_quality: respuestaEstructurada.metadata?.data_quality || 'unknown'
-    });
     return respuestaEstructurada;
 
   } catch (error) {
@@ -1495,12 +790,7 @@ IMPORTANTE: Los campos 'evolucion_sentimiento' y 'cronologia_eventos' DEBEN basa
     
             // En caso de error, devolver respuesta basada en contexto real como fallback
         const tipoContextoPrincipal = contexto.fuentes_utilizadas[0] || 'tendencias';
-        const datosVisualizacion = fusionarDatosConContextoReal(pregunta, tipoContextoPrincipal, contexto);
-    
-    // Integrate Perplexity data even in error case
-    if (datosVisualizacion && contexto.contexto_adicional) {
-      datosVisualizacion = integrarDatosPerplexityEnVisualizaciones(datosVisualizacion, contexto.contexto_adicional);
-    }
+        const datosVisualizacion = generarDatosVisualizacionDesdeContexto(pregunta, tipoContextoPrincipal, contexto);
     
     return {
       respuesta: `Error al procesar la consulta: "${pregunta}". 
@@ -1513,18 +803,14 @@ Error técnico: ${error.message}`,
         modelo: 'fallback',
         error: error.message,
         fuentes_utilizadas: contexto.fuentes_utilizadas,
-        sources_used: datosVisualizacion?.sources_used || contexto.fuentes_utilizadas,
-        timestamp: new Date().toISOString(),
-        has_sufficient_data: !datosVisualizacion?.warning,
-        data_quality: datosVisualizacion?.warning ? 'insufficient' : 'fallback'
+        timestamp: new Date().toISOString()
       },
       
       datos_visualizacion: datosVisualizacion,
       
       estadisticas: {
         contexto_procesado: contexto.estadisticas,
-        costo_creditos: 0, // No cobrar en caso de error
-        aggregated_stats: contexto.aggregated_stats || {}
+        costo_creditos: 0 // No cobrar en caso de error
       }
     };
   }
@@ -1535,92 +821,19 @@ Error técnico: ${error.message}`,
  */
 function generarDatosVisualizacionDesdeContexto(consulta, tipo, contexto) {
   console.log(`📊 Generando visualizaciones desde contexto real para: ${consulta} (tipo: ${tipo})`);
-  console.log('📊 LOGGING: Iniciando generación de visualizaciones con parámetros:', {
-    consulta,
-    tipo,
-    contexto_keys: Object.keys(contexto),
-    fuentes_utilizadas: contexto.fuentes_utilizadas || [],
-    total_data_sources: contexto.data ? Object.keys(contexto.data).length : 0,
-    estadisticas_disponibles: !!contexto.estadisticas
-  });
   
-  // Check environment variable for mock data
-  const USE_MOCK_DATA = process.env.USE_MOCK_DATA === 'true';
-  console.log('📊 LOGGING: USE_MOCK_DATA configurado en:', USE_MOCK_DATA);
-  
-  if (USE_MOCK_DATA) {
-    console.log('⚠️ USE_MOCK_DATA=true - utilizando datos simulados');
-    return generarDatosVisualizacion(consulta, tipo, contexto);
-  }
-  
-  // Route to specific real-data generators based on context type
+  // Extraer datos reales del contexto
   const datosReales = extraerDatosRealesDelContexto(contexto);
   
-  console.log('📊 LOGGING: Datos reales extraídos:', {
-    total_elementos: datosReales.totalElementos,
-    fuentes: datosReales.fuentes,
-    fechas_disponibles: datosReales.fechas.length,
-    eventos_detectados: datosReales.eventos.length,
-    categorias_encontradas: Object.keys(datosReales.categorias).length,
-    temas_identificados: datosReales.temas.length
-  });
-  
-  // Generate visualizations using appropriate generator
-  let visualizaciones;
-  
-  switch (tipo) {
-    case 'tendencias':
-      visualizaciones = generarVisualizacionesTendenciasReal(datosReales, consulta, contexto);
-      break;
-    case 'noticias':
-      visualizaciones = generarVisualizacionesNoticiasReal(datosReales, consulta, contexto);
-      break;
-    case 'codex':
-      visualizaciones = generarVisualizacionesCodexReal(datosReales, consulta, contexto);
-      break;
-    case 'monitoreos':
-      visualizaciones = generarVisualizacionesMonitoreosReal(datosReales, consulta, contexto);
-      break;
-    default:
-      // Fallback to generic real data
-      visualizaciones = {
-        temas_relevantes: generarTemasDesdeContexto(datosReales),
-        distribucion_categorias: generarCategoriasDesdeContexto(datosReales),
-        evolucion_sentimiento: generarEvolucionSentimientoReal(datosReales),
-        cronologia_eventos: generarCronologiaEventosReal(datosReales, consulta),
-        conclusiones: `Análisis basado en ${datosReales.totalElementos} elementos reales del contexto: ${datosReales.fuentes.join(', ')}`,
-        metodologia: `Análisis de datos reales extraídos de ${datosReales.fuentes.length} fuentes: tendencias, noticias y contexto web actualizado`,
-        sources_used: datosReales.fuentes,
-        warning: datosReales.totalElementos === 0 ? 'Datos insuficientes para generar visualizaciones completas' : null
-      };
-  }
-  
-  // Add sources tracking and warnings
-  if (visualizaciones) {
-    visualizaciones.sources_used = datosReales.fuentes;
-    if (datosReales.totalElementos === 0) {
-      visualizaciones.warning = 'Datos insuficientes para generar visualizaciones completas';
-    }
-    
-    // Detailed logging of generated visualizations
-    console.log('📊 LOGGING: Visualizaciones generadas - Detalles:', {
-      tipo_generador_usado: tipo,
-      keys_visualizaciones: Object.keys(visualizaciones),
-      sources_used: visualizaciones.sources_used,
-      tiene_warning: !!visualizaciones.warning,
-      tiene_temas_relevantes: !!(visualizaciones.temas_relevantes && visualizaciones.temas_relevantes.length > 0),
-      count_temas: visualizaciones.temas_relevantes ? visualizaciones.temas_relevantes.length : 0,
-      tiene_evolucion_sentimiento: !!(visualizaciones.evolucion_sentimiento && visualizaciones.evolucion_sentimiento.length > 0),
-      count_eventos_cronologia: visualizaciones.cronologia_eventos ? visualizaciones.cronologia_eventos.length : 0
-    });
-    
-    // Sample data logging
-    if (visualizaciones.temas_relevantes && visualizaciones.temas_relevantes.length > 0) {
-      console.log('📊 LOGGING: Muestra de temas relevantes:', 
-        visualizaciones.temas_relevantes.slice(0, 3).map(t => `${t.tema}: ${t.valor}`)
-      );
-    }
-  }
+  // Generar visualizaciones basadas en datos reales
+  const visualizaciones = {
+    temas_relevantes: generarTemasDesdeContexto(datosReales),
+    distribucion_categorias: generarCategoriasDesdeContexto(datosReales),
+    evolucion_sentimiento: generarEvolucionSentimientoReal(datosReales),
+    cronologia_eventos: generarCronologiaEventosReal(datosReales, consulta),
+    conclusiones: `Análisis basado en ${datosReales.totalElementos} elementos reales del contexto: ${datosReales.fuentes.join(', ')}`,
+    metodologia: `Análisis de datos reales extraídos de ${datosReales.fuentes.length} fuentes: tendencias, noticias y contexto web actualizado`
+  };
   
   console.log(`✅ Visualizaciones generadas desde contexto real con ${datosReales.totalElementos} elementos`);
   return visualizaciones;
@@ -1748,12 +961,12 @@ function generarCategoriasDesdeContexto(datosReales) {
 /**
  * Genera evolución de sentimiento basada en fechas reales
  */
-function generarEvolucionSentimientoReal(datosReales, baseSentiment = 'mixed') {
+function generarEvolucionSentimientoReal(datosReales) {
   const dias = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
   const fechaActual = new Date();
   const evolucion = [];
   
-  // Use real dates if available, otherwise generate last 7 days
+  // Usar fechas reales si están disponibles, sino generar últimos 7 días
   const fechasAUsar = datosReales.fechas.length > 0 ? 
     datosReales.fechas.slice(-7) : 
     Array.from({length: 7}, (_, i) => {
@@ -1762,40 +975,17 @@ function generarEvolucionSentimientoReal(datosReales, baseSentiment = 'mixed') {
       return fecha.toISOString().split('T')[0];
     });
   
-  // Define base sentiment distributions
-  const sentimentBases = {
-    'positive': { positivo: 55, neutral: 30, negativo: 15 },
-    'neutral': { positivo: 40, neutral: 45, negativo: 15 },
-    'negative': { positivo: 25, neutral: 35, negativo: 40 },
-    'mixed': { positivo: 40, neutral: 35, negativo: 25 }
-  };
-  
-  const baseDistribution = sentimentBases[baseSentiment] || sentimentBases['mixed'];
-  
   fechasAUsar.forEach((fecha, index) => {
     const fechaObj = new Date(fecha);
     const nombreDia = dias[fechaObj.getDay()];
     
-    // Generate sentiment with realistic variation around base
-    const variation = 0.8 + Math.random() * 0.4; // 80% to 120% variation
-    
-    let positivo = Math.round(baseDistribution.positivo * variation);
-    let neutral = Math.round(baseDistribution.neutral * variation);
-    let negativo = Math.round(baseDistribution.negativo * variation);
-    
-    // Ensure percentages add up to reasonable total
-    const total = positivo + neutral + negativo;
-    if (total > 0) {
-      positivo = Math.round((positivo / total) * 100);
-      neutral = Math.round((neutral / total) * 100);
-      negativo = 100 - positivo - neutral; // Ensure exact 100%
-    }
-    
+    // Generar sentimientos con variación realista
+    const base = 40 + Math.sin(index * 0.5) * 10;
     evolucion.push({
       tiempo: nombreDia,
-      positivo: Math.max(0, positivo),
-      neutral: Math.max(0, neutral),
-      negativo: Math.max(0, negativo),
+      positivo: Math.round(base + Math.random() * 15),
+      neutral: Math.round(35 + Math.random() * 10),
+      negativo: Math.round(25 + Math.random() * 10),
       fecha: fecha
     });
   });
@@ -2262,48 +1452,31 @@ function generarDatosVisualizacionReales(consulta, tipo, datosReales) {
 /**
  * Genera visualizaciones específicas para monitoreos con análisis de sentimiento real
  */
-function generarVisualizacionesMonitoreosReal(datosReales, consulta, contexto) {
-  console.log(`💭 Procesando datos reales de monitoreos`);
-  
-  const monitoreosData = contexto.data?.monitoreos || [];
-  
-  if (monitoreosData.length === 0) {
-    return {
-      monitoreos_relevantes: [{ titulo: "Sin monitoreos disponibles", relevancia: 0 }],
-      analisis_sentimiento: [
-        { sentimiento: 'Positivo', valor: 0, color: '#10B981' },
-        { sentimiento: 'Neutral', valor: 0, color: '#6B7280' },
-        { sentimiento: 'Negativo', valor: 0, color: '#EF4444' }
-      ],
-      evolucion_sentimiento: [],
-      cronologia_eventos: [],
-      warning: "No hay datos de monitoreos disponibles",
-      sources_used: ['monitoreos']
-    };
-  }
+function generarVisualizacionesMonitoreos(monitoreos, consulta) {
+  console.log(`💭 Procesando ${monitoreos.length} monitoreos para análisis de sentimiento`);
   
   let sentimientoTotal = { positivo: 0, neutral: 0, negativo: 0 };
   let emociones = {};
   let intenciones = {};
   let engagementPorHora = {};
-  let herramientas = {};
+  let evolucionSentimiento = [];
   
-  // Process each monitoring session
-  monitoreosData.forEach(monitoreo => {
-    // Extract sentiment analysis
+  // Procesar cada monitoreo
+  monitoreos.forEach(monitoreo => {
     if (monitoreo.analisis_sentimiento) {
+      // Agregar datos de sentimiento
       sentimientoTotal.positivo += monitoreo.analisis_sentimiento.positivo || 0;
       sentimientoTotal.neutral += monitoreo.analisis_sentimiento.neutral || 0;
       sentimientoTotal.negativo += monitoreo.analisis_sentimiento.negativo || 0;
       
-      // Process emotions
+      // Procesar emociones predominantes
       if (monitoreo.analisis_sentimiento.emociones_predominantes) {
         monitoreo.analisis_sentimiento.emociones_predominantes.forEach(emocionData => {
           emociones[emocionData.emocion] = (emociones[emocionData.emocion] || 0) + emocionData.count;
         });
       }
       
-      // Process communicative intentions
+      // Procesar intenciones comunicativas
       if (monitoreo.analisis_sentimiento.intenciones_comunicativas) {
         Object.entries(monitoreo.analisis_sentimiento.intenciones_comunicativas).forEach(([intencion, count]) => {
           intenciones[intencion] = (intenciones[intencion] || 0) + count;
@@ -2311,60 +1484,36 @@ function generarVisualizacionesMonitoreosReal(datosReales, consulta, contexto) {
       }
     }
     
-    // Process temporal engagement
+    // Procesar engagement temporal basado en created_at
     if (monitoreo.created_at && monitoreo.total_engagement) {
       const fecha = new Date(monitoreo.created_at);
       const hora = fecha.getHours();
       const horaKey = `${hora.toString().padStart(2, '0')}:00`;
       engagementPorHora[horaKey] = (engagementPorHora[horaKey] || 0) + monitoreo.total_engagement;
     }
-    
-    // Track tools used
-    const herramienta = monitoreo.herramienta || 'Unknown';
-    herramientas[herramienta] = (herramientas[herramienta] || 0) + 1;
   });
   
-  // Build weekly sentiment evolution
+  // Construir evolución semanal del sentimiento (simulada basada en datos reales)
   const diasSemana = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
   const totalSentimiento = sentimientoTotal.positivo + sentimientoTotal.neutral + sentimientoTotal.negativo;
   
-  const evolucionSentimiento = diasSemana.map((dia, index) => {
-    if (totalSentimiento === 0) {
-      return { tiempo: dia, positivo: 33, neutral: 34, negativo: 33, fecha: new Date().toISOString().split('T')[0] };
-    }
-    
-    // Apply natural variation based on real data
-    const factor = 0.8 + Math.random() * 0.4;
+  evolucionSentimiento = diasSemana.map(dia => {
+    // Aplicar variación basada en los datos reales pero distribuida semanalmente
+    const factor = 0.8 + Math.random() * 0.4; // Variación del 80% al 120%
     return {
-      tiempo: dia,
+      fecha: dia,
       positivo: Math.round((sentimientoTotal.positivo / totalSentimiento * 100) * factor),
       neutral: Math.round((sentimientoTotal.neutral / totalSentimiento * 100) * factor),
-      negativo: Math.round((sentimientoTotal.negativo / totalSentimiento * 100) * factor),
-      fecha: new Date(Date.now() - (6 - index) * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+      negativo: Math.round((sentimientoTotal.negativo / totalSentimiento * 100) * factor)
     };
   });
   
-  // Generate events from monitoring activities
-  const cronologiaEventos = monitoreosData.slice(0, 3).map((monitoreo, index) => {
-    return {
-      id: `monitor_${index + 1}`,
-      fecha: monitoreo.created_at?.split('T')[0] || new Date().toISOString().split('T')[0],
-      titulo: `Monitoreo: ${monitoreo.titulo || monitoreo.query_original || 'Consulta'}`,
-      descripcion: `Sesión de monitoreo con ${monitoreo.tweet_count || 0} tweets analizados usando ${monitoreo.herramienta}`,
-      impacto: index === 0 ? 'alto' : index === 1 ? 'medio' : 'bajo',
-      categoria: monitoreo.categoria || 'general',
-      sentimiento: monitoreo.analisis_sentimiento?.score_promedio > 0 ? 'positivo' : 
-                   monitoreo.analisis_sentimiento?.score_promedio < 0 ? 'negativo' : 'neutral',
-      keywords: [monitoreo.query_original || consulta],
-      fuentes: [monitoreo.herramienta || 'Herramienta de monitoreo']
-    };
-  });
-  
+  // Construir estructura de respuesta
   return {
-    monitoreos_relevantes: monitoreosData.slice(0, 5).map((m, i) => ({
-      titulo: m.titulo || m.query_original || 'Monitoreo',
+    monitoreos_relevantes: monitoreos.slice(0, 5).map((m, i) => ({
+      titulo: m.titulo,
       relevancia: Math.max(60, 100 - (i * 8)),
-      descripcion: `${m.categoria || 'Categoría'} con ${m.tweet_count || 0} tweets (${m.herramienta || 'herramienta'})`
+      descripcion: `Monitoreo de ${m.categoria} con ${m.tweet_count} tweets analizados`
     })),
     
     analisis_sentimiento: [
@@ -2381,7 +1530,7 @@ function generarVisualizacionesMonitoreosReal(datosReales, consulta, contexto) {
       .map(([emocion, valor]) => ({
         emocion: emocion.charAt(0).toUpperCase() + emocion.slice(1),
         valor: valor,
-        descripcion: `${valor} expresiones de ${emocion.toLowerCase()} detectadas`
+        descripcion: `Expresiones de ${emocion.toLowerCase()} detectadas en conversaciones`
       })),
     
     intenciones_comunicativas: Object.entries(intenciones)
@@ -2390,409 +1539,64 @@ function generarVisualizacionesMonitoreosReal(datosReales, consulta, contexto) {
       .map(([intencion, valor]) => ({
         intencion: intencion.charAt(0).toUpperCase() + intencion.slice(1),
         valor: valor,
-        descripcion: `${valor} tweets con intención ${intencion.toLowerCase()}`
+        descripcion: `Intención ${intencion.toLowerCase()} identificada en tweets`
       })),
     
     engagement_temporal: Object.entries(engagementPorHora)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([hora, engagement]) => ({ hora, engagement })),
     
-    distribucion_herramientas: Object.entries(herramientas)
-      .map(([herramienta, count]) => ({
-        herramienta,
-        valor: Math.round((count / monitoreosData.length) * 100)
-      })),
+    distribucion_herramientas: monitoreos.reduce((acc, m) => {
+      const herramienta = m.herramienta || 'Unknown';
+      acc[herramienta] = (acc[herramienta] || 0) + 1;
+      return acc;
+    }, {}),
     
-    cronologia_eventos: cronologiaEventos,
+    conclusiones: {
+      monitoreos_relevantes: `Análisis de ${monitoreos.length} monitoreos activos mostrando ${totalSentimiento} interacciones totales con patrones de engagement específicos.`,
+      analisis_sentimiento: `Distribución real: ${Math.round(sentimientoTotal.positivo/totalSentimiento*100)}% positivo, ${Math.round(sentimientoTotal.neutral/totalSentimiento*100)}% neutral, ${Math.round(sentimientoTotal.negativo/totalSentimiento*100)}% negativo.`,
+      evolucion_sentimiento: `Evolución basada en ${monitoreos.length} monitoreos reales con variaciones temporales naturales detectadas.`,
+      emociones_detectadas: `${Object.keys(emociones).length} tipos de emociones identificadas a partir del análisis de contenido real.`,
+      intenciones_comunicativas: `${Object.keys(intenciones).length} intenciones comunicativas diferentes identificadas en las conversaciones monitoreadas.`,
+      engagement_temporal: `Patrones de engagement basados en ${Object.keys(engagementPorHora).length} períodos horarios con actividad real.`
+    },
     
-    conclusiones: `Análisis de ${monitoreosData.length} sesiones de monitoreo con ${totalSentimiento} interacciones analizadas`,
-    metodologia: "Análisis directo de datos de monitoreo con agregación de sentiment, emociones e intenciones comunicativas",
-    sources_used: ['monitoreos', 'sentiment_analysis']
+    metodologia: {
+      monitoreos_relevantes: "Análisis directo de monitoreos del usuario con métricas reales de engagement",
+      analisis_sentimiento: "Agregación de análisis de sentimiento individual por tweet procesado con IA",
+      evolucion_sentimiento: "Distribución temporal basada en datos reales con variación estadística natural",
+      emociones_detectadas: "Conteo directo de emociones detectadas por IA en tweets analizados",
+      intenciones_comunicativas: "Clasificación automática de intenciones basada en análisis semántico real",
+      engagement_temporal: "Métricas temporales extraídas de timestamps y engagement real de monitoreos"
+    }
   };
 }
 
 /**
  * Genera visualizaciones para tendencias basadas en datos reales
  */
-function generarVisualizacionesTendenciasReal(datosReales, consulta, contexto) {
-  console.log(`📈 Procesando datos reales de tendencias`);
-  
-  const tendenciasData = contexto.data?.tendencias || [];
-  
-  if (tendenciasData.length === 0) {
-    return {
-      temas_relevantes: [{ tema: "Sin datos de tendencias", valor: 0 }],
-      distribucion_categorias: [{ categoria: "Sin categorías", valor: 100 }],
-      evolucion_sentimiento: [],
-      cronologia_eventos: [],
-      warning: "No hay datos de tendencias disponibles",
-      sources_used: ['tendencias']
-    };
-  }
-  
-  // Extract themes from real trends
-  const temasReales = [];
-  const categorias = {};
-  const keywordsFreq = {};
-  
-  tendenciasData.forEach(trendGroup => {
-    if (trendGroup.trends && Array.isArray(trendGroup.trends)) {
-      trendGroup.trends.forEach(trend => {
-        const nombre = trend.name || trend.trend || 'Tendencia';
-        const categoria = trend.category || 'General';
-        const volumen = trend.volume || trend.tweet_volume || 0;
-        
-        temasReales.push({ tema: nombre, valor: Math.min(100, Math.max(20, volumen / 1000)) });
-        categorias[categoria] = (categorias[categoria] || 0) + 1;
-        
-        // Extract keywords from trend names
-        nombre.split(' ').forEach(word => {
-          if (word.length > 3) {
-            keywordsFreq[word] = (keywordsFreq[word] || 0) + 1;
-          }
-        });
-      });
-    }
-    
-    // Process keywords from trend data with proper handling
-    if (trendGroup.keywords) {
-      let keywordArray = [];
-      
-      if (Array.isArray(trendGroup.keywords)) {
-        keywordArray = trendGroup.keywords;
-      } else if (typeof trendGroup.keywords === 'string') {
-        keywordArray = [trendGroup.keywords];
-      } else if (typeof trendGroup.keywords === 'object' && trendGroup.keywords !== null) {
-        keywordArray = Object.values(trendGroup.keywords).filter(k => typeof k === 'string');
-      }
-      
-      keywordArray.forEach(keyword => {
-        if (typeof keyword === 'string' && keyword.trim().length > 0) {
-          const cleanKeyword = keyword.trim();
-          keywordsFreq[cleanKeyword] = (keywordsFreq[cleanKeyword] || 0) + 2; // Give more weight to explicit keywords
-        } else if (typeof keyword === 'object' && keyword !== null) {
-          const keywordStr = keyword.name || keyword.keyword || keyword.term || String(keyword);
-          if (keywordStr && keywordStr.trim().length > 0) {
-            keywordsFreq[keywordStr.trim()] = (keywordsFreq[keywordStr.trim()] || 0) + 2;
-          }
-        }
-      });
-    }
-  });
-  
-  // Sort themes by relevance
-  temasReales.sort((a, b) => b.valor - a.valor);
-  
-  // Generate categories distribution
-  const totalCategorias = Object.values(categorias).reduce((a, b) => a + b, 0);
-  const distribucionCategorias = Object.entries(categorias)
-    .map(([categoria, count]) => ({
-      categoria,
-      valor: Math.round((count / totalCategorias) * 100)
-    }))
-    .sort((a, b) => b.valor - a.valor);
-  
-  // Generate sentiment evolution based on real timestamp data
-  const evolucionSentimiento = generarEvolucionSentimientoReal(datosReales);
-  
-  // Generate events from trend emergence
-  const cronologiaEventos = tendenciasData.slice(0, 3).map((trendGroup, index) => {
-    const topTrend = trendGroup.trends?.[0];
-    return {
-      id: `trend_${index + 1}`,
-      fecha: trendGroup.timestamp?.split('T')[0] || new Date().toISOString().split('T')[0],
-      titulo: `Emergencia de tendencia: ${topTrend?.name || 'Tendencia detectada'}`,
-      descripcion: `Nueva tendencia detectada en redes sociales con ${topTrend?.volume || 'actividad'} de volumen`,
-      impacto: index === 0 ? 'alto' : index === 1 ? 'medio' : 'bajo',
-      categoria: topTrend?.category || 'general',
-      sentimiento: index % 2 === 0 ? 'positivo' : 'neutral',
-      keywords: Object.keys(keywordsFreq).slice(0, 3),
-      fuentes: ['Twitter Trends', 'Análisis de hashtags']
-    };
-  });
-  
-  return {
-    temas_relevantes: temasReales.slice(0, 5),
-    distribucion_categorias: distribucionCategorias,
-    evolucion_sentimiento: evolucionSentimiento,
-    cronologia_eventos: cronologiaEventos,
-    conclusiones: `Análisis basado en ${tendenciasData.length} grupos de tendencias reales con ${temasReales.length} temas identificados`,
-    metodologia: "Análisis de tendencias reales de Twitter con procesamiento de volumen, categorías y keywords",
-    sources_used: ['tendencias', 'twitter_trends']
-  };
+function generarVisualizacionesTendencias(tendencias, consulta) {
+  // Implementar lógica similar para tendencias reales
+  console.log(`📈 Procesando ${tendencias.length} tendencias reales`);
+  return null; // Por ahora mantener simulado
 }
 
 /**
  * Genera visualizaciones para noticias basadas en datos reales
  */
-function generarVisualizacionesNoticiasReal(datosReales, consulta, contexto) {
-  console.log(`📰 Procesando datos reales de noticias`);
-  
-  const noticiasData = contexto.data?.noticias || [];
-  
-  if (noticiasData.length === 0) {
-    return {
-      noticias_relevantes: [{ titulo: "Sin noticias disponibles", relevancia: 0 }],
-      fuentes_cobertura: [{ fuente: "Sin fuentes", cobertura: 100 }],
-      evolucion_sentimiento: [],
-      cronologia_eventos: [],
-      warning: "No hay datos de noticias disponibles",
-      sources_used: ['noticias']
-    };
-  }
-  
-  // Extract relevant news with real relevance scoring
-  const noticiasRelevantes = noticiasData.map((noticia, index) => {
-    const titulo = noticia.title || noticia.titulo || 'Noticia sin título';
-    const contenido = noticia.content || noticia.description || '';
-    const keywords = noticia.keywords || [];
-    
-    // Calculate relevance based on query match and content length
-    let relevancia = 50; // base score
-    
-    // Boost if title contains query terms
-    if (titulo.toLowerCase().includes(consulta.toLowerCase())) {
-      relevancia += 30;
-    }
-    
-    // Boost if keywords match
-    const consultaWords = consulta.toLowerCase().split(' ');
-    const keywordArray = Array.isArray(keywords) ? keywords : [keywords];
-    keywordArray.forEach(keyword => {
-      const keywordStr = typeof keyword === 'string' ? keyword : (keyword?.name || keyword?.keyword || String(keyword));
-      if (keywordStr && consultaWords.some(word => keywordStr.toLowerCase().includes(word))) {
-        relevancia += 10;
-      }
-    });
-    
-    // Boost based on content length (more content = more comprehensive)
-    if (contenido.length > 500) relevancia += 10;
-    if (contenido.length > 1000) relevancia += 10;
-    
-    return {
-      titulo: titulo.substring(0, 50),
-      relevancia: Math.min(100, relevancia),
-      descripcion: contenido.substring(0, 100) + '...'
-    };
-  }).sort((a, b) => b.relevancia - a.relevancia).slice(0, 5);
-  
-  // Extract sources distribution
-  const fuentes = {};
-  noticiasData.forEach(noticia => {
-    const fuente = noticia.source || noticia.fuente || 'Fuente desconocida';
-    fuentes[fuente] = (fuentes[fuente] || 0) + 1;
-  });
-  
-  const totalFuentes = Object.values(fuentes).reduce((a, b) => a + b, 0);
-  const fuentesCobertura = Object.entries(fuentes)
-    .map(([fuente, count]) => ({
-      fuente,
-      cobertura: Math.round((count / totalFuentes) * 100)
-    }))
-    .sort((a, b) => b.cobertura - a.cobertura);
-  
-  // Generate sentiment evolution based on news sentiment scores
-  const evolucionSentimiento = [];
-  const diasSemana = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
-  
-  // Group news by day and calculate average sentiment
-  const noticiasPorDia = {};
-  noticiasData.forEach(noticia => {
-    const fecha = noticia.published_at || noticia.fecha || noticia.date;
-    if (fecha) {
-      const dia = new Date(fecha).getDay();
-      const nombreDia = diasSemana[dia];
-      if (!noticiasPorDia[nombreDia]) {
-        noticiasPorDia[nombreDia] = { positivo: 0, neutral: 0, negativo: 0, total: 0 };
-      }
-      
-      // Use sentiment score if available, otherwise neutral
-      const sentiment = noticia.sentiment_score || noticia.sentiment || 0;
-      if (sentiment > 0.1) {
-        noticiasPorDia[nombreDia].positivo++;
-      } else if (sentiment < -0.1) {
-        noticiasPorDia[nombreDia].negativo++;
-      } else {
-        noticiasPorDia[nombreDia].neutral++;
-      }
-      noticiasPorDia[nombreDia].total++;
-    }
-  });
-  
-  diasSemana.forEach(dia => {
-    const datos = noticiasPorDia[dia] || { positivo: 1, neutral: 2, negativo: 1, total: 4 };
-    evolucionSentimiento.push({
-      tiempo: dia,
-      positivo: Math.round((datos.positivo / datos.total) * 100),
-      neutral: Math.round((datos.neutral / datos.total) * 100),
-      negativo: Math.round((datos.negativo / datos.total) * 100),
-      fecha: new Date().toISOString().split('T')[0] // placeholder
-    });
-  });
-  
-  // Generate events from news
-  const cronologiaEventos = noticiasData.slice(0, 3).map((noticia, index) => {
-    return {
-      id: `news_${index + 1}`,
-      fecha: noticia.published_at?.split('T')[0] || noticia.fecha || new Date().toISOString().split('T')[0],
-      titulo: (noticia.title || noticia.titulo || 'Noticia').substring(0, 60),
-      descripcion: `Noticia publicada por ${noticia.source || noticia.fuente || 'fuente'}: ${(noticia.description || noticia.content || '').substring(0, 100)}...`,
-      impacto: index === 0 ? 'alto' : index === 1 ? 'medio' : 'bajo',
-      categoria: noticia.category || noticia.categoria || 'general',
-      sentimiento: noticia.sentiment_score > 0 ? 'positivo' : noticia.sentiment_score < 0 ? 'negativo' : 'neutral',
-      keywords: Array.isArray(noticia.keywords) 
-        ? noticia.keywords.slice(0, 3).map(k => typeof k === 'string' ? k : (k?.name || k?.keyword || String(k))) 
-        : [consulta],
-      fuentes: [noticia.source || noticia.fuente || 'Medio digital']
-    };
-  });
-  
-  return {
-    noticias_relevantes: noticiasRelevantes,
-    fuentes_cobertura: fuentesCobertura,
-    evolucion_sentimiento: evolucionSentimiento,
-    cronologia_eventos: cronologiaEventos,
-    conclusiones: `Análisis de ${noticiasData.length} noticias reales de ${fuentesCobertura.length} fuentes diferentes`,
-    metodologia: "Análisis de noticias reales con scoring de relevancia, distribución de fuentes y sentiment",
-    sources_used: ['noticias', 'medios_digitales']
-  };
+function generarVisualizacionesNoticias(noticias, consulta) {
+  // Implementar lógica similar para noticias reales
+  console.log(`📰 Procesando ${noticias.length} noticias reales`);
+  return null; // Por ahora mantener simulado
 }
 
 /**
  * Genera visualizaciones para codex basadas en datos reales
  */
-function generarVisualizacionesCodexReal(datosReales, consulta, contexto) {
-  console.log(`📚 Procesando datos reales de codex`);
-  
-  const codexData = contexto.data?.codex || [];
-  
-  if (codexData.length === 0) {
-    return {
-      documentos_relevantes: [{ titulo: "Sin documentos disponibles", relevancia: 0 }],
-      conceptos_relacionados: [{ concepto: "Sin conceptos", relacion: 0 }],
-      evolucion_sentimiento: [],
-      cronologia_eventos: [],
-      warning: "No hay documentos en el codex disponibles",
-      sources_used: ['codex']
-    };
-  }
-  
-  // Extract relevant documents with real relevance scoring
-  const documentosRelevantes = codexData.map((doc, index) => {
-    const titulo = doc.title || doc.titulo || 'Documento sin título';
-    const contenido = doc.content || doc.summary || doc.description || '';
-    const tags = doc.tags || [];
-    
-    // Calculate relevance based on query match and metadata
-    let relevancia = 40; // base score
-    
-    // Boost if title contains query terms
-    if (titulo.toLowerCase().includes(consulta.toLowerCase())) {
-      relevancia += 35;
-    }
-    
-    // Boost if content contains query terms
-    const consultaWords = consulta.toLowerCase().split(' ');
-    consultaWords.forEach(word => {
-      if (contenido.toLowerCase().includes(word)) {
-        relevancia += 10;
-      }
-    });
-    
-    // Boost if tags match
-    const tagArray = Array.isArray(tags) ? tags : [tags];
-    tagArray.forEach(tag => {
-      const tagStr = typeof tag === 'string' ? tag : (tag?.name || tag?.tag || String(tag));
-      if (tagStr && consultaWords.some(word => tagStr.toLowerCase().includes(word))) {
-        relevancia += 15;
-      }
-    });
-    
-    return {
-      titulo: titulo.substring(0, 50),
-      relevancia: Math.min(100, relevancia),
-      descripcion: contenido.substring(0, 120) + '...'
-    };
-  }).sort((a, b) => b.relevancia - a.relevancia).slice(0, 5);
-  
-  // Extract concepts from tags and content
-  const conceptos = {};
-  codexData.forEach(doc => {
-    // Extract from tags with proper handling
-    if (doc.tags) {
-      let tagArray = [];
-      
-      if (Array.isArray(doc.tags)) {
-        tagArray = doc.tags;
-      } else if (typeof doc.tags === 'string') {
-        tagArray = [doc.tags];
-      } else if (typeof doc.tags === 'object' && doc.tags !== null) {
-        tagArray = Object.values(doc.tags).filter(t => typeof t === 'string');
-      }
-      
-      tagArray.forEach(tag => {
-        const tagStr = typeof tag === 'string' ? tag : (tag?.name || tag?.tag || String(tag));
-        if (tagStr && tagStr.trim().length > 0) {
-          const cleanTag = tagStr.trim();
-          conceptos[cleanTag] = (conceptos[cleanTag] || 0) + 3; // Higher weight for tags
-        }
-      });
-    }
-    
-    // Extract from categories
-    if (doc.category) {
-      conceptos[doc.category] = (conceptos[doc.category] || 0) + 2;
-    }
-    
-    // Extract key terms from content (simplified)
-    const contenido = doc.content || doc.summary || '';
-    const words = contenido.split(' ').filter(word => 
-      word.length > 5 && 
-      !['proceso', 'sistema', 'desarrollo', 'análisis'].includes(word.toLowerCase())
-    );
-    words.slice(0, 10).forEach(word => {
-      conceptos[word] = (conceptos[word] || 0) + 1;
-    });
-  });
-  
-  // Sort concepts by frequency
-  const conceptosRelacionados = Object.entries(conceptos)
-    .sort(([,a], [,b]) => b - a)
-    .slice(0, 5)
-    .map(([concepto, freq]) => ({
-      concepto: concepto.charAt(0).toUpperCase() + concepto.slice(1),
-      relacion: Math.min(100, freq * 10) // Normalize to 0-100
-    }));
-  
-  // Generate sentiment evolution (documents tend to be neutral)
-  const evolucionSentimiento = generarEvolucionSentimientoReal(datosReales, 'neutral');
-  
-  // Generate events from document creation/updates
-  const cronologiaEventos = codexData.slice(0, 3).map((doc, index) => {
-    return {
-      id: `doc_${index + 1}`,
-      fecha: doc.created_at?.split('T')[0] || doc.updated_at?.split('T')[0] || new Date().toISOString().split('T')[0],
-      titulo: `Documento agregado: ${(doc.title || doc.titulo || 'Documento').substring(0, 40)}`,
-      descripcion: `Nuevo documento en el codex: ${(doc.summary || doc.description || doc.content || '').substring(0, 100)}...`,
-      impacto: index === 0 ? 'alto' : index === 1 ? 'medio' : 'bajo',
-      categoria: doc.category || 'general',
-      sentimiento: 'neutral', // Documents are typically neutral
-      keywords: Array.isArray(doc.tags) 
-        ? doc.tags.slice(0, 3).map(t => typeof t === 'string' ? t : (t?.name || t?.tag || String(t))) 
-        : [consulta],
-      fuentes: ['Codex institucional', 'Base de conocimiento']
-    };
-  });
-  
-  return {
-    documentos_relevantes: documentosRelevantes,
-    conceptos_relacionados: conceptosRelacionados,
-    evolucion_sentimiento: evolucionSentimiento,
-    cronologia_eventos: cronologiaEventos,
-    conclusiones: `Análisis de ${codexData.length} documentos del codex con ${conceptosRelacionados.length} conceptos principales identificados`,
-    metodologia: "Análisis de documentos del codex con scoring de relevancia, extracción de conceptos y tracking temporal",
-    sources_used: ['codex', 'base_conocimiento']
-  };
+function generarVisualizacionesCodex(documentos, consulta) {
+  // Implementar lógica similar para documentos reales
+  console.log(`📚 Procesando ${documentos.length} documentos reales`);
+  return null; // Por ahora mantener simulado
 }
 
 /**
@@ -2867,24 +1671,7 @@ function construirPromptSondeo(pregunta, contexto, configuracion) {
   
   // 4. KEYWORDS EXTRAÍDAS
   if (contexto.contexto_adicional && contexto.contexto_adicional.keywords_extraidas) {
-    const keywords = Array.isArray(contexto.contexto_adicional.keywords_extraidas) 
-      ? contexto.contexto_adicional.keywords_extraidas 
-      : [contexto.contexto_adicional.keywords_extraidas];
-    
-    // Filter out any non-string values and convert objects to strings safely
-    const validKeywords = keywords
-      .map(keyword => {
-        if (typeof keyword === 'string') return keyword;
-        if (typeof keyword === 'object' && keyword !== null) {
-          return keyword.name || keyword.keyword || keyword.term || Object.keys(keyword)[0] || 'keyword';
-        }
-        return String(keyword);
-      })
-      .filter(keyword => keyword && keyword.length > 0);
-      
-    if (validKeywords.length > 0) {
-      resumenContexto += `\n🔑 PALABRAS CLAVE: ${validKeywords.join(', ')}`;
-    }
+    resumenContexto += `\n🔑 PALABRAS CLAVE: ${contexto.contexto_adicional.keywords_extraidas.join(', ')}`;
   }
 
   // 5. INFORMACIÓN TEMPORAL PARA ANÁLISIS DE GRÁFICOS
@@ -2948,86 +1735,6 @@ Responde en español con análisis específico y basado en evidencia.
   return prompt;
 }
 
-/**
- * Función fusionada que combina datos reales con procesamiento inteligente
- */
-function fusionarDatosConContextoReal(pregunta, tipo, contexto) {
-  console.log(`🔄 Fusionando datos con contexto real para: ${pregunta} (tipo: ${tipo})`);
-  
-  // Check if mock data should be used
-  const USE_MOCK_DATA = process.env.USE_MOCK_DATA === 'true';
-  
-  if (USE_MOCK_DATA) {
-    console.log('⚠️ USE_MOCK_DATA=true - usando datos simulados como fallback');
-    return generarDatosVisualizacion(pregunta, tipo, contexto);
-  }
-  
-  // Extract real data from context
-  const datosReales = extraerDatosRealesDelContexto(contexto);
-  
-  // Check if we have sufficient data
-  if (datosReales.totalElementos === 0) {
-    console.log('⚠️ Datos insuficientes - devolviendo estructura mínima con advertencia');
-    return {
-      temas_relevantes: [{ tema: "Datos insuficientes", valor: 0 }],
-      distribucion_categorias: [{ categoria: "Sin datos", valor: 100 }],
-      evolucion_sentimiento: [],
-      cronologia_eventos: [],
-      warning: "Datos insuficientes para generar visualizaciones completas. Se requieren más fuentes de contexto.",
-      error_type: "insufficient_data",
-      sources_used: datosReales.fuentes,
-      suggestions: [
-        "Incluir más fuentes de contexto",
-        "Verificar conectividad con fuentes de datos",
-        "Intentar con una consulta más general"
-      ],
-      conclusiones: "No se pudieron generar análisis debido a la falta de datos contextuales",
-      metodologia: "Intento de análisis con datos insuficientes - se requieren fuentes adicionales"
-    };
-  }
-  
-  // Use the appropriate real data generator
-  return generarDatosVisualizacionDesdeContexto(pregunta, tipo, contexto);
-}
-
-/**
- * Integra datos de Perplexity y tweets en las visualizaciones
- */
-function integrarDatosPerplexityEnVisualizaciones(visualizaciones, contextoAdicional) {
-  if (!contextoAdicional || !visualizaciones) {
-    return visualizaciones;
-  }
-  
-  console.log('🌐 Integrando datos de Perplexity en visualizaciones');
-  
-  // Add Perplexity insights to conclusions
-  if (contextoAdicional.contexto_web) {
-    visualizaciones.conclusiones += `\n\nCONTEXTO WEB: ${contextoAdicional.contexto_web.substring(0, 200)}...`;
-  }
-  
-  // Add tweet insights to conclusions
-  if (contextoAdicional.contexto_tweets) {
-    visualizaciones.conclusiones += `\n\nCONVERSACIÓN SOCIAL: Actividad detectada en redes sociales relacionada con el tema.`;
-  }
-  
-  // Update sources
-  if (visualizaciones.sources_used) {
-    if (contextoAdicional.contexto_web) {
-      visualizaciones.sources_used.push('perplexity_web');
-    }
-    if (contextoAdicional.contexto_tweets) {
-      visualizaciones.sources_used.push('social_media');
-    }
-  }
-  
-  // Update methodology
-  if (contextoAdicional.fuentes_utilizadas && contextoAdicional.fuentes_utilizadas.length > 0) {
-    visualizaciones.metodologia += ` Enriquecido con: ${contextoAdicional.fuentes_utilizadas.join(', ')}.`;
-  }
-  
-  return visualizaciones;
-}
-
 module.exports = {
   obtenerContextoTendencias,
   obtenerContextoTweetsTrending,
@@ -3037,12 +1744,5 @@ module.exports = {
   construirContextoCompleto,
   obtenerContextoAdicionalPerplexity,
   procesarSondeoConChatGPT,
-  construirPromptSondeo,
-  fusionarDatosConContextoReal,
-      integrarDatosPerplexityEnVisualizaciones,
-    cargarContextoEspecifico,
-    cargarTweetsPorIds,
-    cargarTendenciasPorNombres,
-    cargarNoticiasEspecificas,
-    cargarCodexEspecificos
+  construirPromptSondeo
 }; 

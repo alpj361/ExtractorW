@@ -334,22 +334,23 @@ async function processNitterProfile(username, userId, sessionId, limit = 10, inc
   try {
     console.log(`🔍 Procesando nitter_profile: "@${username}" para usuario ${userId}`);
     
-    // 1. Llamar a ExtractorT para obtener tweets del perfil
-    const nitterUrl = `${EXTRACTOR_T_URL}/api/nitter_profile/`;
-    console.log(`📡 Llamando a ExtractorT Profile: ${nitterUrl}`);
+    // 1. Llamar a ExtractorT para obtener tweets del perfil (usando GET)
+    const cleanUsername = username.replace('@', '');
+    const params = new URLSearchParams({
+      username: cleanUsername,
+      limit: limit.toString(),
+      include_retweets: includeRetweets.toString(),
+      include_replies: includeReplies.toString()
+    });
+    
+    const nitterUrl = `${EXTRACTOR_T_URL}/api/nitter_profile/?${params}`;
+    console.log(`📡 Llamando a ExtractorT Profile (GET): ${nitterUrl}`);
     
     const nitterResponse = await fetch(nitterUrl, {
-      method: 'POST',
+      method: 'GET',
       headers: {
-        'Content-Type': 'application/json',
         'User-Agent': 'ExtractorW-NitterProfile/1.0'
-      },
-      body: JSON.stringify({
-        username: username.replace('@', ''),
-        limit: limit,
-        include_retweets: includeRetweets,
-        include_replies: includeReplies
-      })
+      }
     });
     
     if (!nitterResponse.ok) {

@@ -21,6 +21,9 @@ SUPABASE_ANON_KEY=tu_anon_key_aqui
 # Configuración
 USE_AI=false  # true para usar IA, false para procesamiento local (más rápido)
 
+# Sondeos Configuration
+USE_MOCK_DATA=false  # true para usar datos simulados en visualizaciones, false para datos reales
+
 # Puerto del servidor
 PORT=8080
 `;

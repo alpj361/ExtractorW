@@ -108,7 +108,7 @@ function normalizarCategoria(category) {
  */
 async function obtenerContextoTweets(trendName, limite = 3) {
   try {
-    console.log(`🐦 Obteniendo contexto de tweets para: "${trendName}"`);
+    console.log(`🐦 Obteniendo contexto de tweets para: "${trendName}" (limite: ${limite})`);
     
     // Importar supabase si no está disponible
     const { createClient } = require('@supabase/supabase-js');
@@ -121,6 +121,15 @@ async function obtenerContextoTweets(trendName, limite = 3) {
     }
     
     const supabase = createClient(supabaseUrl, supabaseKey);
+    
+    // Sanitize trend name to prevent SQL injection and syntax errors
+    const sanitizedTrendName = trendName.replace(/[%_'"\\]/g, '').trim();
+    console.log(`🔍 Trend name sanitized: "${trendName}" -> "${sanitizedTrendName}"`);
+    
+    if (sanitizedTrendName.length < 3) {
+      console.log('⚠️ Trend name too short after sanitization, skipping tweets search');
+      return '';
+    }
     
     // Buscar tweets relacionados con la tendencia
     // Buscar por trend_clean (término limpio) y trend_original
@@ -137,20 +146,23 @@ async function obtenerContextoTweets(trendName, limite = 3) {
         sentimiento,
         score_sentimiento
       `)
-      .or(`trend_clean.ilike.%${trendName}%,trend_original.ilike.%${trendName}%`)
+      .or(`trend_clean.ilike.*${trendName.replace(/[%_'"\\]/g, '').trim()}*,trend_original.ilike.*${trendName.replace(/[%_'"\\]/g, '').trim()}*,texto.ilike.*${trendName.replace(/[%_'"\\]/g, '').trim()}*`)
       .gte('fecha_captura', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()) // Últimos 7 días
       .order('fecha_captura', { ascending: false })
       .limit(20); // Obtener más para poder filtrar mejor
     
     if (error) {
       console.error('❌ Error obteniendo tweets:', error);
+      console.log('📭 Fallback: continuando sin tweets adicionales para Perplexity');
       return '';
     }
     
     if (!tweets || tweets.length === 0) {
-      console.log(`📭 No se encontraron tweets para "${trendName}"`);
+      console.log(`📭 No se encontraron tweets para "${trendName}" (sanitized: "${sanitizedTrendName}")`);
       return '';
     }
+    
+    console.log(`✅ Encontrados ${tweets.length} tweets para la tendencia "${trendName}"`);
     
     console.log(`📊 Encontrados ${tweets.length} tweets, aplicando filtros...`);
     
@@ -221,7 +233,8 @@ INSTRUCCIÓN: Usa estos tweets reales para entender mejor POR QUÉ "${trendName}
     return contexto;
     
   } catch (error) {
-    console.error('❌ Error en obtenerContextoTweets:', error);
+    console.error(`❌ Error en obtenerContextoTweets para "${trendName}":`, error);
+    console.log('📭 Fallback: continuando sin contexto de tweets para Perplexity');
     return '';
   }
 }

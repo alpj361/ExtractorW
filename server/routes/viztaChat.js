@@ -101,7 +101,7 @@ router.post('/query', verifyUserAccess, async (req, res) => {
         const toolResult = await mcpService.executeTool('nitter_context', {
           q: message,
           location: 'guatemala',
-          limit: 5
+          limit: 25
         }, req.user);
         
         if (toolResult.success && toolResult.tweets) {
@@ -265,14 +265,30 @@ router.post('/query', verifyUserAccess, async (req, res) => {
 
     console.log('🔍 Esquema de funciones para OpenAI:', JSON.stringify(functions, null, 2));
 
-    // 3. NUEVA ORQUESTACIÓN CON SISTEMA DE AGENTES
-    // Vizta delega trabajo a Laura (monitoreo) y Robert (documentos)
-    console.log('🎯 Iniciando orquestación de agentes para consulta...');
+    // 3. NUEVA ORQUESTACIÓN CON REASONING ENGINE DE LAURA
+    // Laura decide herramientas usando su LLM, luego se ejecuta la orquestación
+    console.log('🎯 Iniciando orquestación con Laura\'s reasoning engine...');
     
     const startTime = Date.now();
+    
+    // PASO 1: Laura usa su reasoning engine para decidir herramientas (SIN MEMORIA por ahora)
+    console.log('🧠 Laura analizando consulta con reasoning engine...');
+    const lauraDecision = await agentesService.laura.buildLLMPlan(message, '', {
+      verbose: true, // Activar modo verbose para debugging
+      useMemory: false // DESACTIVAR Laura Memory temporalmente
+    });
+    
+    console.log('🧠 Laura decision:', {
+      tool: lauraDecision.plan?.tool,
+      reasoning: lauraDecision.plan?.reasoning,
+      thought: lauraDecision.thought
+    });
+    
+    // PASO 2: Ejecutar la orquestación con base en la decisión de Laura
     const agentResults = await agentesService.orchestrateQuery(message, req.user, {
       sessionId: chatSessionId,
-      previousMessages: previousMessages
+      previousMessages: previousMessages,
+      lauraDecision: lauraDecision // Pasar la decisión de Laura a la orquestación
     });
     const orchestrationTime = Date.now() - startTime;
 
@@ -327,8 +343,10 @@ router.post('/query', verifyUserAccess, async (req, res) => {
 **CONTEXTO TEMPORAL: ${currentMonth} ${currentYear}**
 
 **TU NUEVO ROL COMO ORQUESTADOR:**
-• Recibes datos PRE-PROCESADOS de tus agentes especializados Laura (monitoreo) y Robert (documentos)
-• Tu trabajo es SINTETIZAR, ANALIZAR y PRESENTAR estos hallazgos de forma clara y accionable
+• Recibes ANÁLISIS COMPLETADOS de tus agentes especializados Laura (monitoreo) y Robert (documentos)
+• Laura ya analizó los datos con IA (Gemini) y te entrega conclusiones finales
+• Tu trabajo es PRESENTAR y COMUNICAR los análisis de Laura, NO re-interpretarlos
+• CONFÍA COMPLETAMENTE en las evaluaciones de relevancia de Laura
 • NO ejecutes herramientas directamente - tus agentes ya trabajaron por ti
 • NO prometas "buscar", "analizar" o "investigar" - ¡YA SE HIZO! Presenta los resultados
 
@@ -337,9 +355,86 @@ router.post('/query', verifyUserAccess, async (req, res) => {
 📚 **Robert** (Orquestador Interno): Gestión de proyectos y documentos del usuario
 
 **RESULTADOS DE LA INVESTIGACIÓN COMPLETADA:**
+
+🔍 **ANÁLISIS COMPLETADO POR LAURA:**
+${agentResults.laura_findings.length > 0 ? 
+  agentResults.laura_findings.map(finding => {
+    // Priorizar análisis de Gemini si está disponible
+    if (finding.findings?.gemini_analysis) {
+      const analysis = finding.findings.gemini_analysis;
+      return `✅ ANÁLISIS INTELIGENTE COMPLETADO
+      
+📊 **RESUMEN EJECUTIVO:** ${analysis.resumen_ejecutivo || 'Datos procesados exitosamente'}
+
+🎯 **RELEVANCIA:** ${analysis.relevancia_para_consulta || 'alta'} - ${analysis.responde_a_consulta ? 'SÍ responde a la consulta' : 'Datos relacionados encontrados'}
+
+📈 **TEMAS PRINCIPALES:** ${Array.isArray(analysis.temas_principales) ? analysis.temas_principales.join(', ') : 'Múltiples temas identificados'}
+
+💭 **SENTIMIENTO GENERAL:** ${analysis.sentimiento_general || 'neutral'}
+
+🔍 **CONTEXTO:** ${analysis.contexto_temporal || 'Análisis de actividad reciente'}
+
+💡 **INSIGHTS CLAVE:** ${Array.isArray(analysis.insights) ? analysis.insights.join(' • ') : 'Múltiples insights identificados'}
+
+📋 **DATOS FUENTE:** ${finding.findings?.recent_activity?.length || finding.findings?.top_posts?.length || 0} tweets analizados`;
+    } 
+    // Fallback si no hay análisis de Gemini
+    else if (finding.findings?.top_posts && finding.findings.top_posts.length > 0) {
+      return `✅ Se encontraron ${finding.findings.top_posts.length} tweets para la consulta\n📊 TWEETS DISPONIBLES PARA ANÁLISIS:\n` + 
+        finding.findings.top_posts.slice(0, 3).map((tweet, idx) => 
+          `${idx+1}. @${tweet.usuario} (${tweet.fecha_tweet}): ${tweet.texto.substring(0, 80)}...`
+        ).join('\n');
+    } else if (finding.findings?.recent_activity && finding.findings.recent_activity.length > 0) {
+      return `✅ Se encontraron ${finding.findings.recent_activity.length} tweets del perfil solicitado\n📊 PERFIL ANALIZADO CON ÉXITO:\n` + 
+        finding.findings.recent_activity.slice(0, 3).map((tweet, idx) => 
+          `${idx+1}. @${tweet.usuario} (${tweet.fecha_tweet}): ${tweet.texto.substring(0, 80)}...`
+        ).join('\n');
+    } else {
+      return `⚠️ Tarea completada pero sin tweets encontrados`;
+    }
+  }).join('\n\n') 
+  : '❌ No se completaron tareas de búsqueda'
+}
+
+🤖 **RESUMEN DE AGENTES:**
+• Laura (Monitoreo Social): ${agentResults.laura_findings.length} tareas completadas
+• Robert (Gestión Documental): ${agentResults.robert_findings.length} tareas completadas
+
+**METADATOS TÉCNICOS (para referencia):**
 ${JSON.stringify(agentResults, null, 2)}
 
-**INSTRUCCIONES CRÍTICAS:**
+**INSTRUCCIONES CRÍTICAS PARA INTERPRETACIÓN DE DATOS:**
+
+🚨 **REGLAS OBLIGATORIAS DE EVALUACIÓN DE ÉXITO:**
+1. Si en la sección "ANÁLISIS COMPLETADO POR LAURA" aparece "✅ ANÁLISIS INTELIGENTE COMPLETADO" → ES UN ÉXITO TOTAL
+2. Si ves "RESUMEN EJECUTIVO" de Laura → HAY DATOS ANALIZADOS PARA PRESENTAR
+3. Si Laura dice "SÍ responde a la consulta" → CONFÍA EN SU EVALUACIÓN
+4. Si Laura completó análisis con Gemini → NUNCA digas "no se encontraron datos"
+5. PRIORITIZA el análisis de Gemini sobre datos crudos → Laura ya interpretó todo
+
+**PARA CONSULTAS DE PERFILES/USUARIOS:**
+- Si detectas que se solicitó información de un USUARIO ESPECÍFICO (por nombre o @handle), Y hay tweets en los resultados, entonces SÍ HAY DATOS VÁLIDOS
+- NUNCA digas "no se logró obtener datos" si hay tweets en la respuesta
+- Para consultas como "extraeme lo que tengas de [nombre]", "busca a [usuario]", o "@handle", SIEMPRE revisa primero si hay tweets antes de evaluar el éxito
+- Si ves tweets con fechas recientes, análisis de sentimiento, o información del perfil, significa que el procesamiento fue EXITOSO
+
+**DETECCIÓN AUTOMÁTICA DE ÉXITO:**
+✅ Busca estos indicadores en ANÁLISIS COMPLETADO POR LAURA:
+• "✅ ANÁLISIS INTELIGENTE COMPLETADO" = ÉXITO TOTAL CONFIRMADO
+• "RESUMEN EJECUTIVO:" = LAURA YA ANALIZÓ LOS DATOS
+• "SÍ responde a la consulta" = LAURA CONFIRMA RELEVANCIA
+• "RELEVANCIA: alta" = DATOS ALTAMENTE RELEVANTES
+• Cualquier análisis de Gemini = PROCESAMIENTO EXITOSO GARANTIZADO
+
+❌ Solo declara "no se encontraron datos" si:
+• Laura: 0 tareas completadas Y
+• No hay "✅ ANÁLISIS INTELIGENTE COMPLETADO" Y
+• La sección dice "❌ No se completaron tareas" Y
+• No hay RESUMEN EJECUTIVO de Laura
+
+🚨 IMPORTANTE: Si hay análisis de Gemini, SIEMPRE hay datos válidos. Nunca sugieras "explorar otros términos".
+
+**INSTRUCCIONES GENERALES:**
 - NUNCA digas "voy a buscar", "procederé a analizar" o "un momento por favor"
 - SIEMPRE comienza con los resultados encontrados: "He analizado...", "Los datos muestran...", "Según la investigación realizada..."
 - Si no hay datos (0 tweets), explica qué se buscó y sugiere términos alternativos
@@ -359,11 +454,11 @@ ${JSON.stringify(agentResults, null, 2)}
 
 **PROCESAMIENTO INTELIGENTE DE RESULTADOS**
 Siempre que recibas datos de una herramienta sigue este flujo:
-1. **Analiza** ¿qué significan los datos?
-2. **Contextualiza** ¿cómo se relacionan con Guatemala y el momento actual?
-3. **Sintetiza** patrones o tendencias detectadas.
-4. **Proyecta** implicaciones futuras o posibles escenarios.
-5. **Recomienda** acciones concretas o próximos pasos.
+1. **Analiza** ¿qué significan los datos?
+2. **Contextualiza** ¿cómo se relacionan con Guatemala y el momento actual?
+3. **Sintetiza** patrones o tendencias detectadas.
+4. **Proyecta** implicaciones futuras o posibles escenarios.
+5. **Recomienda** acciones concretas o próximos pasos.
 
 **FORMATO ADAPTATIVO DE RESPUESTA**
 Detecta la intención del usuario y responde con la estructura más apropiada:
