@@ -26,20 +26,21 @@ try {
 
 // Configuración de servicios externos
 function getExtractorTUrl() {
+  // Verificar variables de entorno específicas primero
   if (process.env.EXTRACTOR_T_URL) {
     return process.env.EXTRACTOR_T_URL;
   }
   
-  // Detectar si estamos en Docker
-  if (process.env.NODE_ENV === 'production' || process.env.DOCKER_ENV === 'true') {
-    // En Docker, usar host.docker.internal o la IP del host
-    return process.env.DOCKER_HOST_IP 
-      ? `http://${process.env.DOCKER_HOST_IP}:8000`
-      : 'http://host.docker.internal:8000';
-  }
+  // Detectar entorno automáticamente
+  const isProduction = process.env.NODE_ENV === 'production';
   
-  // En desarrollo local
-  return 'http://localhost:8000';
+  if (isProduction) {
+    // PRODUCCIÓN: Usar URL externa
+    return process.env.EXTRACTORT_URL || 'https://api.standatpd.com';
+  } else {
+    // DESARROLLO: Usar contenedor local con IP del host
+    return process.env.EXTRACTORT_LOCAL_URL || 'http://127.0.0.1:8000';
+  }
 }
 
 const EXTRACTOR_T_URL = getExtractorTUrl();
@@ -555,6 +556,40 @@ const AVAILABLE_TOOLS = {
       'Referencias y fuentes de datos',
       'Histórico ordenado por fecha de creación'
     ]
+  },
+  
+  resolve_twitter_handle: {
+    name: 'resolve_twitter_handle',
+    description: 'Resuelve nombres de personas a sus handles de Twitter/X usando búsqueda dinámica con GPT-4o y guardado automático en PulsePolitics',
+    parameters: {
+      name: {
+        type: 'string',
+        required: true,
+        description: 'Nombre de la persona a buscar (ej: "Bernardo Arévalo", "Sandra Torres")'
+      },
+      context: {
+        type: 'string',
+        required: false,
+        description: 'Contexto adicional sobre la persona (cargo, institución, etc.)'
+      },
+      sector: {
+        type: 'string',
+        required: false,
+        description: 'Sector específico: gobierno, politica, medios, deportes, etc.'
+      }
+    },
+    service_endpoint: '/api/resolve_twitter_handle',
+    service_url: 'internal',
+    category: 'social_media',
+    usage_credits: 2,
+    features: [
+      'Búsqueda 100% dinámica - sin usuarios hardcodeados',
+      'Resolución inteligente usando GPT-4o con conocimiento actualizado y mayor precisión',
+      'Guardado automático de handles resueltos en PulsePolitics',
+      'Contexto guatemalteco especializado con casos específicos',
+      'Aprendizaje continuo mediante almacenamiento de descubrimientos',
+      'Base de conocimiento que crece automáticamente'
+    ]
   }
 };
 
@@ -679,6 +714,13 @@ async function executeTool(toolName, parameters = {}, user = null) {
       case 'project_decisions':
         return await executeProjectDecisions(
           parameters.project_id,
+          user
+        );
+      case 'resolve_twitter_handle':
+        return await executeResolveTwitterHandle(
+          parameters.name,
+          parameters.context || '',
+          parameters.sector || '',
           user
         );
       default:
@@ -1637,6 +1679,214 @@ async function getServerStatus() {
 }
 
 /**
+ * Ejecuta la herramienta resolve_twitter_handle: resuelve nombres a handles de Twitter
+ * @param {string} name - Nombre de la persona a buscar
+ * @param {string} context - Contexto adicional
+ * @param {string} sector - Sector específico
+ * @param {Object} user - Usuario autenticado
+ * @returns {Object} Resultado de la resolución del handle
+ */
+async function executeResolveTwitterHandle(name, context = '', sector = '', user = null) {
+  try {
+    console.log(`🔍 Ejecutando resolve_twitter_handle MCP: "${name}" (contexto: "${context}", sector: "${sector}")`);
+    
+    if (!user || !user.id) {
+      throw new Error('Usuario autenticado requerido para ejecutar resolve_twitter_handle');
+    }
+    
+    // PASO 1: Intentar primero con Perplexity (más actualizado)
+    console.log(`🔍 Paso 1: Buscando handle con Perplexity: "${name}"`);
+    
+    const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
+    
+    if (PERPLEXITY_API_KEY) {
+      try {
+        const perplexityResult = await searchHandleWithPerplexity(name, context, sector);
+        if (perplexityResult.success) {
+          console.log(`✅ Handle encontrado con Perplexity: "${name}" → @${perplexityResult.handle}`);
+          
+          // Guardar en PulsePolitics
+          await saveHandleToPulsePolitics(name, perplexityResult.handle, context, sector, 'perplexity_search');
+          
+          return {
+            success: true,
+            resolved_username: perplexityResult.handle,
+            confidence: 0.9,
+            method: 'perplexity_search',
+            original_name: name,
+            context_provided: context,
+            sector_provided: sector,
+            raw_response: perplexityResult.raw_response,
+            saved_to_pulsepolitics: true
+          };
+        }
+      } catch (error) {
+        console.log(`⚠️ Perplexity falló, intentando con GPT-4o: ${error.message}`);
+      }
+    }
+    
+    // PASO 2: Usar web search para verificar información real
+    console.log(`🔍 Paso 2: Buscando handle con web search verificado: "${name}"`);
+    
+    try {
+      const webSearchResult = await searchHandleWithWebSearch(name, context, sector);
+      if (webSearchResult.success) {
+        console.log(`✅ Handle encontrado con web search: "${name}" → @${webSearchResult.handle}`);
+        
+        // Guardar en PulsePolitics
+        await saveHandleToPulsePolitics(name, webSearchResult.handle, context, sector, 'web_search');
+        
+        return {
+          success: true,
+          resolved_username: webSearchResult.handle,
+          confidence: 0.85,
+          method: 'web_search',
+          original_name: name,
+          context_provided: context,
+          sector_provided: sector,
+          raw_response: webSearchResult.raw_response,
+          saved_to_pulsepolitics: true
+        };
+      }
+    } catch (error) {
+      console.log(`⚠️ Web search falló, usando GPT-4o como último recurso: ${error.message}`);
+    }
+    
+    // PASO 3: Fallback a GPT-4o SOLO como último recurso (con advertencia)
+    console.log(`🔍 Paso 3: ÚLTIMO RECURSO - GPT-4o (puede no ser preciso): "${name}"`);
+    
+    const searchQuery = `ADVERTENCIA: Este es un último recurso. Busca información sobre "${name}"${context ? ` (${context})` : ''}${sector ? ` del sector ${sector}` : ''} en Guatemala y su posible handle de Twitter/X. Responde SOLO el @handle si tienes certeza, o NONE si no estás seguro.`;
+    
+    const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+    
+    if (!OPENAI_API_KEY) {
+      throw new Error('OPENAI_API_KEY no configurada para resolución de handles');
+    }
+
+    const payload = {
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: `Eres un investigador especializado en encontrar handles oficiales de Twitter/X de personas públicas, especialmente de Guatemala.
+
+CASOS ESPECÍFICOS IMPORTANTES:
+- Bernardo Arévalo de León (Presidente de Guatemala 2024-2028): Su handle oficial es @BArevalodeLeon
+- Es importante ser preciso con los handles oficiales de políticos guatemaltecos
+
+INSTRUCCIONES PARA BÚSQUEDA DINÁMICA:
+1. Usa tu conocimiento actualizado para buscar el handle oficial de la persona
+2. Para políticos guatemaltecos, verifica cargos actuales (2024-2025)
+3. Prioriza cuentas verificadas y oficiales
+4. Considera variaciones del nombre (nombres completos, apodos, títulos)
+5. Si encuentras el handle oficial, responde EXACTAMENTE: @handle
+6. Si NO existe cuenta o no puedes encontrarla, responde EXACTAMENTE: NONE
+7. NO agregues explicaciones, solo el handle o NONE
+
+CONTEXTO GEOGRÁFICO: Guatemala, Centroamérica
+ENFOQUE: Personas públicas, políticos, funcionarios, figuras relevantes
+FORMATO RESPUESTA: @handle o NONE (exactamente así, sin texto adicional)`
+        },
+        {
+          role: 'user',
+          content: searchQuery
+        }
+      ],
+      temperature: 0.1,
+      max_tokens: 20
+    };
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Error en API de OpenAI: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      throw new Error('Respuesta inválida de OpenAI API');
+    }
+
+    let rawResponse = data.choices[0].message.content?.trim() || '';
+    console.log(`📝 Respuesta de GPT-4o: "${rawResponse}"`);
+    
+    // Extraer handle de la respuesta
+    let resolvedHandle = null;
+    let confidence = 0.5;
+    
+    if (rawResponse.toUpperCase() === 'NONE' || rawResponse.includes('NONE')) {
+      console.log(`❌ No se encontró handle de Twitter para "${name}"`);
+      return {
+        success: false,
+        error: `No se encontró cuenta de Twitter para "${name}"`,
+        resolved_username: null,
+        confidence: 0,
+        method: 'gpt4o_search'
+      };
+    }
+    
+    // Extraer handle usando regex mejorado
+    const handlePattern = /@([a-zA-Z0-9_]+)/;
+    const urlPattern = /(?:twitter\.com|x\.com)\/([a-zA-Z0-9_]+)/i;
+    
+    let handleMatch = rawResponse.match(handlePattern);
+    if (!handleMatch) {
+      handleMatch = rawResponse.match(urlPattern);
+    }
+    
+    if (handleMatch) {
+      resolvedHandle = handleMatch[1];
+      confidence = 0.95; // Mayor confianza con GPT-4o 
+      console.log(`✅ Handle resuelto con GPT-4o: "${name}" → @${resolvedHandle}`);
+      
+      // GUARDAR AUTOMÁTICAMENTE EN PULSEPOLITICS
+      await saveHandleToPulsePolitics(name, resolvedHandle, context, sector, 'gpt4o_search');
+      
+    } else {
+      console.log(`⚠️ No se pudo extraer handle de: "${rawResponse}"`);
+      return {
+        success: false,
+        error: `No se pudo extraer handle válido de la respuesta`,
+        resolved_username: null,
+        confidence: 0,
+        method: 'gpt4o_search',
+        raw_response: rawResponse
+      };
+    }
+    
+    return {
+      success: true,
+      resolved_username: resolvedHandle,
+      confidence: confidence,
+      method: 'gpt4o_search',
+      original_name: name,
+      context_provided: context,
+      sector_provided: sector,
+      raw_response: rawResponse,
+      saved_to_pulsepolitics: true
+    };
+
+  } catch (error) {
+    console.error(`❌ Error ejecutando resolve_twitter_handle MCP:`, error);
+    return {
+      success: false,
+      error: error.message,
+      resolved_username: null,
+      confidence: 0,
+      method: 'error'
+    };
+  }
+}
+
+/**
  * Obtiene tweets recientes de un usuario específico usando Nitter CON ANÁLISIS DE SENTIMIENTO
  * @param {string} username - Nombre de usuario sin @
  * @param {number} limit - Número máximo de tweets
@@ -1748,6 +1998,257 @@ async function executeNitterProfile(username, limit = 10, include_retweets = fal
   }
 }
 
+/**
+ * Buscar handle usando Perplexity con capacidades web
+ */
+async function searchHandleWithPerplexity(name, context = '', sector = '') {
+  try {
+    const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
+    
+    const searchQuery = `Busca el handle oficial de Twitter/X de "${name}"${context ? ` (${context})` : ''}${sector ? ` del sector ${sector}` : ''} en Guatemala. Verifica en fuentes oficiales, sitios web gubernamentales, medios de comunicación y perfiles verificados de Twitter/X. Es CRÍTICO que sea el handle REAL y ACTUAL.`;
+    
+    const payload = {
+      model: 'sonar',
+      messages: [
+        {
+          role: 'system',
+          content: `Eres un investigador especializado en encontrar handles REALES y ACTUALES de Twitter/X de figuras públicas guatemaltecas.
+
+INSTRUCCIONES CRÍTICAS:
+1. Busca ÚNICAMENTE en fuentes oficiales: sitios web gubernamentales, medios verificados, perfiles oficiales de Twitter/X
+2. Verifica que la cuenta esté ACTIVA y sea OFICIAL (verificada si es posible)
+3. Para políticos: busca en sitios oficiales del gobierno, comunicados de prensa oficiales
+4. Para el Presidente de Guatemala: busca en el sitio presidencial oficial (presidencia.gob.gt)
+5. Verifica que el handle coincida con el nombre real de la persona
+6. Si encuentras el handle OFICIAL y VERIFICADO, responde EXACTAMENTE: @handle
+7. Si NO encuentras una cuenta oficial verificable, responde EXACTAMENTE: NONE
+8. NO inventes handles, NO uses aproximaciones
+
+FORMATO: @handle o NONE (sin explicaciones)`
+        },
+        {
+          role: 'user',
+          content: searchQuery
+        }
+      ],
+      temperature: 0.0,
+      max_tokens: 30
+    };
+
+    const response = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Perplexity API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const rawResponse = data.choices[0].message.content?.trim() || '';
+    
+    if (rawResponse.toUpperCase() === 'NONE' || rawResponse.includes('NONE')) {
+      return { success: false, raw_response: rawResponse };
+    }
+    
+    const handlePattern = /@([a-zA-Z0-9_]+)/;
+    const handleMatch = rawResponse.match(handlePattern);
+    
+    if (handleMatch) {
+      return {
+        success: true,
+        handle: handleMatch[1],
+        raw_response: rawResponse
+      };
+    }
+    
+    return { success: false, raw_response: rawResponse };
+    
+  } catch (error) {
+    console.error(`❌ Error en búsqueda Perplexity:`, error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Buscar handle usando múltiples estrategias de búsqueda web
+ */
+async function searchHandleWithWebSearch(name, context = '', sector = '') {
+  try {
+    console.log(`🔍 Iniciando búsqueda web avanzada para: "${name}"`);
+    
+    // ESTRATEGIA 1: Búsqueda con múltiples términos específicos
+    const searchQueries = [
+      `"${name}" Twitter Guatemala @`,
+      `"${name}" X.com Guatemala perfil`,
+      `${name} Guatemala twitter handle @`,
+      `"${name}" cuenta oficial Twitter Guatemala`,
+      `${name} Guatemala redes sociales @`
+    ];
+    
+    for (const query of searchQueries) {
+      console.log(`🔍 Probando query: ${query}`);
+      
+      const result = await performPerplexityWebSearch(query, name);
+      if (result.success) {
+        console.log(`✅ Handle encontrado con query "${query}": @${result.handle}`);
+        return result;
+      }
+      
+      // Esperar 500ms entre queries para evitar rate limiting
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    // ESTRATEGIA 2: Búsqueda por contexto profesional si está disponible
+    if (context || sector) {
+      const contextQuery = `"${name}"${context ? ` ${context}` : ''}${sector ? ` ${sector}` : ''} Guatemala Twitter @`;
+      console.log(`🔍 Probando query contextual: ${contextQuery}`);
+      
+      const contextResult = await performPerplexityWebSearch(contextQuery, name);
+      if (contextResult.success) {
+        console.log(`✅ Handle encontrado con contexto: @${contextResult.handle}`);
+        return contextResult;
+      }
+    }
+    
+    return { success: false, error: 'No se encontró handle válido después de múltiples intentos' };
+    
+  } catch (error) {
+    console.error(`❌ Error en web search:`, error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Realizar búsqueda con Perplexity optimizada para web search
+ */
+async function performPerplexityWebSearch(query, originalName) {
+  const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
+  
+  if (!PERPLEXITY_API_KEY) {
+    throw new Error('PERPLEXITY_API_KEY no disponible');
+  }
+  
+  const payload = {
+    model: 'sonar',
+    messages: [
+      {
+        role: 'system',
+        content: `Eres un investigador especializado en encontrar información verificable de Twitter/X.
+
+TAREA: Buscar el handle oficial de Twitter/X de la persona mencionada.
+
+PROCESO:
+1. Busca en fuentes web actuales (noticias, perfiles oficiales, sitios web)
+2. Verifica que sea la persona correcta comparando información
+3. Extrae ÚNICAMENTE el @handle si lo encuentras en fuentes confiables
+4. Si no encuentras información verificable, responde NONE
+
+REGLAS CRÍTICAS:
+- Solo responde si encuentras el handle en fuentes web reales
+- NO inventes ni adivines handles
+- NO uses información que no puedas verificar
+- Formato: @handle o NONE (sin explicaciones)`
+      },
+      {
+        role: 'user',
+        content: query
+      }
+    ],
+    temperature: 0.0,
+    max_tokens: 20
+  };
+
+  const response = await fetch('https://api.perplexity.ai/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    throw new Error(`Perplexity API error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const rawResponse = data.choices[0].message.content?.trim() || '';
+  
+  console.log(`📝 Perplexity response: "${rawResponse}"`);
+  
+  // Procesar respuesta
+  if (rawResponse.toUpperCase() === 'NONE' || rawResponse.includes('NONE') || !rawResponse.includes('@')) {
+    return { success: false, error: 'No se encontró handle válido' };
+  }
+  
+  // Extraer handle
+  const handlePattern = /@([a-zA-Z0-9_]+)/;
+  const handleMatch = rawResponse.match(handlePattern);
+  
+  if (handleMatch) {
+    const foundHandle = handleMatch[1];
+    
+    // Verificación básica: el handle debe tener sentido para el nombre
+    const nameParts = originalName.toLowerCase().split(' ');
+    const handleLower = foundHandle.toLowerCase();
+    
+    // Al menos una parte del nombre debe estar relacionada con el handle
+    const isReasonable = nameParts.some(part => 
+      handleLower.includes(part) || 
+      part.includes(handleLower.substring(0, 4)) ||
+      // Para nombres compuestos como "Karin Herrera" → "KarinHerreraGT"
+      handleLower.includes(part.substring(0, 4))
+    );
+    
+    if (isReasonable) {
+      return {
+        success: true,
+        handle: foundHandle,
+        raw_response: rawResponse,
+        query_used: query
+      };
+    } else {
+      console.log(`⚠️ Handle "${foundHandle}" no parece relacionado con "${originalName}"`);
+      return { success: false, error: 'Handle encontrado no relacionado con el nombre' };
+    }
+  }
+  
+  return { success: false, error: 'No se pudo extraer handle de la respuesta' };
+}
+
+/**
+ * Guardar handle en PulsePolitics
+ */
+async function saveHandleToPulsePolitics(name, handle, context = '', sector = '', method = 'unknown') {
+  try {
+    console.log(`💾 Guardando handle resuelto en PulsePolitics: "${name}" → @${handle}`);
+    
+    const lauraMemoryClient = require('./lauraMemoryClient');
+    
+    if (lauraMemoryClient) {
+      const saveResult = await lauraMemoryClient.saveUserDiscovery(
+        name,
+        handle,
+        `${context ? context + ' - ' : ''}${sector ? sector + ' - ' : ''}Resuelto con ${method}`,
+        sector || 'general'
+      );
+      
+      if (saveResult) {
+        console.log(`✅ Handle guardado exitosamente en PulsePolitics: "${name}" → @${handle}`);
+      } else {
+        console.log(`⚠️ No se pudo guardar en PulsePolitics (servicio no disponible)`);
+      }
+    }
+  } catch (saveError) {
+    console.warn(`⚠️ Error guardando en PulsePolitics:`, saveError.message);
+  }
+}
+
 module.exports = {
   listAvailableTools,
   getToolInfo,
@@ -1757,6 +2258,7 @@ module.exports = {
   executeUserProjects,
   executeUserCodex,
   executeProjectDecisions,
+  executeResolveTwitterHandle,
   executeNitterProfile,
   getServerStatus,
   expandSearchTerms,

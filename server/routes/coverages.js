@@ -500,7 +500,7 @@ router.post('/from-card', verifyUserAccess, async (req, res) => {
             coveragesToCreate.push({
                 coverage_type: 'pais',
                 name: card.pais,
-                parent_name: null,
+                parent_name: '',
                 description: `Detectado desde: ${card.discovery || card.description || 'Card capturada'}`,
                 relevance: 'high'
             });
@@ -511,7 +511,7 @@ router.post('/from-card', verifyUserAccess, async (req, res) => {
             coveragesToCreate.push({
                 coverage_type: 'ciudad',
                 name: card.city,
-                parent_name: card.department || null,
+                parent_name: card.department || '',
                 description: `Detectado desde: ${card.discovery || card.description || 'Card capturada'}`,
                 relevance: 'medium'
             });
@@ -642,7 +642,7 @@ router.put('/:id', verifyUserAccess, async (req, res) => {
         // Preparar datos de actualización
         const updateData = {};
         if (name !== undefined) updateData.name = name.trim();
-        if (parent_name !== undefined) updateData.parent_name = parent_name?.trim() || null;
+        if (parent_name !== undefined) updateData.parent_name = parent_name?.trim() || '';
         if (description !== undefined) updateData.description = description?.trim() || null;
         if (relevance !== undefined) updateData.relevance = relevance;
         if (coverage_status !== undefined) updateData.coverage_status = coverage_status;
@@ -931,6 +931,7 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
                     city: normalized.city,
                     department: normalized.department,
                     pais: normalized.pais,
+                    coordinates: normalized.coordinates, // ✅ GUARDAR COORDENADAS
                     _detection_method: normalized.detection_method || 'mapsAgent',
                     _confidence: normalized.confidence || 0.95
                 };
@@ -999,7 +1000,7 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
                     coveragesToCreate.push({
                         coverage_type: 'pais',
                     name: countryName,
-                        parent_name: null,
+                        parent_name: '', // ✅ STRING VACÍO EN LUGAR DE NULL
                         relevance: 'high',
                     cards: cardsForCountry,
                     themes
@@ -1067,15 +1068,48 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
                         }
                     });
 
-                    // VERIFICAR PRIMERO SI EXISTE para determinar si es nueva o actualización
-                    const { data: existingCoverage } = await supabase
-                        .from('project_coverages')
-                        .select('id')
-                        .eq('project_id', project_id)
-                        .eq('coverage_type', coverageData.coverage_type)
-                        .eq('name', coverageData.name)
-                        .eq('parent_name', coverageData.parent_name || null)
-                        .maybeSingle(); // maybeSingle no falla si no encuentra nada
+                    // VERIFICACIÓN INTELIGENTE DE DUPLICADOS GEOGRÁFICOS
+                    // Para "Guatemala", verificar si ya existe como país, departamento o ciudad
+                    let existingCoverage = null;
+                    
+                    if (coverageData.name === 'Guatemala') {
+                        // Buscar cualquier tipo de cobertura de Guatemala en este proyecto
+                        const { data: guatemalaCoverages } = await supabase
+                            .from('project_coverages')
+                            .select('id, coverage_type, name, parent_name')
+                            .eq('project_id', project_id)
+                            .eq('name', 'Guatemala');
+                        
+                        if (guatemalaCoverages && guatemalaCoverages.length > 0) {
+                            // Lógica de prioridad: país > departamento > ciudad
+                            if (coverageData.coverage_type === 'pais') {
+                                // Si estamos creando país, usar cualquier Guatemala existente
+                                existingCoverage = guatemalaCoverages[0];
+                            } else if (coverageData.coverage_type === 'departamento') {
+                                // Si estamos creando departamento, buscar departamento o país existente
+                                existingCoverage = guatemalaCoverages.find(c => 
+                                    c.coverage_type === 'departamento' || c.coverage_type === 'pais'
+                                ) || guatemalaCoverages[0];
+                            } else if (coverageData.coverage_type === 'ciudad') {
+                                // Si estamos creando ciudad, buscar ciudad, departamento o país existente
+                                existingCoverage = guatemalaCoverages.find(c => 
+                                    c.coverage_type === 'ciudad' || c.coverage_type === 'departamento' || c.coverage_type === 'pais'
+                                ) || guatemalaCoverages[0];
+                            }
+                        }
+                    } else {
+                        // Para cualquier otro lugar, usar la verificación original
+                        const { data: regularCoverage } = await supabase
+                            .from('project_coverages')
+                            .select('id')
+                            .eq('project_id', project_id)
+                            .eq('coverage_type', coverageData.coverage_type)
+                            .eq('name', coverageData.name)
+                            .eq('parent_name', coverageData.parent_name || '')
+                            .maybeSingle();
+                        
+                        existingCoverage = regularCoverage;
+                    }
 
                     const isNew = !existingCoverage;
 
@@ -1091,11 +1125,11 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
                             project_id,
                             coverage_type: coverageData.coverage_type,
                             name: coverageData.name,
-                            parent_name: coverageData.parent_name,
+                            parent_name: coverageData.parent_name || '', // ✅ CONVERTIR NULL A STRING VACÍO
                             relevance: coverageData.relevance,
                             coordinates: coordinatesFromCards || null, // ✅ AGREGAR COORDENADAS
                             description: `Detectado automáticamente desde ${coverageData.cards.length} hallazgo(s) en ${coverageData.themes.length} tema(s): ${coverageData.themes.join(', ')}`,
-                            detection_source: 'mapsAgent',
+                            detection_source: 'ai_detection',
                             confidence_score: 0.90,
                             source_card_id: representativeCard.id,
                             discovery_context: JSON.stringify(themeBreakdown), // Guardar estructura completa

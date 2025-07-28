@@ -6,7 +6,7 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=development
       - PORT=8080
       - DOCKER_ENV=true
     env_file:
@@ -14,6 +14,8 @@ services:
     volumes:
       - logs:/app/logs
       - transcriptions:/tmp
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - extractorw-network
     dns:

@@ -166,7 +166,7 @@ async function testUpsertBehavior() {
         name: 'Guatemala',
         parent_name: null,
         description: 'Prueba de UPSERT',
-        detection_source: 'test',
+        detection_source: 'manual',
         confidence_score: 0.95
     };
 

@@ -495,8 +495,8 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
 
   if (initialData.length === 0) return [];
 
-  // 🌎 NORMALIZACIÓN GEOGRÁFICA CON IA EN LOTE
-  console.log(`🔍 Normalizando geografía con IA para ${initialData.length} hallazgos...`);
+  // 🌎 NORMALIZACIÓN GEOGRÁFICA CON COORDENADAS EN LOTE (Sistema actualizado)
+  console.log(`🔍 Normalizando geografía con coordenadas para ${initialData.length} hallazgos...`);
   
   try {
     // Extraer información geográfica para normalización
@@ -506,42 +506,81 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
       pais: card.pais
     }));
 
-    // Importar y usar función de lote
-    const { batchNormalizeGeography } = require('../utils/geographic-ai-detector');
-    const normalizedGeoData = await batchNormalizeGeography(geoData);
+    // ✅ USAR SISTEMA ACTUALIZADO: Mismo que en coverages con coordenadas
+    const { batchNormalizeGeographyWithCoordinates } = require('../services/mapsAgent');
+    const normalizedGeoData = await batchNormalizeGeographyWithCoordinates(geoData);
 
-    // Aplicar resultados normalizados a las cards
-    const insertData = initialData.map((card, index) => {
-      const normalized = normalizedGeoData[index];
-      if (normalized) {
-        return {
-          ...card,
-          city: normalized.city,
-          department: normalized.department,
-          pais: normalized.pais,
-          // Agregar metadatos de detección como campos internos (no se guardan en DB)
-          _detection_method: normalized.detection_method,
-          _confidence: normalized.confidence,
-          _reasoning: normalized.reasoning
-        };
+    // ✅ MANEJAR MÚLTIPLES UBICACIONES: Puede haber más resultados que inputs originales
+    const insertData = [];
+    
+    // Agrupar resultados normalizados por índice original
+    const resultsByOriginalIndex = {};
+    normalizedGeoData.forEach(normalized => {
+      const originalIndex = normalized._originalIndex || 0;
+      if (!resultsByOriginalIndex[originalIndex]) {
+        resultsByOriginalIndex[originalIndex] = [];
       }
-      return card;
+      resultsByOriginalIndex[originalIndex].push(normalized);
+    });
+    
+    // Crear cards: una card por cada ubicación normalizada
+    initialData.forEach((card, index) => {
+      const normalizedForThisCard = resultsByOriginalIndex[index] || [{}];
+      
+      normalizedForThisCard.forEach((normalized, subIndex) => {
+        const cardWithGeo = {
+          ...card,
+          city: normalized.city || card.city,
+          department: normalized.department || card.department,
+          pais: normalized.pais || card.pais,
+          coordinates: normalized.coordinates || null, // ✅ INCLUIR COORDENADAS
+          // Agregar metadatos de detección como campos internos (no se guardan en DB)
+          _detection_method: normalized.detection_method || 'original',
+          _confidence: normalized.confidence || 'medium',
+          _reasoning: normalized.reasoning || 'Sin normalización geográfica',
+          _geocoded: normalized.geocoded || false,
+          _isMultiLocation: normalized._isMultiLocation || false,
+          _multiType: normalized._multiType || null,
+          _locationIndex: subIndex // Para diferenciar múltiples ubicaciones de la misma card
+        };
+        
+        insertData.push(cardWithGeo);
+      });
     });
 
-    console.log(`✅ Normalización geográfica completada para ${insertData.length} hallazgos`);
+    console.log(`✅ Normalización geográfica completada para ${insertData.length} hallazgos (incluyendo múltiples ubicaciones)`);
     
     // Log resumen de detecciones
     const detectionStats = {
-      ai_detections: insertData.filter(c => c._detection_method === 'gemini_ai').length,
-      manual_fallback: insertData.filter(c => c._detection_method === 'manual_fallback').length,
-      original: insertData.filter(c => c._detection_method === 'original').length
+      original_cards: initialData.length,
+      final_cards: insertData.length,
+      expansion_factor: (insertData.length / initialData.length).toFixed(2),
+      mapsAgent_detections: insertData.filter(c => c._detection_method === 'mapsAgent').length,
+      mapsAgent_multi_detections: insertData.filter(c => c._detection_method === 'mapsAgent_multi').length,
+      ai_detections: insertData.filter(c => c._detection_method === 'ai').length,
+      manual_detections: insertData.filter(c => c._detection_method === 'manual').length,
+      geocoded_locations: insertData.filter(c => c._geocoded).length,
+      with_coordinates: insertData.filter(c => c.coordinates).length,
+      multi_location_cards: insertData.filter(c => c._isMultiLocation).length,
+      multi_departments: insertData.filter(c => c._multiType === 'departments').length,
+      multi_municipalities: insertData.filter(c => c._multiType === 'municipalities').length
     };
     
     console.log(`📊 Estadísticas de detección:`, detectionStats);
 
-    // Limpiar metadatos antes de insertar
+    // Limpiar metadatos antes de insertar (manteniendo coordinates)
     const cleanInsertData = insertData.map(card => {
-      const { _detection_method, _confidence, _reasoning, ...cleanCard } = card;
+      const { 
+        _detection_method, 
+        _confidence, 
+        _reasoning, 
+        _geocoded, 
+        _isMultiLocation, 
+        _multiType, 
+        _locationIndex, 
+        _originalIndex,
+        ...cleanCard 
+      } = card;
       return cleanCard;
     });
 
@@ -564,7 +603,7 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
           .eq('project_id', projectId)
           .eq('coverage_type', 'ciudad')
           .eq('name', city.trim())
-          .eq('parent_name', department ? department.trim() : null)
+          .eq('parent_name', department ? department.trim() : '')
           .single();
         coverageRow = data || null;
         if (!coverageRow && department) {
@@ -575,7 +614,7 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
             name: city.trim(),
             parent_name: department.trim(),
             description: `Cobertura municipal generada al crear tarjeta capturado`,
-            detection_source: 'capturado_auto',
+            detection_source: 'ai_detection',
             confidence_score: 0.9,
             local_name: 'Municipio'
           };
@@ -604,7 +643,7 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
             name: department.trim(),
             parent_name: pais || 'Guatemala',
             description: `Cobertura departamental generada al crear tarjeta capturado`,
-            detection_source: 'capturado_auto',
+            detection_source: 'ai_detection',
             confidence_score: 0.85,
             local_name: 'Departamento'
           };
@@ -632,7 +671,7 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
             coverage_type: 'pais',
             name: pais.trim(),
             description: `Cobertura nacional generada al crear tarjeta capturado`,
-            detection_source: 'capturado_auto',
+            detection_source: 'ai_detection',
             confidence_score: 1.0,
             local_name: 'País'
           };
@@ -721,7 +760,7 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
           .eq('project_id', projectId)
           .eq('coverage_type', 'ciudad')
           .eq('name', city.trim())
-          .eq('parent_name', department ? department.trim() : null)
+          .eq('parent_name', department ? department.trim() : '')
           .single();
         coverageRow = data || null;
         if (!coverageRow && department) {
@@ -731,7 +770,7 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
             name: city.trim(),
             parent_name: department.trim(),
             description: `Cobertura municipal generada al crear tarjeta capturado (fallback)`,
-            detection_source: 'capturado_auto',
+            detection_source: 'ai_detection',
             confidence_score: 0.9,
             local_name: 'Municipio'
           };
@@ -760,7 +799,7 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
             name: department.trim(),
             parent_name: pais || 'Guatemala',
             description: `Cobertura departamental generada al crear tarjeta capturado (fallback)`,
-            detection_source: 'capturado_auto',
+            detection_source: 'ai_detection',
             confidence_score: 0.85,
             local_name: 'Departamento'
           };
@@ -788,7 +827,7 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
             coverage_type: 'pais',
             name: pais.trim(),
             description: `Cobertura nacional generada al crear tarjeta capturado (fallback)`,
-            detection_source: 'capturado_auto',
+            detection_source: 'ai_detection',
             confidence_score: 1.0,
             local_name: 'País'
           };

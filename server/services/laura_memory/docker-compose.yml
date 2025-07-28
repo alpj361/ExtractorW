@@ -6,7 +6,10 @@ services:
     environment:
       - ZEP_API_KEY=${ZEP_API_KEY}
       - ZEP_URL=${ZEP_URL:-https://api.getzep.com}
-      - LAURA_SESSION_ID=${LAURA_SESSION_ID:-public/global}
+      - LAURA_SESSION_ID=${LAURA_SESSION_ID:-laura_memory_session}
+      - PULSE_POLITICS_SESSION_ID=${PULSE_POLITICS_SESSION_ID:-group:pulsepolitics}
+      - USERHANDLES_SESSION_ID=${USERHANDLES_SESSION_ID:-userhandles_shared_session}
+      - USERHANDLES_USER_ID=${USERHANDLES_USER_ID:-pulse_politics_system}
       - FLASK_ENV=production
     volumes:
       - ./tests/cassettes:/app/tests/cassettes

@@ -17,6 +17,13 @@ class LauraMemorySettings(BaseSettings):
     zep_url: str = Field("https://api.getzep.com", env="ZEP_URL")
     session_id: str = Field("laura_memory_session", env="LAURA_SESSION_ID")
     
+    # Configuración para PulsePolitics (memoria compartida de grupo)
+    pulsepolitics_session_id: str = Field("group:pulsepolitics", env="PULSE_POLITICS_SESSION_ID")
+    
+    # Configuración para UserHandles (memoria compartida de grupo para handles de usuarios)
+    userhandles_session_id: str = Field("userhandles_shared_session", env="USERHANDLES_SESSION_ID")
+    userhandles_user_id: str = Field("pulse_politics_system", env="USERHANDLES_USER_ID")
+    
     # Configuración adicional
     memory_enabled: bool = Field(True, env="LAURA_MEMORY_ENABLED")
     memory_url: str = Field("http://localhost:5001", env="LAURA_MEMORY_URL")

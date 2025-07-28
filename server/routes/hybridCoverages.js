@@ -95,7 +95,7 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
                     expandedLocations.push({
                         ...loc,
                         name: p.name,
-                        parent_name: p.parent || null,
+                        parent_name: p.parent || '',
                         details: {
                             ...loc.details,
                             hierarchy_level: p.type === 'pais' ? 1 : p.type === 'departamento' ? 2 : 3
@@ -155,13 +155,13 @@ router.post('/auto-detect', verifyUserAccess, async (req, res) => {
                         project_id,
                         coverage_type,
                         name: location.name,
-                        parent_name: location.parent_name || null,
+                        parent_name: location.parent_name || '',
                         description: `Detectado automáticamente: ${location.name}`,
                         relevance: location.combined_confidence >= 0.8 ? 'high' : 
                                   location.combined_confidence >= 0.6 ? 'medium' : 'low',
                         coordinates: location.coordinates || null,
                         tags: [location.detection_method, 'hybrid_detection'],
-                        detection_source: 'hybrid_ai',
+                                                    detection_source: 'ai_detection',
                         confidence_score: location.combined_confidence,
                         coverage_status: 'active',
                         source_card_id: source_info.card_id || null,
@@ -439,7 +439,7 @@ router.get('/project/:project_id', verifyUserAccess, async (req, res) => {
                 low: processedCoverages.filter(c => c.relevance === 'low').length
             },
             by_detection_source: {
-                hybrid_ai: processedCoverages.filter(c => c.detection_source === 'hybrid_ai').length,
+                hybrid_ai: processedCoverages.filter(c => c.detection_source === 'ai_detection').length,
                 manual: processedCoverages.filter(c => c.detection_source === 'manual').length,
                 ai_detection: processedCoverages.filter(c => c.detection_source === 'ai_detection').length
             },

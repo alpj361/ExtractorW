@@ -17,15 +17,40 @@ const supabase = require('../utils/supabase');
  */
 function formatChatResponse(response, toolResult = null) {
   try {
+    // Si es un objeto de respuesta modular, mantener su estructura
+    if (typeof response === 'object' && response !== null) {
+      // Si ya tiene la estructura correcta, devolverlo como está
+      if (response.response && response.response.message) {
+        return response;
+      }
+      
+      // Si es una respuesta directa, darle la estructura correcta
+      if (response.message) {
+        return {
+          success: true,
+          response: {
+            agent: response.agent || 'Vizta',
+            message: response.message,
+            type: response.type || 'chat_response',
+            timestamp: response.timestamp || new Date().toISOString()
+          },
+          metadata: response.metadata || {}
+        };
+      }
+    }
+
+    // Si es string, aplicar el formateo
+    let formattedText = response;
+
     // Limpiar respuesta muy larga
-    if (response.length > 2000) {
+    if (formattedText && formattedText.length > 2000) {
       console.log('⚠️ Respuesta muy larga, truncando...');
-      response = response.substring(0, 1800) + '\n\n*[Respuesta truncada para mejor legibilidad]*';
+      formattedText = formattedText.substring(0, 1800) + '\n\n*[Respuesta truncada para mejor legibilidad]*';
     }
 
     // Asegurar que tenga formato markdown básico si no lo tiene
-    if (!response.includes('##') && !response.includes('###')) {
-      const lines = response.split('\n').filter(line => line.trim());
+    if (typeof formattedText === 'string' && !formattedText.includes('##') && !formattedText.includes('###')) {
+      const lines = formattedText.split('\n').filter(line => line.trim());
       
       if (lines.length > 0) {
         let formatted = `## 📊 Análisis\n\n`;
@@ -42,25 +67,53 @@ function formatChatResponse(response, toolResult = null) {
           }
         }
         
-        response = formatted;
+        formattedText = formatted;
       }
     }
 
-    // Limpiar texto muy corrido (sin espacios entre párrafos)
-    response = response
-      .replace(/\n{3,}/g, '\n\n') // Máximo 2 saltos de línea consecutivos
-      .replace(/(\w)(\n)(### |## |\*\*)/g, '$1\n\n$3') // Espacios antes de headers
-      .replace(/(\w)(\n)(• )/g, '$1\n\n$3') // Espacios antes de bullets
-      .trim();
+    // Si es string, limpiar formato
+    if (typeof formattedText === 'string') {
+      // Limpiar texto muy corrido (sin espacios entre párrafos)
+      formattedText = formattedText
+        .replace(/\n{3,}/g, '\n\n') // Máximo 2 saltos de línea consecutivos
+        .replace(/(\w)(\n)(### |## |\*\*)/g, '$1\n\n$3') // Espacios antes de headers
+        .replace(/(\w)(\n)(• )/g, '$1\n\n$3') // Espacios antes de bullets
+        .trim();
 
-    // Asegurar que los emojis tengan espacio después
-    response = response.replace(/([📊📈💭⚡🎯🔍])([A-Za-z])/g, '$1 $2');
+      // Asegurar que los emojis tengan espacio después
+      formattedText = formattedText.replace(/([📊📈💭⚡🎯🔍])([A-Za-z])/g, '$1 $2');
+    }
 
-    return response;
+    // Devolver con estructura estándar
+    return {
+      success: true,
+      response: {
+        agent: 'Vizta',
+        message: formattedText || 'No hay respuesta disponible',
+        type: 'chat_response',
+        timestamp: new Date().toISOString()
+      },
+      metadata: {
+        formatted: true,
+        hasToolResult: !!toolResult
+      }
+    };
 
   } catch (error) {
     console.error('❌ Error formateando respuesta:', error);
-    return response; // Devolver original si hay error
+    return {
+      success: false,
+      response: {
+        agent: 'Vizta',
+        message: typeof response === 'string' ? response : response?.message || 'Error formateando respuesta',
+        type: 'error',
+        timestamp: new Date().toISOString()
+      },
+      metadata: {
+        error: true,
+        errorMessage: error.message
+      }
+    };
   }
 }
 
@@ -174,612 +227,1039 @@ router.post('/query', verifyUserAccess, async (req, res) => {
     const conversationHistory = await memoriesService.getSessionMessages(chatSessionId, 10);
     const previousMessages = memoriesService.formatMessagesForOpenAI(conversationHistory);
 
-    // Obtener herramientas disponibles del MCP
-    const availableTools = await mcpService.listAvailableTools();
-    
-    // Preparar funciones para GPT-4o mini
-    const functions = availableTools.map(tool => {
-      // Transformar parámetros del formato MCP al formato OpenAI
-      const properties = {};
-      const required = [];
-      
-      Object.keys(tool.parameters).forEach(key => {
-        const param = tool.parameters[key];
-        properties[key] = {
-          type: param.type,
-          description: param.description
-        };
-        
-        // Agregar constrains adicionales si existen
-        if (param.min !== undefined) properties[key].minimum = param.min;
-        if (param.max !== undefined) properties[key].maximum = param.max;
-        if (param.default !== undefined) properties[key].default = param.default;
-        
-        // Para arrays, agregar definición de items
-        if (param.type === 'array' && param.items) {
-          properties[key].items = param.items;
-        }
-        
-        // Agregar a required si es necesario
-        if (param.required === true) {
-          required.push(key);
-        }
-      });
-      
-      return {
-        name: tool.name,
-        description: tool.description,
-        parameters: {
-          type: 'object',
-          properties: properties,
-          required: required
-        }
-      };
-    });
-
-    // Agregar función especial para crear planes de ejecución multi-step
-    functions.push({
-      name: 'create_execution_plan',
-      description: 'Crear un plan de ejecución multi-step para consultas complejas que requieren múltiples herramientas en secuencia',
-      parameters: {
-        type: 'object',
-        properties: {
-          steps: {
-            type: 'array',
-            description: 'Array de pasos a ejecutar en orden',
-            items: {
-              type: 'object',
-              properties: {
-                step_number: {
-                  type: 'number',
-                  description: 'Número de paso (1, 2, 3, etc.)'
-                },
-                tool: {
-                  type: 'string',
-                  description: 'Nombre de la herramienta a usar'
-                },
-                args: {
-                  type: 'object',
-                  description: 'Argumentos para la herramienta'
-                },
-                description: {
-                  type: 'string',
-                  description: 'Descripción de qué hace este paso'
-                },
-                depends_on_previous: {
-                  type: 'boolean',
-                  description: 'Si este paso depende del resultado del paso anterior'
-                }
-              },
-              required: ['step_number', 'tool', 'args', 'description']
-            }
-          },
-          final_goal: {
-            type: 'string',
-            description: 'Objetivo final del plan de ejecución'
-          }
-        },
-        required: ['steps', 'final_goal']
-      }
-    });
-
-    console.log('🔍 Esquema de funciones para OpenAI:', JSON.stringify(functions, null, 2));
-
-    // 3. NUEVA ORQUESTACIÓN CON REASONING ENGINE DE LAURA
-    // Laura decide herramientas usando su LLM, luego se ejecuta la orquestación
-    console.log('🎯 Iniciando orquestación con Laura\'s reasoning engine...');
+    console.log('🎯 Iniciando orquestación con sistema modular...');
     
     const startTime = Date.now();
     
-    // PASO 1: Laura usa su reasoning engine para decidir herramientas (SIN MEMORIA por ahora)
-    console.log('🧠 Laura analizando consulta con reasoning engine...');
-    const lauraDecision = await agentesService.laura.buildLLMPlan(message, '', {
-      verbose: true, // Activar modo verbose para debugging
-      useMemory: false // DESACTIVAR Laura Memory temporalmente
-    });
+    // PASO 1: Clasificar intención con LLM
+    const intentClassification = await classifyIntentWithLLM(message);
+    console.log(`🧠 Intención detectada: ${intentClassification.intent} (${intentClassification.confidence})`);
+    console.log(`💭 Razonamiento: ${intentClassification.reasoning}`);
+
+    let result;
     
-    console.log('🧠 Laura decision:', {
-      tool: lauraDecision.plan?.tool,
-      reasoning: lauraDecision.plan?.reasoning,
-      thought: lauraDecision.thought
-    });
-    
-    // PASO 2: Ejecutar la orquestación con base en la decisión de Laura
-    const agentResults = await agentesService.orchestrateQuery(message, req.user, {
-      sessionId: chatSessionId,
-      previousMessages: previousMessages,
-      lauraDecision: lauraDecision // Pasar la decisión de Laura a la orquestación
-    });
-    const orchestrationTime = Date.now() - startTime;
-
-    console.log(`🤖 Orquestación completada en ${orchestrationTime}ms:`, {
-      laura_tasks: agentResults.laura_findings.length,
-      robert_tasks: agentResults.robert_findings.length,
-      total_execution_time: agentResults.total_execution_time
-    });
-
-    // Preparar datos consolidados para guardar en recent_scrapes
-    const allTweets = agentResults.laura_findings
-      .filter(finding => finding.findings?.top_posts)
-      .flatMap(finding => finding.findings.top_posts);
-
-    if (allTweets.length > 0) {
-      await recentScrapesService.saveScrape({
-        queryOriginal: message,
-        queryClean: message,
-        herramienta: 'agentes_colaborativos',
-        categoria: 'Análisis Integral',
-        tweets: allTweets,
-        userId: userId,
-        sessionId: chatSessionId,
-        mcpRequestId: requestId,
-        mcpExecutionTime: agentResults.total_execution_time,
-        location: 'guatemala',
+    if (intentClassification.intent === 'casual_chat') {
+      // Manejar conversación casual directamente
+      result = {
+        success: true,
+        response: {
+          agent: 'Vizta',
+          message: await generateCasualResponse(message),
+          type: 'casual_conversation',
+          timestamp: new Date().toISOString()
+        },
+        conversationId: chatSessionId,
         metadata: {
-          laura_findings: agentResults.laura_findings.length,
-          robert_findings: agentResults.robert_findings.length,
-          orchestration_time: orchestrationTime
+          conversationType: 'casual',
+          processingTime: Date.now() - startTime
         }
+      };
+
+      // Guardar respuesta casual en el historial
+      await saveToHistory(req.user.id, message, result.response.message, chatSessionId);
+
+    } else if (intentClassification.intent === 'codex_search') {
+      // PASO 2: Búsqueda en Codex
+      result = await processCodexSearch(message, req.user, chatSessionId);
+      
+    } else if (intentClassification.intent === 'project_search') {
+      // PASO 3: Búsqueda en Proyectos
+      result = await processProjectSearch(message, req.user, chatSessionId);
+      
+    } else {
+      // PASO 3: Para consultas no casuales, usar el sistema modular completo
+      result = await agentesService.processUserQuery(message, req.user, {
+        sessionId: chatSessionId,
+        previousMessages: previousMessages
       });
     }
 
-    // Preparar mensajes incluyendo historial de conversación
-    // Obtener fecha actual para contexto temporal
-    const now = new Date();
-    const currentDate = now.toLocaleDateString('es-ES', { 
-      weekday: 'long', 
-      year: 'numeric', 
-      month: 'long', 
-      day: 'numeric' 
-    });
-    const currentYear = now.getFullYear();
-    const currentMonth = now.toLocaleString('es-ES', { month: 'long' });
-    
-    const systemMessage = {
-      role: 'system',
-      content: `Eres Vizta, el orquestador principal de un sistema de agentes inteligentes para análisis social en Guatemala.
+    // Formatear respuesta para el chat y asegurar estructura correcta
+    const finalResponse = formatChatResponse(result);
 
-**FECHA ACTUAL: ${currentDate}**
-**CONTEXTO TEMPORAL: ${currentMonth} ${currentYear}**
+    // Guardar en historial si no es casual
+    if (intentClassification.intent !== 'casual_chat') {
+      // Extraer solo el texto del mensaje para guardar
+      const messageToSave = typeof finalResponse.response?.message === 'string' 
+        ? finalResponse.response.message 
+        : JSON.stringify(finalResponse.response);
 
-**TU NUEVO ROL COMO ORQUESTADOR:**
-• Recibes ANÁLISIS COMPLETADOS de tus agentes especializados Laura (monitoreo) y Robert (documentos)
-• Laura ya analizó los datos con IA (Gemini) y te entrega conclusiones finales
-• Tu trabajo es PRESENTAR y COMUNICAR los análisis de Laura, NO re-interpretarlos
-• CONFÍA COMPLETAMENTE en las evaluaciones de relevancia de Laura
-• NO ejecutes herramientas directamente - tus agentes ya trabajaron por ti
-• NO prometas "buscar", "analizar" o "investigar" - ¡YA SE HIZO! Presenta los resultados
-
-**AGENTES QUE TRABAJARON PARA TI:**
-🔍 **Laura** (Analista de Monitoreo): Vigilancia de redes sociales, tendencias, sentimientos
-📚 **Robert** (Orquestador Interno): Gestión de proyectos y documentos del usuario
-
-**RESULTADOS DE LA INVESTIGACIÓN COMPLETADA:**
-
-🔍 **ANÁLISIS COMPLETADO POR LAURA:**
-${agentResults.laura_findings.length > 0 ? 
-  agentResults.laura_findings.map(finding => {
-    // Priorizar análisis de Gemini si está disponible
-    if (finding.findings?.gemini_analysis) {
-      const analysis = finding.findings.gemini_analysis;
-      return `✅ ANÁLISIS INTELIGENTE COMPLETADO
-      
-📊 **RESUMEN EJECUTIVO:** ${analysis.resumen_ejecutivo || 'Datos procesados exitosamente'}
-
-🎯 **RELEVANCIA:** ${analysis.relevancia_para_consulta || 'alta'} - ${analysis.responde_a_consulta ? 'SÍ responde a la consulta' : 'Datos relacionados encontrados'}
-
-📈 **TEMAS PRINCIPALES:** ${Array.isArray(analysis.temas_principales) ? analysis.temas_principales.join(', ') : 'Múltiples temas identificados'}
-
-💭 **SENTIMIENTO GENERAL:** ${analysis.sentimiento_general || 'neutral'}
-
-🔍 **CONTEXTO:** ${analysis.contexto_temporal || 'Análisis de actividad reciente'}
-
-💡 **INSIGHTS CLAVE:** ${Array.isArray(analysis.insights) ? analysis.insights.join(' • ') : 'Múltiples insights identificados'}
-
-📋 **DATOS FUENTE:** ${finding.findings?.recent_activity?.length || finding.findings?.top_posts?.length || 0} tweets analizados`;
-    } 
-    // Fallback si no hay análisis de Gemini
-    else if (finding.findings?.top_posts && finding.findings.top_posts.length > 0) {
-      return `✅ Se encontraron ${finding.findings.top_posts.length} tweets para la consulta\n📊 TWEETS DISPONIBLES PARA ANÁLISIS:\n` + 
-        finding.findings.top_posts.slice(0, 3).map((tweet, idx) => 
-          `${idx+1}. @${tweet.usuario} (${tweet.fecha_tweet}): ${tweet.texto.substring(0, 80)}...`
-        ).join('\n');
-    } else if (finding.findings?.recent_activity && finding.findings.recent_activity.length > 0) {
-      return `✅ Se encontraron ${finding.findings.recent_activity.length} tweets del perfil solicitado\n📊 PERFIL ANALIZADO CON ÉXITO:\n` + 
-        finding.findings.recent_activity.slice(0, 3).map((tweet, idx) => 
-          `${idx+1}. @${tweet.usuario} (${tweet.fecha_tweet}): ${tweet.texto.substring(0, 80)}...`
-        ).join('\n');
-    } else {
-      return `⚠️ Tarea completada pero sin tweets encontrados`;
-    }
-  }).join('\n\n') 
-  : '❌ No se completaron tareas de búsqueda'
-}
-
-🤖 **RESUMEN DE AGENTES:**
-• Laura (Monitoreo Social): ${agentResults.laura_findings.length} tareas completadas
-• Robert (Gestión Documental): ${agentResults.robert_findings.length} tareas completadas
-
-**METADATOS TÉCNICOS (para referencia):**
-${JSON.stringify(agentResults, null, 2)}
-
-**INSTRUCCIONES CRÍTICAS PARA INTERPRETACIÓN DE DATOS:**
-
-🚨 **REGLAS OBLIGATORIAS DE EVALUACIÓN DE ÉXITO:**
-1. Si en la sección "ANÁLISIS COMPLETADO POR LAURA" aparece "✅ ANÁLISIS INTELIGENTE COMPLETADO" → ES UN ÉXITO TOTAL
-2. Si ves "RESUMEN EJECUTIVO" de Laura → HAY DATOS ANALIZADOS PARA PRESENTAR
-3. Si Laura dice "SÍ responde a la consulta" → CONFÍA EN SU EVALUACIÓN
-4. Si Laura completó análisis con Gemini → NUNCA digas "no se encontraron datos"
-5. PRIORITIZA el análisis de Gemini sobre datos crudos → Laura ya interpretó todo
-
-**PARA CONSULTAS DE PERFILES/USUARIOS:**
-- Si detectas que se solicitó información de un USUARIO ESPECÍFICO (por nombre o @handle), Y hay tweets en los resultados, entonces SÍ HAY DATOS VÁLIDOS
-- NUNCA digas "no se logró obtener datos" si hay tweets en la respuesta
-- Para consultas como "extraeme lo que tengas de [nombre]", "busca a [usuario]", o "@handle", SIEMPRE revisa primero si hay tweets antes de evaluar el éxito
-- Si ves tweets con fechas recientes, análisis de sentimiento, o información del perfil, significa que el procesamiento fue EXITOSO
-
-**DETECCIÓN AUTOMÁTICA DE ÉXITO:**
-✅ Busca estos indicadores en ANÁLISIS COMPLETADO POR LAURA:
-• "✅ ANÁLISIS INTELIGENTE COMPLETADO" = ÉXITO TOTAL CONFIRMADO
-• "RESUMEN EJECUTIVO:" = LAURA YA ANALIZÓ LOS DATOS
-• "SÍ responde a la consulta" = LAURA CONFIRMA RELEVANCIA
-• "RELEVANCIA: alta" = DATOS ALTAMENTE RELEVANTES
-• Cualquier análisis de Gemini = PROCESAMIENTO EXITOSO GARANTIZADO
-
-❌ Solo declara "no se encontraron datos" si:
-• Laura: 0 tareas completadas Y
-• No hay "✅ ANÁLISIS INTELIGENTE COMPLETADO" Y
-• La sección dice "❌ No se completaron tareas" Y
-• No hay RESUMEN EJECUTIVO de Laura
-
-🚨 IMPORTANTE: Si hay análisis de Gemini, SIEMPRE hay datos válidos. Nunca sugieras "explorar otros términos".
-
-**INSTRUCCIONES GENERALES:**
-- NUNCA digas "voy a buscar", "procederé a analizar" o "un momento por favor"
-- SIEMPRE comienza con los resultados encontrados: "He analizado...", "Los datos muestran...", "Según la investigación realizada..."
-- Si no hay datos (0 tweets), explica qué se buscó y sugiere términos alternativos
-- Enfócate en presentar y analizar los hallazgos existentes, no en promesas de futuras búsquedas
-
-**TU TRABAJO AHORA:**
-- Enfócate en información ACTUAL y RECIENTE (${currentMonth} ${currentYear})
-- Filtra información obsoleta o de fechas anteriores
-- Contextualiza todo en el tiempo presente
-- Busca eventos, noticias y tendencias de AHORA 
-
---------------------------------------------------------------------
-**MEMORIA CONVERSACIONAL AVANZADA**
-• Usa los mensajes previos del usuario (memories) para evitar repetir búsquedas.
-• Referencia insights o resultados anteriores cuando aporten valor.
-• Si existen hallazgos relevantes en la sesión, enlázalos brevemente antes de ejecutar nuevas herramientas.
-
-**PROCESAMIENTO INTELIGENTE DE RESULTADOS**
-Siempre que recibas datos de una herramienta sigue este flujo:
-1. **Analiza** ¿qué significan los datos?
-2. **Contextualiza** ¿cómo se relacionan con Guatemala y el momento actual?
-3. **Sintetiza** patrones o tendencias detectadas.
-4. **Proyecta** implicaciones futuras o posibles escenarios.
-5. **Recomienda** acciones concretas o próximos pasos.
-
-**FORMATO ADAPTATIVO DE RESPUESTA**
-Detecta la intención del usuario y responde con la estructura más apropiada:
-    • *Análisis profundo* → Executive Summary ▸ Detalles ▸ Recomendaciones.
-    • *Datos rápidos* → lista breve de puntos clave.
-    • *Tendencias* → bullets con gráfico en texto + interpretación.
-    • *Comparaciones* → tabla ▸ análisis diferencial.
-    • *Investigación* → metodología ▸ hallazgos ▸ próximos pasos.
-
-**REGLA OBLIGATORIA DE FUENTES**
-Al final de cada respuesta agrega una sección **Fuentes**:
-    • Tweets → '@usuario · fecha · enlace'
-    • Perplexity / Web → URL sin cortar.
-    • Codex → nombre del documento / enlace directo.
-Finaliza siempre con: "¿Te gustaría que profundice en algún aspecto específico?"
---------------------------------------------------------------------
-
-**ACCESO COMPLETO A DATOS PERSONALES:**
-TIENES ACCESO TOTAL a los datos personales del usuario autenticado a través de las herramientas user_projects y user_codex. 
-NO digas que no tienes acceso a información privada - ¡SÍ TIENES ACCESO! Usa las herramientas disponibles.
-
-**CAPACIDAD MULTI-STEP:**
-Ahora puedes ejecutar MÚLTIPLES herramientas en secuencia para tareas complejas. Si una consulta requiere varios pasos, puedes crear un PLAN DE EJECUCIÓN.
-
-**DETECCIÓN DE CONSULTAS MULTI-STEP:**
-Detecta automáticamente consultas que requieren múltiples pasos, como:
-- "En base a mi proyecto X, busca reacciones sobre Y"
-- "Combina mis documentos sobre Z con noticias actuales"
-- "Analiza mi proyecto A y luego busca opiniones en Twitter"
-- "Compara mis investigaciones con tendencias actuales"
-- "Busca información sobre X y luego analiza reacciones"
-
-**CREACIÓN DE PLANES MULTI-STEP:**
-Si detectas que una consulta requiere múltiples pasos, puedes usar la función especial 'create_execution_plan' que crea un plan paso a paso:
-
-create_execution_plan({
-  "steps": [
-    {
-      "step_number": 1,
-      "tool": "user_projects",
-      "args": {"status": "active"},
-      "description": "Obtener proyectos activos del usuario"
-    },
-    {
-      "step_number": 2,
-      "tool": "nitter_context", 
-      "args": {"q": "tema_basado_en_paso_1", "limit": 20},
-      "description": "Buscar reacciones en Twitter sobre el tema identificado"
-    }
-  ],
-  "final_goal": "Analizar proyectos del usuario y buscar reacciones sobre el tema principal"
-})
-
-**CUÁNDO USAR MULTI-STEP:**
-- Cuando necesites combinar datos personales con información externa
-- Cuando una consulta tenga múltiples partes conectadas
-- Cuando necesites el resultado de una herramienta para usar otra
-- Cuando hayas mencionado "primero X, luego Y"
-
-**EJEMPLOS DE DETECCIÓN:**
-
-CONSULTA: "En base a mi proyecto de transparencia, busca qué dicen en Twitter"
-→ PLAN: 1) user_codex para buscar proyecto transparencia, 2) nitter_context con términos del proyecto
-
-CONSULTA: "Busca noticias sobre corrupción y luego analiza reacciones"
-→ PLAN: 1) perplexity_search sobre corrupción Guatemala, 2) nitter_context sobre términos encontrados
-
-CONSULTA: "¿Qué proyectos tengo relacionados con gobierno y qué opina la gente?"
-→ PLAN: 1) user_projects filtrar por "gobierno", 2) nitter_context sobre temas de los proyectos
-
-Tu trabajo es ayudar a los usuarios a obtener y analizar información usando las herramientas disponibles de manera inteligente.
-
-Herramientas disponibles:
-${availableTools.map(tool => `- ${tool.name}: ${tool.description}`).join('\n')}
-- create_execution_plan: Crear plan de ejecución multi-step (NUEVA)
-
-ESTRATEGIA DE SELECCIÓN DE HERRAMIENTAS:
-
-1. **PARA BÚSQUEDAS WEB Y CONTEXTO GENERAL:**
-   - Usa perplexity_search cuando el usuario necesite:
-     • Información actualizada sobre noticias, eventos, personas (SIEMPRE DE ${currentMonth} ${currentYear})
-     • Contexto reciente o background actual de un tema
-     • Investigación general sobre cualquier tema (CON ENFOQUE EN LO ACTUAL)
-     • Datos oficiales, estadísticas o información verificada RECIENTE
-     • Información sobre personas, empresas, organizaciones (ESTADO ACTUAL)
-   - Ejemplos de cuándo usar perplexity_search:
-     • "¿Qué está pasando con...?" (buscar eventos de ${currentDate})
-     • "Necesito información sobre..." (información actualizada)
-     • "¿Quién es...?" (información actual de la persona)
-     • "¿Cuándo ocurrió...?" (si es reciente, ${currentMonth} ${currentYear})
-     • "Busca información sobre..." (siempre contextualizar en fecha actual)
-
-2. **PARA ANÁLISIS DE REDES SOCIALES:**
-   - Usa nitter_context cuando el usuario necesite:
-     • Opiniones de usuarios en Twitter/X (DE HOY O DÍAS RECIENTES)
-     • Análisis de sentimiento de la población ACTUAL
-     • Reacciones a eventos específicos RECIENTES
-     • Tendencias y conversaciones en redes sociales ACTUALES
-     • Monitoreo de hashtags o menciones (ENFOQUE EN ${currentMonth} ${currentYear})
-   - Ejemplos de cuándo usar nitter_context:
-     • "¿Qué dicen en Twitter sobre...?" (tweets recientes de ${currentDate})
-     • "Analiza las reacciones a..." (reacciones actuales)
-     • "Monitorea hashtags de..." (hashtags trending HOY)
-     • "Sentimiento sobre..." (sentimiento actual, no histórico)
-
-   - Usa nitter_profile cuando el usuario necesite:
-     • Tweets recientes de un usuario específico (SIEMPRE QUE MENCIONEN @usuario)
-     • Actividad reciente de cuentas institucionales, políticos, influencers
-     • Análisis de la actividad de una persona específica
-     • Monitoreo de qué dice un usuario particular (ENFOQUE EN ${currentMonth} ${currentYear})
-     • Información del perfil y tweets de cuentas públicas guatemaltecas
-   - Ejemplos de cuándo usar nitter_profile:
-     • "¿Qué dice @GuatemalaGob?" (tweets del gobierno)
-     • "Busca los últimos tweets de @CashLuna" (tweets de persona específica)
-     • "Analiza la actividad de @MPguatemala" (tweets del MP)
-     • "Tweets recientes de @elonmusk" (cualquier usuario específico)
-     • "Qué ha dicho @usuario últimamente" (actividad reciente)
-     • "Revisa el perfil de @influencer" (información del perfil)
-   
-   **DETECCIÓN AUTOMÁTICA DE USUARIOS:**
-   Si la consulta contiene @usuario, nombre de usuario, o frases como "tweets de [nombre]", "qué dice [usuario]", 
-   "actividad de [cuenta]", USA AUTOMÁTICAMENTE nitter_profile en lugar de nitter_context.
-
-3. **PARA ACCESO A DATOS PERSONALES DEL USUARIO:**
-   - Usa user_projects cuando el usuario necesite:
-     • Información sobre sus proyectos personales
-     • Estado, progreso o detalles de proyectos específicos
-     • Estadísticas de sus actividades y decisiones
-     • Filtrar proyectos por estado (active, completed, paused, planning)
-     • Consultar metadatos de proyectos (fechas, prioridades, categorías)
-   - Ejemplos de cuándo usar user_projects:
-     • "¿Cuáles son mis proyectos activos?"
-     • "Muestra mis proyectos de alta prioridad"  
-     • "¿Qué proyectos he completado este año?"
-     • "Dame estadísticas de mis proyectos"
-     • "mis proyectos"
-     • "proyectos que tengo"
-     • "estado de mis proyectos"
-     • "qué proyectos manejo"
-
-   - Usa user_codex cuando el usuario necesite:
-     • Acceder a sus documentos, transcripciones o análisis guardados
-     • Buscar contenido específico en su biblioteca personal
-     • Revisar archivos de audio transcritos o documentos analizados
-     • Filtrar assets por proyecto, tipo o tags
-     • Encontrar información específica en su Codex personal
-   - Ejemplos de cuándo usar user_codex:
-     • "Busca en mis documentos información sobre..."
-     • "¿Qué archivos tengo del proyecto X?"
-     • "Muestra mis transcripciones de audio"
-     • "Busca en mi Codex todos los documentos que mencionen..."
-     • "¿Qué assets tengo con el tag 'investigación'?"
-     • "mis documentos"
-     • "mi codex"
-     • "archivos que tengo"
-     • "mis transcripciones"
-     • "documentos sobre"
-     • "busca en mis archivos"
-
-4. **PARA CREAR PLANES MULTI-STEP:**
-   - Usa create_execution_plan cuando detectes consultas complejas que requieran:
-     • Combinar datos personales con información externa
-     • Ejecutar herramientas en secuencia donde una depende de la otra
-     • Análisis que requiere múltiples fuentes de información
-     • Consultas con múltiples partes conectadas
-
-5. **ESTRATEGIA HÍBRIDA Y MULTI-STEP:**
-   - Detecta automáticamente cuando una consulta requiere múltiples pasos
-   - Crea planes de ejecución inteligentes
-   - Combina datos personales (user_projects, user_codex) con información externa (perplexity_search, nitter_context)
-   - Ejemplos de consultas multi-step:
-     • "Compara mis documentos sobre X con las noticias actuales"
-     • "¿Cómo se relaciona mi proyecto Y con las tendencias en redes sociales?"
-     • "En base a mi proyecto Z, busca reacciones en Twitter"
-     • "Analiza mis investigaciones y luego busca información actualizada"
-
-ESTRATEGIA INTELIGENTE DE BÚSQUEDA:
-Cuando uses cualquier herramienta, NO uses literalmente las palabras del usuario. En su lugar, piensa estratégicamente:
-
-1. EXPANDIR TÉRMINOS: Convierte consultas generales en términos específicos
-   - "marcha del orgullo" → buscar: "Orgullo2025 OR MarchadelOrgullo OR #OrguIIoGt OR PrideGuatemala"
-   - "elecciones" → buscar: "EleccionesGt OR #Elecciones2023 OR VotoGuatemala OR TSE"
-   - "gobierno" → buscar: "GobiernoGt OR Giammattei OR BernardoArevalo OR CasaPresidencial"
-
-2. INCLUIR HASHTAGS PROBABLES: Siempre considera hashtags relevantes
-   - Para eventos: #NombreEvento2025, #EventoGt, #Guatemala
-   - Para política: #PoliticaGt, #Guatemala, #CongresoGt
-   - Para deportes: #DeporteGt, #GuatemalaFC, #Seleccion
-
-3. CONSIDERAR VARIACIONES: Incluye sinónimos y variaciones
-   - Términos en español e inglés cuando sea relevante
-   - Abreviaciones comunes (GT, Guate, Chapin)
-   - Nombres oficiales vs. nombres populares
-
-4. USAR OPERADORES DE BÚSQUEDA: Combina términos con OR para mayor cobertura
-   - Ejemplo: "OrguIIo2025 OR MarchadelOrgullo OR Pride OR LGBTI OR diversidad"
-
-5. PENSAR EN CONTEXTO GUATEMALTECO:
-   - Incluir términos específicos de Guatemala
-   - Considerar eventos actuales y fechas relevantes
-   - Usar lenguaje chapín cuando sea apropiado
-
-**DETECCIÓN OBLIGATORIA DE CONSULTAS PERSONALES:**
-ANTES de responder cualquier consulta, SIEMPRE verifica si contiene estas palabras clave:
-- "mis" / "mi" / "mío" / "mía"
-- "proyectos" / "proyecto"  
-- "documentos" / "documento" / "archivos" / "archivo"
-- "codex" / "transcripciones" / "transcripción"
-- "tengo" / "he creado" / "he guardado"
-
-Si detectas CUALQUIERA de estas palabras, DEBES usar user_projects o user_codex según corresponda.
-NO respondas que no tienes acceso - ¡SÍ TIENES ACCESO COMPLETO!
-
-INSTRUCCIONES ADICIONALES:
-1. **DETECCIÓN PERSONAL OBLIGATORIA:** Si la consulta menciona datos personales del usuario, USA las herramientas correspondientes
-2. **DETECCIÓN MULTI-STEP OBLIGATORIA:** Si la consulta requiere múltiples pasos, USA create_execution_plan
-3. **CONTEXTO TEMPORAL OBLIGATORIO:** Siempre incluye la fecha actual (${currentDate}) en tus consultas
-4. Analiza la consulta del usuario en el contexto de la conversación anterior Y la fecha actual
-5. Elige la herramienta más apropiada según el tipo de información solicitada Y su actualidad
-6. Usa un límite de 15-25 tweets para análisis más completo en nitter_context (tweets RECIENTES)
-7. Proporciona análisis contextual y insights útiles CON ENFOQUE EN LO ACTUAL
-8. Mantén un tono profesional pero amigable
-9. Enfócate en Guatemala cuando sea relevante Y en información de ${currentMonth} ${currentYear}
-10. Recuerda el contexto de mensajes anteriores para dar respuestas coherentes
-11. **FILTRO TEMPORAL:** Prioriza siempre información de ${currentMonth} ${currentYear} sobre información antigua
-
-IMPORTANTE: 
-- SIEMPRE detecta palabras clave personales ANTES de responder
-- SIEMPRE detecta consultas multi-step ANTES de responder
-- Si hay palabras personales, USA las herramientas user_projects o user_codex
-- Si hay consultas complejas, USA create_execution_plan
-- Nunca uses los términos exactos del usuario para búsquedas web. Siempre expande y optimiza.
-- SIEMPRE incluye contexto temporal actual en las búsquedas web (${currentMonth} ${currentYear}).
-- Enfócate en eventos, noticias y tendencias ACTUALES, no históricas.`
-    };
-
-    // Construir array de mensajes con historial
-    const messagesForAI = [systemMessage];
-    
-    // Agregar historial previo (excluyendo el mensaje actual del usuario que ya está en memories)
-    if (previousMessages.length > 0) {
-      // Filtrar el último mensaje si es del usuario (evitar duplicados)
-      const filteredHistory = previousMessages.slice(0, -1);
-      messagesForAI.push(...filteredHistory);
+      await saveToHistory(req.user.id, message, messageToSave, chatSessionId);
     }
     
-    // Agregar el mensaje actual del usuario
-    messagesForAI.push({
-      role: 'user',
-      content: message
-    });
-
-    console.log(`💭 Enviando ${messagesForAI.length} mensajes a OpenAI (incluyendo ${previousMessages.length} del historial)`);
-
-    // 4. Llamar a GPT-4o mini SOLO para síntesis (sin function calling - los agentes ya trabajaron)
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: messagesForAI,
-      temperature: 0.7,
-      max_tokens: 1200
-    });
-
-    const assistantMessage = completion.choices[0].message;
-
-    // 5. Procesar respuesta de síntesis de Vizta
-    let finalResponse = assistantMessage.content;
-    
-    // Aplicar formateo de respuesta
-    finalResponse = formatChatResponse(finalResponse, {
-      laura_findings: agentResults.laura_findings.length,
-      robert_findings: agentResults.robert_findings.length,
-      total_execution_time: agentResults.total_execution_time
-    });
-
-    // 6. Guardar respuesta del asistente en memories
-    await memoriesService.saveMessage({
-      sessionId: chatSessionId,
-      userId: userId,
-      role: 'assistant',
-      content: finalResponse,
-      messageType: 'message',
-      modelUsed: 'gpt-4o-mini',
-      metadata: {
-        requestId: requestId,
-        agentOrchestration: true,
-        lauraTasks: agentResults.laura_findings.length,
-        robertTasks: agentResults.robert_findings.length,
-        orchestrationTime: orchestrationTime,
-        totalExecutionTime: agentResults.total_execution_time
-      }
-    });
-
-    // 7. Responder al usuario
-    return res.json({
-      success: true,
-      response: finalResponse,
-      toolUsed: 'agentes_colaborativos',
-      toolArgs: { query: message },
-      toolResult: agentResults,
-      sessionId: chatSessionId,
-      requestId: requestId,
-      executionTime: orchestrationTime + agentResults.total_execution_time,
-      timestamp: new Date().toISOString(),
-      mode: 'agent_orchestration',
-      agentMetrics: {
-        lauraTasks: agentResults.laura_findings.length,
-        robertTasks: agentResults.robert_findings.length,
-        orchestrationTime: orchestrationTime,
-        totalAgentTime: agentResults.total_execution_time
-      }
-    });
+    return res.json(finalResponse);
 
   } catch (error) {
     console.error('❌ Error en consulta Vizta Chat:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error procesando consulta con agentes',
-      error: error.message
+    return res.status(500).json({
+      error: 'Error procesando consulta',
+      details: error.message
     });
   }
 });
+
+// Función helper para guardar en historial
+async function saveToHistory(userId, message, response, sessionId) {
+  try {
+    await memoriesService.saveMessage({
+      sessionId: sessionId,
+      userId: userId,
+      role: 'assistant',
+      content: response,
+      messageType: 'message',
+      modelUsed: 'modular-system',
+      metadata: {
+        type: 'chat_response',
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error guardando en historial:', error);
+    // No lanzar el error para no interrumpir el flujo principal
+  }
+}
+
+// Función para clasificar intención con LLM
+async function classifyIntentWithLLM(message) {
+  const classificationPrompt = `
+Analiza el siguiente mensaje del usuario y clasifica su intención principal.
+
+TIPOS DE INTENCIÓN:
+1. codex_search - Usuario quiere buscar, revisar o consultar algo específico en el Codex
+2. project_search - Usuario quiere buscar, revisar o consultar información sobre sus proyectos
+3. agent_request - Usuario solicita un agente especializado o herramienta específica  
+4. casual_chat - Conversación casual, saludo, charla general sin objetivo específico
+5. technical_help - Ayuda técnica, programación, configuración
+6. information_query - Pregunta informativa general
+
+INSTRUCCIONES:
+- Ignora el tono informal o formal del mensaje
+- Enfócate en la INTENCIÓN REAL detrás de las palabras
+- Si menciona "Codex" o quiere "revisar/ver/buscar algo en el codex", es codex_search
+- Si menciona "proyectos", "proyecto", "tareas", "decisiones", "colaboradores", es project_search
+- Si es solo saludo sin objetivo específico, es casual_chat
+
+Mensaje del usuario: "${message}"
+
+Responde SOLO en este formato JSON:
+{
+  "intent": "tipo_de_intencion",
+  "confidence": 0.95,
+  "reasoning": "Breve explicación de por qué clasificaste así"
+}`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: classificationPrompt }],
+      temperature: 0.1,
+      max_tokens: 150
+    });
+
+    const result = JSON.parse(response.choices[0].message.content);
+    
+    // Validación básica
+    const validIntents = ['codex_search', 'project_search', 'agent_request', 'casual_chat', 'technical_help', 'information_query'];
+    if (!validIntents.includes(result.intent)) {
+      throw new Error('Intent no válido recibido del LLM');
+    }
+
+    return result;
+    
+  } catch (error) {
+    console.error('❌ Error en clasificación de intención:', error);
+    // Fallback seguro
+    return {
+      intent: 'casual_chat',
+      confidence: 0.5,
+      reasoning: 'Error en clasificación, usando fallback'
+    };
+  }
+}
+
+// Función para procesar búsquedas en Codex con análisis LLM
+async function processCodexSearch(message, user, sessionId) {
+  try {
+    console.log('🔍 Procesando búsqueda contextual en Codex...');
+    
+    // PASO 1: LLM genera términos de búsqueda contextuales con historial
+    const conversationHistory = await memoriesService.getSessionMessages(sessionId, 5);
+    const searchTerms = await generateContextualSearchTerms(message, conversationHistory);
+    console.log(`🧠 Términos contextuales generados:`, searchTerms);
+    
+    // PASO 2: Buscar con múltiples términos contextuales y relaciones
+    const codexResults = await searchCodexWithTerms(searchTerms, user.id, conversationHistory);
+    console.log(`📊 Encontrados ${codexResults?.length || 0} resultados en Codex`);
+
+    // PASO 3: LLM analiza relevancia de resultados
+    if (codexResults && codexResults.length > 0) {
+      const analysisResult = await analyzeCodexRelevance(message, codexResults);
+      return analysisResult;
+    }
+
+    // Sin resultados
+    return {
+      success: true,
+      response: {
+        agent: 'Codex',
+        message: `🔍 **Búsqueda contextual en Codex**\n\n❌ No encontré elementos relacionados con tu consulta en el Codex.\n\n**Tu consulta:** "${message}"\n**Términos analizados:** ${searchTerms.join(', ')}\n\n💡 **Sugerencias:**\n• Intenta con una descripción diferente\n• Usa sinónimos o términos relacionados\n• Pregunta sobre temas más específicos`,
+        type: 'codex_search',
+        timestamp: new Date().toISOString()
+      },
+      metadata: {
+        searchTerms: searchTerms,
+        originalMessage: message,
+        resultsCount: 0,
+        userId: user.id,
+        sessionId: sessionId
+      }
+    };
+    
+  } catch (error) {
+    console.error('❌ Error en búsqueda contextual Codex:', error);
+    return {
+      success: false,
+      response: {
+        agent: 'Codex',
+        message: `❌ **Error en búsqueda del Codex**\n\nNo pude completar la búsqueda debido a un error técnico:\n${error.message}\n\nPor favor, intenta nuevamente.`,
+        type: 'error',
+        timestamp: new Date().toISOString()
+      }
+    };
+  }
+}
+
+// Función para generar términos de búsqueda contextuales con LLM
+async function generateContextualSearchTerms(userQuery, conversationHistory = []) {
+  const contextMessages = conversationHistory
+    .slice(-5) // últimos 5 mensajes
+    .map(msg => `${msg.role}: ${msg.content}`)
+    .join('\n');
+
+  const searchPrompt = `
+Analiza la siguiente consulta del usuario y genera términos de búsqueda contextuales inteligentes.
+
+CONSULTA ACTUAL: "${userQuery}"
+
+HISTORIAL DE CONVERSACIÓN RECIENTE:
+${contextMessages}
+
+INSTRUCCIONES:
+- Si el usuario usa referencias como "ese proyecto", "eso", "lo anterior", usa el historial para identificar a qué se refiere específicamente
+- Identifica el tema/concepto principal que busca
+- Genera 3-5 términos de búsqueda relacionados basados en el contexto completo
+- Incluye sinónimos, términos relacionados y variaciones
+- NO uses palabras vacías como "hola", "revisame", "tengo", "algo de"
+- Enfócate en sustantivos, conceptos y términos específicos
+- Si hay nombres de proyectos o conceptos específicos mencionados antes, inclúyelos
+
+EJEMPLO:
+Historial: "user: cuántos proyectos tengo? assistant: Tienes 3 proyectos: Marketing Digital (activo)..."
+Consulta: "dime elementos del codex de ese proyecto"
+Términos: ["Marketing Digital", "marketing", "digital", "proyecto marketing", "elementos codex"]
+
+Responde SOLO con un array JSON de términos:
+["término1", "término2", "término3"]`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: searchPrompt }],
+      temperature: 0.3,
+      max_tokens: 300
+    });
+
+    let responseText = response.choices[0].message.content.trim();
+    
+    // Limpiar formato markdown si existe
+    responseText = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+    responseText = responseText.replace(/`/g, '');
+    
+    const termsArray = JSON.parse(responseText);
+    return Array.isArray(termsArray) ? termsArray : [userQuery];
+    
+  } catch (error) {
+    console.error('❌ Error generando términos contextuales:', error);
+    // Fallback básico
+    return [userQuery.replace(/[¿?]/g, '').trim()];
+  }
+}
+
+// Función para buscar en Codex con múltiples términos y relaciones
+async function searchCodexWithTerms(searchTerms, userId, conversationHistory = []) {
+  try {
+    const allResults = [];
+    
+    // PASO 1: Intentar búsqueda relacional inteligente basada en contexto
+    const relationalResults = await performRelationalCodexSearch(searchTerms, userId, conversationHistory);
+    if (relationalResults.length > 0) {
+      console.log(`🔗 Encontrados ${relationalResults.length} resultados relacionales`);
+      allResults.push(...relationalResults);
+    }
+    
+    // PASO 2: Búsqueda tradicional por términos
+    for (const term of searchTerms) {
+      const { data: results } = await supabase
+        .from('codex_items')
+        .select(`
+          id, titulo, descripcion, tipo, etiquetas, proyecto, project_id,
+          audio_transcription, document_analysis, created_at, fecha
+        `)
+        .eq('user_id', userId)
+        .or(`titulo.ilike.%${term}%,descripcion.ilike.%${term}%,audio_transcription.ilike.%${term}%,document_analysis.ilike.%${term}%`)
+        .limit(6);
+        
+      if (results) {
+        allResults.push(...results);
+      }
+    }
+    
+    // Eliminar duplicados y ordenar
+    const uniqueResults = allResults.filter((item, index, self) => 
+      index === self.findIndex(i => i.id === item.id)
+    );
+    
+    return uniqueResults
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      .slice(0, 15);
+      
+  } catch (error) {
+    console.error('❌ Error en búsqueda con términos:', error);
+    return [];
+  }
+}
+
+// Función para búsqueda relacional inteligente en Codex
+async function performRelationalCodexSearch(searchTerms, userId, conversationHistory) {
+  try {
+    console.log('🔗 Intentando búsqueda relacional...');
+    
+    // Detectar si hay referencia a proyectos en el historial
+    const projectContext = await extractProjectContext(conversationHistory, searchTerms);
+    
+    if (projectContext.projectName) {
+      console.log(`🎯 Proyecto identificado: ${projectContext.projectName}`);
+      
+      // Buscar el proyecto específico
+      const { data: project } = await supabase
+        .from('projects')
+        .select('id, title')
+        .eq('user_id', userId)
+        .ilike('title', `%${projectContext.projectName}%`)
+        .single();
+        
+      if (project) {
+        console.log(`✅ Proyecto encontrado: ${project.title} (${project.id})`);
+        
+        // Buscar elementos del codex asociados a este proyecto
+        const { data: codexItems } = await supabase
+          .from('codex_items')
+          .select(`
+            id, titulo, descripcion, tipo, etiquetas, proyecto, project_id,
+            audio_transcription, document_analysis, created_at, fecha
+          `)
+          .eq('user_id', userId)
+          .eq('project_id', project.id)
+          .limit(10);
+          
+        if (codexItems && codexItems.length > 0) {
+          console.log(`🎉 Encontrados ${codexItems.length} elementos del codex para proyecto ${project.title}`);
+          return codexItems;
+        }
+      }
+    }
+    
+    return [];
+    
+  } catch (error) {
+    console.error('❌ Error en búsqueda relacional:', error);
+    return [];
+  }
+}
+
+// Función para extraer contexto de proyecto del historial
+async function extractProjectContext(conversationHistory, searchTerms) {
+  const contextPrompt = `
+Analiza el historial de conversación y los términos de búsqueda para identificar si hay una referencia específica a un proyecto.
+
+HISTORIAL:
+${conversationHistory.map(msg => `${msg.role}: ${msg.content}`).join('\n')}
+
+TÉRMINOS DE BÚSQUEDA: ${searchTerms.join(', ')}
+
+INSTRUCCIONES:
+- Busca nombres específicos de proyectos mencionados en el historial
+- Si hay referencia a "ese proyecto", "mi proyecto", identifica cuál proyecto específico
+- Extrae el nombre exacto del proyecto si está disponible
+- Si no hay referencia clara a un proyecto específico, devuelve null
+
+Responde SOLO en formato JSON:
+{
+  "projectName": "nombre exacto del proyecto o null",
+  "confidence": 0.0-1.0,
+  "reasoning": "explicación breve"
+}`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: contextPrompt }],
+      temperature: 0.2,
+      max_tokens: 150
+    });
+
+    let responseText = response.choices[0].message.content.trim();
+    
+    // Limpiar formato markdown si existe
+    responseText = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+    responseText = responseText.replace(/`/g, '');
+    
+    console.log('🔍 Respuesta del LLM para contexto:', responseText);
+    
+    const context = JSON.parse(responseText);
+    return context;
+    
+  } catch (error) {
+    console.error('❌ Error extrayendo contexto de proyecto:', error);
+    console.error('❌ Respuesta problemática:', response?.choices?.[0]?.message?.content);
+    return { projectName: null, confidence: 0, reasoning: 'Error en análisis' };
+  }
+}
+
+// Función para analizar relevancia con LLM
+async function analyzeCodexRelevance(userQuery, codexResults) {
+  const analysisPrompt = `
+Responde de forma simple y directa sobre estos elementos del Codex del usuario.
+
+CONSULTA: "${userQuery}"
+
+ELEMENTOS ENCONTRADOS:
+${codexResults.map((item, index) => `
+${index + 1}. ${item.titulo} (${item.tipo})
+   ${item.descripcion || ''}
+   ${item.audio_transcription ? `Transcripción: ${item.audio_transcription.substring(0, 300)}...` : ''}
+   ${item.document_analysis ? `Análisis: ${item.document_analysis.substring(0, 300)}...` : ''}
+`).join('\n')}
+
+INSTRUCCIONES:
+- Responde en máximo 3-4 líneas
+- Sé directo: "Encontré X elementos sobre Y"
+- Menciona solo lo más relevante
+- Tono casual y amigable
+- NO hagas análisis extensos ni explicaciones largas
+
+Ejemplo: "Encontré 2 elementos sobre LGBT. Hay una transcripción que habla de AESDI y la lucha estudiantil LGBT, y un enlace que parece no funcionar."
+
+Responde de forma simple:`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: analysisPrompt }],
+      temperature: 0.3,
+      max_tokens: 400
+    });
+
+    return {
+      success: true,
+      response: {
+        agent: 'Codex',
+        message: response.choices[0].message.content,
+        type: 'codex_search',
+        timestamp: new Date().toISOString()
+      },
+      metadata: {
+        originalMessage: userQuery,
+        resultsCount: codexResults.length,
+        results: codexResults
+      }
+    };
+    
+  } catch (error) {
+    console.error('❌ Error en análisis de relevancia:', error);
+    
+    // Fallback con formato básico
+    let message = `🔍 **Búsqueda en Codex**\n\n✅ Encontré **${codexResults.length}** elemento(s) relacionado(s):\n\n`;
+    
+    codexResults.slice(0, 5).forEach((item, index) => {
+      message += `**${index + 1}. ${item.titulo}**\n`;
+      message += `   📂 ${item.tipo} • 📅 ${new Date(item.created_at).toLocaleDateString()}\n`;
+      if (item.descripcion) {
+        message += `   📝 ${item.descripcion.substring(0, 150)}...\n`;
+      }
+      message += `\n`;
+    });
+    
+    return {
+      success: true,
+      response: {
+        agent: 'Codex',
+        message: message,
+        type: 'codex_search',
+        timestamp: new Date().toISOString()
+      },
+      metadata: {
+        originalMessage: userQuery,
+        resultsCount: codexResults.length,
+        results: codexResults
+      }
+    };
+  }
+}
+
+// Función para procesar búsquedas en Proyectos con análisis LLM
+async function processProjectSearch(message, user, sessionId) {
+  try {
+    console.log('🔍 Procesando búsqueda contextual en Proyectos...');
+    
+    // PASO 1: LLM analiza el tipo de consulta sobre proyectos
+    const queryAnalysis = await analyzeProjectQueryType(message);
+    console.log(`🧠 Análisis de consulta:`, queryAnalysis);
+    
+    if (queryAnalysis.type === 'statistics') {
+      // Manejo especial para consultas de estadísticas
+      const statsResult = await processProjectStatsWithLLM(message, user.id, queryAnalysis);
+      return statsResult;
+    }
+    
+    // PASO 2: LLM genera términos de búsqueda contextuales para proyectos con historial
+    const conversationHistory = await memoriesService.getSessionMessages(sessionId, 5);
+    const searchTerms = await generateProjectSearchTerms(message, conversationHistory);
+    console.log(`🧠 Términos de proyecto generados:`, searchTerms);
+    
+    // PASO 3: Buscar en múltiples tablas de proyectos
+    const projectResults = await searchProjectsWithTerms(searchTerms, user.id);
+    console.log(`📊 Encontrados ${projectResults?.totalResults || 0} resultados en Proyectos`);
+
+    // PASO 3: LLM analiza relevancia de resultados de proyectos
+    if (projectResults && projectResults.totalResults > 0) {
+      const analysisResult = await analyzeProjectRelevance(message, projectResults);
+      return analysisResult;
+    }
+
+    // Sin resultados
+    return {
+      success: true,
+      response: {
+        agent: 'Projects',
+        message: `🔍 **Búsqueda en Proyectos**\n\n❌ No encontré información relacionada con tu consulta en tus proyectos.\n\n**Tu consulta:** "${message}"\n**Términos analizados:** ${searchTerms.join(', ')}\n\n💡 **Sugerencias:**\n• Intenta con el nombre específico del proyecto\n• Pregunta sobre tareas, decisiones o colaboradores\n• Usa términos más generales`,
+        type: 'project_search',
+        timestamp: new Date().toISOString()
+      },
+      metadata: {
+        searchTerms: searchTerms,
+        originalMessage: message,
+        resultsCount: 0,
+        userId: user.id,
+        sessionId: sessionId
+      }
+    };
+    
+  } catch (error) {
+    console.error('❌ Error en búsqueda contextual Proyectos:', error);
+    return {
+      success: false,
+      response: {
+        agent: 'Projects',
+        message: `❌ **Error en búsqueda de Proyectos**\n\nNo pude completar la búsqueda debido a un error técnico:\n${error.message}\n\nPor favor, intenta nuevamente.`,
+        type: 'error',
+        timestamp: new Date().toISOString()
+      }
+    };
+  }
+}
+
+// Función para analizar tipo de consulta sobre proyectos con LLM
+async function analyzeProjectQueryType(message) {
+  const analysisPrompt = `
+Analiza la siguiente consulta del usuario sobre proyectos y determina el tipo de respuesta necesaria.
+
+CONSULTA: "${message}"
+
+TIPOS DE CONSULTA:
+1. "statistics" - Usuario quiere estadísticas, conteos, resúmenes o información cuantitativa sobre sus proyectos
+2. "search" - Usuario busca proyectos específicos por nombre, contenido, características o filtros
+3. "management" - Usuario quiere crear, editar, eliminar o gestionar proyectos
+4. "details" - Usuario quiere detalles específicos de un proyecto particular
+
+EJEMPLOS:
+- "cuántos proyectos tengo" → statistics
+- "mis proyectos activos" → statistics  
+- "busca proyecto Guatemala" → search
+- "proyecto de marketing" → search
+- "crea nuevo proyecto" → management
+- "detalles del proyecto X" → details
+
+INSTRUCCIONES:
+- Analiza la intención real, no solo palabras clave
+- Si pide conteos, totales, listas completas → statistics
+- Si busca algo específico por características → search
+- Responde en JSON con el tipo y explicación breve
+
+Responde SOLO en formato JSON:
+{
+  "type": "statistics|search|management|details",
+  "reasoning": "explicación breve de por qué",
+  "focus": "qué aspecto específico busca el usuario"
+}`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: analysisPrompt }],
+      temperature: 0.2,
+      max_tokens: 200
+    });
+
+    let responseText = response.choices[0].message.content.trim();
+    
+    // Limpiar formato markdown si existe
+    responseText = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+    responseText = responseText.replace(/`/g, '');
+    
+    const analysis = JSON.parse(responseText);
+    return analysis;
+    
+  } catch (error) {
+    console.error('❌ Error analizando tipo de consulta:', error);
+    return {
+      type: 'search',
+      reasoning: 'Error en análisis, usando búsqueda por defecto',
+      focus: 'general'
+    };
+  }
+}
+
+// Función para procesar estadísticas de proyectos con análisis LLM
+async function processProjectStatsWithLLM(message, userId, queryAnalysis) {
+  try {
+    console.log('📊 Obteniendo estadísticas de proyectos...');
+    
+    // Obtener conteos de todas las tablas de proyectos
+    const [projectsCount, contextsCount, decisionsCount, coveragesCount, cardsCount] = await Promise.all([
+      // Contar proyectos
+      supabase.from('projects').select('id', { count: 'exact' }).eq('user_id', userId),
+      
+      // Contar contextos  
+      supabase.from('project_contexts')
+        .select('id', { count: 'exact' })
+        .eq('projects.user_id', userId),
+        
+      // Contar decisiones
+      supabase.from('project_decisions')
+        .select('id', { count: 'exact' })
+        .eq('projects.user_id', userId),
+        
+      // Contar coberturas
+      supabase.from('project_coverages')
+        .select('id', { count: 'exact' })
+        .eq('projects.user_id', userId),
+        
+      // Contar hallazgos
+      supabase.from('capturado_cards')
+        .select('id', { count: 'exact' })
+        .eq('projects.user_id', userId)
+    ]);
+
+    // También obtener proyectos con detalles para estadísticas adicionales
+    const { data: projectsData } = await supabase
+      .from('projects')
+      .select('id, title, status, priority, category, created_at')
+      .eq('user_id', userId);
+
+    const stats = {
+      totalProjects: projectsCount.count || 0,
+      totalContexts: contextsCount.count || 0, 
+      totalDecisions: decisionsCount.count || 0,
+      totalCoverages: coveragesCount.count || 0,
+      totalCards: cardsCount.count || 0,
+      projects: projectsData || []
+    };
+
+    // Estadísticas por estado
+    const statusStats = {};
+    if (projectsData) {
+      projectsData.forEach(p => {
+        statusStats[p.status] = (statusStats[p.status] || 0) + 1;
+      });
+    }
+
+    // Generar respuesta con LLM usando análisis contextual
+    const responseMessage = await generateStatsResponseWithContext(message, stats, statusStats, queryAnalysis);
+    
+    return {
+      success: true,
+      response: {
+        agent: 'Projects',
+        message: responseMessage,
+        type: 'project_stats',
+        timestamp: new Date().toISOString()
+      },
+      metadata: {
+        originalMessage: message,
+        stats: stats,
+        statusBreakdown: statusStats,
+        userId: userId
+      }
+    };
+    
+  } catch (error) {
+    console.error('❌ Error obteniendo estadísticas de proyectos:', error);
+    return {
+      success: false,
+      response: {
+        agent: 'Projects',
+        message: `❌ Error obteniendo estadísticas de proyectos: ${error.message}`,
+        type: 'error',
+        timestamp: new Date().toISOString()
+      }
+    };
+  }
+}
+
+// Función para generar respuesta de estadísticas con contexto LLM
+async function generateStatsResponseWithContext(userQuery, stats, statusStats, queryAnalysis) {
+  const statsPrompt = `
+El usuario pregunta sobre estadísticas de sus proyectos. Usa el análisis de contexto para personalizar tu respuesta.
+
+CONSULTA: "${userQuery}"
+ANÁLISIS DE CONTEXTO: ${queryAnalysis.reasoning}
+ENFOQUE ESPECÍFICO: ${queryAnalysis.focus}
+
+ESTADÍSTICAS DISPONIBLES:
+- Total de proyectos: ${stats.totalProjects}
+- Contextos de proyecto: ${stats.totalContexts}
+- Decisiones registradas: ${stats.totalDecisions}
+- Coberturas geográficas: ${stats.totalCoverages}
+- Hallazgos/descubrimientos: ${stats.totalCards}
+
+PROYECTOS POR ESTADO:
+${Object.entries(statusStats).map(([status, count]) => `- ${status}: ${count}`).join('\n')}
+
+PROYECTOS RECIENTES:
+${stats.projects.slice(0, 3).map(p => `- "${p.title}" (${p.status}) - creado ${new Date(p.created_at).toLocaleDateString()}`).join('\n')}
+
+INSTRUCCIONES:
+- Responde basándote en lo que específicamente pregunta el usuario
+- Usa el análisis de contexto para enfocar tu respuesta
+- Máximo 3-4 líneas, tono casual y directo
+- Si pregunta cantidad específica, da el número exacto
+- Si quiere resumen general, incluye breakdown por estado
+- Menciona proyectos específicos si es relevante
+
+Responde de forma simple y contextual:`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: statsPrompt }],
+      temperature: 0.3,
+      max_tokens: 300
+    });
+
+    return response.choices[0].message.content;
+    
+  } catch (error) {
+    console.error('❌ Error generando respuesta de estadísticas:', error);
+    
+    // Fallback básico
+    return `📊 **Estadísticas de Proyectos**\n\nTienes **${stats.totalProjects}** proyecto(s) en total.\n\n**Por estado:** ${Object.entries(statusStats).map(([s, c]) => `${s} (${c})`).join(', ')}\n\n**Otros elementos:** ${stats.totalDecisions} decisiones, ${stats.totalCards} hallazgos`;
+  }
+}
+
+// Función para generar términos de búsqueda contextuales para proyectos
+async function generateProjectSearchTerms(userQuery, conversationHistory = []) {
+  const contextMessages = conversationHistory
+    .slice(-5) // últimos 5 mensajes
+    .map(msg => `${msg.role}: ${msg.content}`)
+    .join('\n');
+
+  const searchPrompt = `
+Analiza la siguiente consulta del usuario sobre PROYECTOS y genera términos de búsqueda contextuales.
+
+CONSULTA ACTUAL: "${userQuery}"
+
+HISTORIAL DE CONVERSACIÓN RECIENTE:
+${contextMessages}
+
+CONTEXTO: El usuario quiere buscar información sobre sus proyectos personales, que pueden incluir:
+- Nombres y títulos de proyectos
+- Estados (activo, pausado, completado, archivado)  
+- Tareas y decisiones del proyecto
+- Colaboradores y roles
+- Categorías y etiquetas
+- Ubicaciones geográficas
+- Fechas y plazos
+- Hallazgos y descubrimientos
+
+INSTRUCCIONES:
+- Si usa referencias como "ese proyecto", "mi proyecto anterior", usa el historial para identificar el proyecto específico
+- Identifica qué aspecto de los proyectos busca (nombre, estado, tareas, etc.)
+- Genera 3-5 términos de búsqueda relacionados basados en el contexto completo
+- Incluye sinónimos y variaciones
+- NO uses palabras vacías como "mis", "tengo", "muéstrame"
+- Enfócate en sustantivos y conceptos específicos de proyectos
+- Si hay nombres específicos de proyectos mencionados antes, inclúyelos
+
+EJEMPLO:
+Historial: "assistant: Tienes 3 proyectos: Marketing Digital (activo), Análisis Guatemala..."
+Consulta: "elementos del codex de ese proyecto"
+Términos: ["Marketing Digital", "marketing", "digital", "elementos", "codex"]
+
+Responde SOLO con un array JSON de términos:
+["término1", "término2", "término3"]`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: searchPrompt }],
+      temperature: 0.3,
+      max_tokens: 250
+    });
+
+    let responseText = response.choices[0].message.content.trim();
+    
+    // Limpiar formato markdown si existe
+    responseText = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+    responseText = responseText.replace(/`/g, '');
+    
+    const termsArray = JSON.parse(responseText);
+    return Array.isArray(termsArray) ? termsArray : [userQuery];
+    
+  } catch (error) {
+    console.error('❌ Error generando términos de proyecto:', error);
+    return [userQuery.replace(/[¿?]/g, '').trim()];
+  }
+}
+
+// Función para buscar en todas las tablas de proyectos
+async function searchProjectsWithTerms(searchTerms, userId) {
+  try {
+    const allResults = {
+      projects: [],
+      contexts: [],
+      decisions: [],
+      coverages: [],
+      memory: [],
+      cards: [],
+      totalResults: 0
+    };
+    
+    // Buscar en cada tabla con cada término contextual
+    for (const term of searchTerms) {
+      console.log(`🔎 Buscando "${term}" en tablas de proyectos...`);
+      
+      // 1. Buscar en projects
+      const { data: projects } = await supabase
+        .from('projects')
+        .select('id, title, description, status, priority, category, tags, start_date, target_date, created_at')
+        .eq('user_id', userId)
+        .or(`title.ilike.%${term}%,description.ilike.%${term}%,category.ilike.%${term}%`)
+        .limit(5);
+        
+      if (projects) allResults.projects.push(...projects);
+
+      // 2. Buscar en project_contexts
+      const { data: contexts } = await supabase
+        .from('project_contexts')
+        .select(`
+          id, project_id, situation_description, main_problem, 
+          geographic_scope, time_frame, context_type, version,
+          projects!inner(title)
+        `)
+        .eq('projects.user_id', userId)
+        .or(`situation_description.ilike.%${term}%,main_problem.ilike.%${term}%,geographic_scope.ilike.%${term}%`)
+        .limit(3);
+        
+      if (contexts) allResults.contexts.push(...contexts);
+
+      // 3. Buscar en project_decisions
+      const { data: decisions } = await supabase
+        .from('project_decisions')
+        .select(`
+          id, project_id, title, description, decision_type, status,
+          rationale, expected_impact, urgency, created_at,
+          projects!inner(title)
+        `)
+        .eq('projects.user_id', userId)
+        .or(`title.ilike.%${term}%,description.ilike.%${term}%,rationale.ilike.%${term}%`)
+        .limit(3);
+        
+      if (decisions) allResults.decisions.push(...decisions);
+
+      // 4. Buscar en project_coverages
+      const { data: coverages } = await supabase
+        .from('project_coverages')
+        .select(`
+          id, project_id, coverage_type, name, parent_name, 
+          description, relevance, topic, created_at,
+          projects!inner(title)
+        `)
+        .eq('projects.user_id', userId)
+        .or(`name.ilike.%${term}%,description.ilike.%${term}%,topic.ilike.%${term}%`)
+        .limit(3);
+        
+      if (coverages) allResults.coverages.push(...coverages);
+
+      // 5. Buscar en capturado_cards (hallazgos)
+      const { data: cards } = await supabase
+        .from('capturado_cards')
+        .select(`
+          id, project_id, entity, city, department, pais, 
+          discovery, title, topic, description, created_at,
+          projects!inner(title)
+        `)
+        .eq('projects.user_id', userId)
+        .or(`entity.ilike.%${term}%,discovery.ilike.%${term}%,title.ilike.%${term}%,topic.ilike.%${term}%`)
+        .limit(3);
+        
+      if (cards) allResults.cards.push(...cards);
+    }
+    
+    // Eliminar duplicados de cada categoría
+    ['projects', 'contexts', 'decisions', 'coverages', 'cards'].forEach(category => {
+      allResults[category] = allResults[category].filter((item, index, self) => 
+        index === self.findIndex(i => i.id === item.id)
+      );
+    });
+    
+    // Calcular total de resultados
+    allResults.totalResults = Object.values(allResults)
+      .filter(val => Array.isArray(val))
+      .reduce((total, arr) => total + arr.length, 0);
+    
+    return allResults;
+      
+  } catch (error) {
+    console.error('❌ Error en búsqueda de proyectos:', error);
+    return { totalResults: 0 };
+  }
+}
+
+// Función para analizar relevancia de proyectos con LLM
+async function analyzeProjectRelevance(userQuery, projectResults) {
+  const analysisPrompt = `
+Responde de forma simple y directa sobre estos elementos de proyectos del usuario.
+
+CONSULTA: "${userQuery}"
+
+ELEMENTOS ENCONTRADOS:
+
+PROYECTOS (${projectResults.projects.length}):
+${projectResults.projects.map(p => `- ${p.title} (${p.status}) - ${p.description || 'Sin descripción'}`).join('\n')}
+
+CONTEXTOS (${projectResults.contexts.length}):
+${projectResults.contexts.map(c => `- ${c.projects.title}: ${c.situation_description?.substring(0, 100)}...`).join('\n')}
+
+DECISIONES (${projectResults.decisions.length}):
+${projectResults.decisions.map(d => `- ${d.projects.title}: ${d.title} (${d.status})`).join('\n')}
+
+COBERTURA GEOGRÁFICA (${projectResults.coverages.length}):
+${projectResults.coverages.map(c => `- ${c.projects.title}: ${c.name} (${c.coverage_type})`).join('\n')}
+
+HALLAZGOS (${projectResults.cards.length}):
+${projectResults.cards.map(c => `- ${c.projects.title}: ${c.title || c.discovery}`).join('\n')}
+
+INSTRUCCIONES:
+- Responde en máximo 4-5 líneas
+- Sé directo: "Encontré X proyectos sobre Y"
+- Menciona solo lo más relevante
+- Tono casual y amigable
+- Agrupa la información por proyecto cuando sea posible
+
+Ejemplo: "Encontré 2 proyectos relacionados: 'Marketing Digital' (activo) con 3 decisiones pendientes, y 'Análisis Guatemala' con hallazgos en 5 ciudades."
+
+Responde de forma simple:`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: analysisPrompt }],
+      temperature: 0.3,
+      max_tokens: 400
+    });
+
+    return {
+      success: true,
+      response: {
+        agent: 'Projects',
+        message: response.choices[0].message.content,
+        type: 'project_search',
+        timestamp: new Date().toISOString()
+      },
+      metadata: {
+        originalMessage: userQuery,
+        resultsCount: projectResults.totalResults,
+        results: projectResults
+      }
+    };
+    
+  } catch (error) {
+    console.error('❌ Error en análisis de relevancia de proyectos:', error);
+    
+    // Fallback con formato básico
+    let message = `🔍 **Búsqueda en Proyectos**\n\n✅ Encontré **${projectResults.totalResults}** elemento(s) relacionado(s):\n\n`;
+    
+    if (projectResults.projects.length > 0) {
+      message += `**Proyectos (${projectResults.projects.length}):**\n`;
+      projectResults.projects.slice(0, 3).forEach(p => {
+        message += `• ${p.title} (${p.status})\n`;
+      });
+      message += `\n`;
+    }
+    
+    if (projectResults.decisions.length > 0) {
+      message += `**Decisiones (${projectResults.decisions.length}):**\n`;
+      projectResults.decisions.slice(0, 2).forEach(d => {
+        message += `• ${d.title} - ${d.projects.title}\n`;
+      });
+    }
+    
+    return {
+      success: true,
+      response: {
+        agent: 'Projects',
+        message: message,
+        type: 'project_search',
+        timestamp: new Date().toISOString()
+      },
+      metadata: {
+        originalMessage: userQuery,
+        resultsCount: projectResults.totalResults,
+        results: projectResults
+      }
+    };
+  }
+}
+
+// Función helper para generar respuestas casuales
+async function generateCasualResponse(message) {
+  const responses = {
+    greetings: [
+      "¡Hola! 👋 Soy Vizta, tu asistente inteligente. ¿En qué puedo ayudarte hoy?",
+      "¡Hola! 😊 Me alegra verte. Estoy aquí para ayudarte con análisis social y gestión de datos.",
+      "¡Bienvenido! 🌟 Soy Vizta, y junto con Laura y Robert podemos ayudarte con análisis de tendencias y más.",
+      "¡Hola! 🤖 ¿Qué te gustaría analizar hoy?"
+    ],
+    howAreYou: [
+      "¡Muy bien, gracias! 💪 Mis sistemas están funcionando perfectamente. ¿En qué puedo ayudarte?",
+      "¡Excelente! 🚀 Laura y Robert están listos para cualquier análisis que necesites.",
+      "¡Todo perfecto! 😊 Listo para ayudarte con análisis social, tendencias o tus proyectos personales."
+    ]
+  };
+
+  const msgLower = message.toLowerCase();
+  let responseArray;
+
+  if (msgLower.includes('qué tal') || msgLower.includes('como estas') || msgLower.includes('que tal')) {
+    responseArray = responses.howAreYou;
+  } else {
+    responseArray = responses.greetings;
+  }
+
+  const randomIndex = Math.floor(Math.random() * responseArray.length);
+  return responseArray[randomIndex];
+}
 
 /**
  * GET /api/vizta-chat/scrapes

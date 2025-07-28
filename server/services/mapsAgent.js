@@ -939,6 +939,92 @@ async function batchNormalizeGeography(locations) {
 }
 
 /**
+ * Normaliza lote de ubicaciones geográficas con coordenadas incluidas
+ * Versión mejorada que incluye geocodificación automática y manejo de múltiples ubicaciones
+ */
+async function batchNormalizeGeographyWithCoordinates(locations) {
+  if (!Array.isArray(locations) || locations.length === 0) {
+    return [];
+  }
+  
+  console.log(`🗺️ [MAPS+COORDS] Procesando lote de ${locations.length} ubicaciones con coordenadas...`);
+  
+  const results = [];
+  
+  for (let i = 0; i < locations.length; i++) {
+    const location = locations[i];
+    
+    try {
+      // ✅ PASO 1: Verificar si hay múltiples ubicaciones en un solo objeto
+      // Usar la función de parsing para detectar múltiples ubicaciones
+      const { parseLocationString } = require('../utils/geographic-ai-detector');
+      const parsedLocation = parseLocationString(location);
+      
+      // CASO A: Múltiples ubicaciones detectadas (devuelve array)
+      if (Array.isArray(parsedLocation)) {
+        console.log(`🔄 [MULTI-GEO] Detectadas ${parsedLocation.length} ubicaciones múltiples en ítem ${i}`);
+        
+        // Procesar cada ubicación por separado
+        for (const singleLocation of parsedLocation) {
+          const normalizedWithCoords = await normalizeGeographicInfoWithCoordinates(singleLocation);
+          
+          results.push({
+            ...normalizedWithCoords,
+            detection_method: 'mapsAgent_multi',
+            confidence: normalizedWithCoords.confidence || 'high',
+            reasoning: `Múltiples ubicaciones detectadas: ${singleLocation._originalString || 'ubicaciones separadas'}`,
+            _originalIndex: i,
+            _isMultiLocation: true,
+            _multiType: singleLocation._isMultiDepartment ? 'departments' : 'municipalities'
+          });
+        }
+      } 
+      // CASO B: Ubicación única (devuelve objeto)
+      else {
+        const normalizedWithCoords = await normalizeGeographicInfoWithCoordinates(parsedLocation);
+        
+        results.push({
+          ...normalizedWithCoords,
+          detection_method: normalizedWithCoords.detection_method || 'mapsAgent',
+          confidence: normalizedWithCoords.confidence || 'high',
+          reasoning: normalizedWithCoords.reasoning || 'Detección con coordenadas automáticas',
+          _originalIndex: i,
+          _isMultiLocation: false
+        });
+      }
+      
+    } catch (error) {
+      console.error(`🚨 [MAPS+COORDS] Error procesando ubicación ${i}:`, error);
+      results.push({
+        ...location,
+        coordinates: null,
+        geocoded: false,
+        detection_method: 'error',
+        confidence: 'low',
+        reasoning: 'Error en procesamiento',
+        _originalIndex: i,
+        _isMultiLocation: false
+      });
+    }
+  }
+  
+  console.log(`✅ [MAPS+COORDS] Lote procesado: ${results.length} ubicaciones con coordenadas (incluyendo múltiples)`);
+  
+  // Estadísticas de múltiples ubicaciones
+  const multiLocationStats = {
+    total_processed: locations.length,
+    total_results: results.length,
+    multi_location_cards: results.filter(r => r._isMultiLocation).length,
+    single_location_cards: results.filter(r => !r._isMultiLocation).length,
+    with_coordinates: results.filter(r => r.coordinates).length
+  };
+  
+  console.log(`📊 [MULTI-GEO] Estadísticas:`, multiLocationStats);
+  
+  return results;
+}
+
+/**
  * Valida si una ubicación pertenece a Guatemala
  */
 function isGuatemalan(location) {
@@ -1263,6 +1349,7 @@ module.exports = {
   findSimilarLocations,
   detectGeographyWithAI,
   batchNormalizeGeography,
+  batchNormalizeGeographyWithCoordinates, // ✅ Nueva función con coordenadas
   isGuatemalan,
   getLocationInfo,
   isInstitutionNotLocationWithAI,

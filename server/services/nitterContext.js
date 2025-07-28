@@ -3,20 +3,21 @@ const supabase = require('../utils/supabase');
 
 // Configuración de la API de ExtractorT
 function getExtractorTUrl() {
+  // Verificar variables de entorno específicas primero
   if (process.env.EXTRACTOR_T_URL) {
     return process.env.EXTRACTOR_T_URL;
   }
   
-  // Detectar si estamos en Docker
-  if (process.env.NODE_ENV === 'production' || process.env.DOCKER_ENV === 'true') {
-    // En Docker, usar host.docker.internal o la IP del host
-    return process.env.DOCKER_HOST_IP 
-      ? `http://${process.env.DOCKER_HOST_IP}:8000`
-      : 'http://host.docker.internal:8000';
-  }
+  // Detectar entorno automáticamente
+  const isProduction = process.env.NODE_ENV === 'production';
   
-  // En desarrollo local
-  return 'http://localhost:8000';
+  if (isProduction) {
+    // PRODUCCIÓN: Usar URL externa
+    return process.env.EXTRACTORT_URL || 'https://api.standatpd.com';
+  } else {
+    // DESARROLLO: Usar contenedor local con IP del host
+    return process.env.EXTRACTORT_LOCAL_URL || 'http://127.0.0.1:8000';
+  }
 }
 
 const EXTRACTOR_T_URL = getExtractorTUrl();
@@ -592,7 +593,7 @@ async function processNitterContext(query, userId, sessionId, location = 'guatem
         total_engagement: totalEngagement,
         avg_engagement: avgEngagement,
         execution_time_ms: executionTime,
-        tweets: processedTweets.slice(0, 5), // Solo los primeros 5 para el chat
+        tweets: processedTweets, // Todos los tweets para análisis completo
         summary: `Se encontraron ${processedTweets.length} tweets sobre "${query}" en la categoría ${categoria}. ${savedCount} tweets guardados exitosamente. Engagement promedio: ${avgEngagement}. Los tweets han sido analizados y guardados para futura referencia.`
       }
     };

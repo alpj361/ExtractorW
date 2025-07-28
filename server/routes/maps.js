@@ -133,10 +133,7 @@ router.post('/normalize-country', verifyUserAccess, async (req, res) => {
     const result = mapsAgent.normalizeCountryName(country);
     
     // Log de usage
-    await logUsage(req.user.id, 'maps_normalize_country', {
-      input: country,
-      output: result
-    });
+    await logUsage(req.user, 'maps_normalize_country', 1, req);
     
     res.json({
       success: true,

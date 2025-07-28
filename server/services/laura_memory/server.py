@@ -7,7 +7,7 @@ import logging
 from typing import Dict, Any
 
 from integration import laura_memory_integration
-from memory import search_public_memory, get_memory_stats
+from memory import search_public_memory, get_memory_stats, search_pulsepolitics, get_pulsepolitics_stats, search_userhandles, get_userhandles_stats
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -149,6 +149,92 @@ def memory_stats():
         
     except Exception as e:
         logger.error(f"❌ Error obteniendo estadísticas: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/laura-memory/search-pulsepolitics', methods=['POST'])
+def search_pulsepolitics_endpoint():
+    """
+    Busca específicamente en el grupo compartido UserHandles.
+    
+    Expected JSON:
+    {
+        "query": "Bernardo Arévalo",
+        "limit": 5
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'query' not in data:
+            return jsonify({"error": "Falta el campo 'query'"}), 400
+        
+        results = search_pulsepolitics(
+            query=data['query'],
+            limit=data.get('limit', 5)
+        )
+        
+        return jsonify({"results": results, "source": "userhandles_shared_group"})
+        
+    except Exception as e:
+        logger.error(f"❌ Error buscando en PulsePolitics: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/laura-memory/pulsepolitics-stats', methods=['GET'])
+def pulsepolitics_stats():
+    """
+    Obtiene estadísticas del grupo compartido UserHandles.
+    """
+    try:
+        stats = get_pulsepolitics_stats()
+        return jsonify(stats)
+        
+    except Exception as e:
+        logger.error(f"❌ Error obteniendo estadísticas PulsePolitics: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/laura-memory/search-userhandles', methods=['POST'])
+def search_userhandles_endpoint():
+    """
+    Busca específicamente en el grupo UserHandles.
+    
+    Expected JSON:
+    {
+        "query": "Bernardo Arévalo",
+        "limit": 5
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'query' not in data:
+            return jsonify({"error": "Falta el campo 'query'"}), 400
+        
+        results = search_userhandles(
+            query=data['query'],
+            limit=data.get('limit', 5)
+        )
+        
+        return jsonify({"results": results, "source": "userhandles_shared_group"})
+        
+    except Exception as e:
+        logger.error(f"❌ Error buscando en UserHandles: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/laura-memory/userhandles-stats', methods=['GET'])
+def userhandles_stats():
+    """
+    Obtiene estadísticas del grupo UserHandles.
+    """
+    try:
+        stats = get_userhandles_stats()
+        return jsonify(stats)
+        
+    except Exception as e:
+        logger.error(f"❌ Error obteniendo estadísticas UserHandles: {e}")
         return jsonify({"error": str(e)}), 500
 
 

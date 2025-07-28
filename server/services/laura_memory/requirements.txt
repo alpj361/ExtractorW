@@ -1,5 +1,5 @@
 # Laura Memory - Dependencias Python
-zep-cloud==1.0.0
+zep-cloud==2.22.0
 pydantic==2.8.2
 pydantic-settings==2.3.4
 flask==3.0.3

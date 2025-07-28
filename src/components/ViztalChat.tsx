@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { TextShimmer } from './ui/text-shimmer';
 import { Card } from './ui/card';
 import { Badge } from './ui/badge';
-import { cn } from '@/lib/utils';
+import { cn } from '../lib/utils';
 
 // ------------------------------------------------------------
 // Utilidad local para resolver la URL base del backend ExtractorW
@@ -73,7 +73,7 @@ export function ViztalChat({
 
   useEffect(() => {
     // Generate session ID on mount
-    const newSessionId = `vizta_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     setSessionId(newSessionId);
   }, []);
 
@@ -113,19 +113,37 @@ export function ViztalChat({
       }
 
       const data = await response.json();
+      console.log("🔍 Respuesta recibida del servidor:", JSON.stringify(data, null, 2));
 
       if (data.success) {
+        let messageContent: string;
+
+        // Lógica defensiva para asegurar que el contenido siempre sea un string
+        if (data.response && typeof data.response.message === 'string') {
+          messageContent = data.response.message;
+        } else if (data.response && typeof data.response === 'string') {
+          messageContent = data.response;
+        } else {
+          // Fallback: si no podemos encontrar el mensaje, mostramos el objeto de respuesta para depurar
+          messageContent = `Respuesta con formato inesperado. Recibido:\n\n\`\`\`json\n${JSON.stringify(data.response || data, null, 2)}\n\`\`\``;
+        }
+
         const assistantMessage: Message = {
           id: `assistant_${Date.now()}`,
           role: 'assistant',
-          content: data.response,
-          timestamp: new Date(),
-          toolUsed: data.toolUsed,
-          executionTime: data.executionTime,
+          content: messageContent,
+          timestamp: new Date(data.response?.timestamp || Date.now()),
+          toolUsed: data.toolUsed || data.response?.type,
+          executionTime: data.executionTime || data.metadata?.processingTime,
           tweetAnalyzed: data.toolResult?.tweets?.length || data.responseMetadata?.tweetsAnalyzed
         };
 
         setMessages(prev => [...prev, assistantMessage]);
+        
+        // Actualizar sessionId si no existe
+        if (!sessionId && data.conversationId) {
+          setSessionId(data.conversationId);
+        }
       } else {
         throw new Error(data.message || 'Error en la respuesta del servidor');
       }
@@ -146,7 +164,7 @@ export function ViztalChat({
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();

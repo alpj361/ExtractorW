@@ -4,10 +4,10 @@ Integración de Laura Memory con el agente JavaScript.
 
 import json
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-from memory import add_public_memory, search_public_memory
+from memory import add_public_memory, search_public_memory, add_to_pulsepolitics, search_pulsepolitics, add_to_userhandles, search_userhandles
 from detectors import should_save_to_memory
 
 logger = logging.getLogger(__name__)
@@ -178,7 +178,7 @@ class LauraMemoryIntegration:
     def save_user_discovery(self, user_name: str, twitter_username: str, 
                            description: str = "", category: str = "") -> bool:
         """
-        Guarda información de un usuario descubierto con ML.
+        Guarda información de un usuario descubierto con ML en PulsePolitics (grafo compartido).
         
         Args:
             user_name: Nombre completo del usuario.
@@ -190,25 +190,46 @@ class LauraMemoryIntegration:
             True si se guardó exitosamente.
         """
         try:
-            content = f"Usuario descubierto: {user_name} (@{twitter_username})"
-            if description:
-                content += f" - {description}"
+            # Formato simplificado: solo "el usuario es @xxx"
+            content = f"el usuario es @{twitter_username}"
             
             metadata = {
                 "source": "ml_discovery",
-                "tags": ["new_user", "ml_discovery", category] if category else ["new_user", "ml_discovery"],
                 "twitter_username": twitter_username,
+                "full_name": user_name,
                 "category": category,
                 "ts": datetime.utcnow().isoformat()
             }
             
-            add_public_memory(content, metadata)
-            logger.info(f"✅ Usuario guardado en memoria: {user_name} (@{twitter_username})")
-            return True
+            # Guardar en UserHandles (grupo compartido para handles descubiertos)
+            saved = add_to_userhandles(content, metadata)
+            if saved:
+                logger.info(f"👥 Usuario NUEVO guardado en UserHandles: {user_name} (@{twitter_username})")
+            else:
+                logger.info(f"👥 Usuario YA EXISTE en UserHandles: {user_name} (@{twitter_username})")
+            return saved
             
         except Exception as e:
-            logger.error(f"❌ Error guardando usuario en memoria: {e}")
+            logger.error(f"❌ Error guardando usuario en UserHandles: {e}")
             return False
+    
+    def search_political_context(self, query: str, limit: int = 3) -> List[str]:
+        """
+        Busca contexto político en PulsePolitics (grupo compartido).
+        
+        Args:
+            query: Consulta de búsqueda.
+            limit: Número máximo de resultados.
+            
+        Returns:
+            Lista de contextos políticos relevantes.
+        """
+        try:
+            # Buscar en PulsePolitics en lugar de memoria personal
+            return search_pulsepolitics(query, limit)
+        except Exception as e:
+            logger.error(f"❌ Error buscando contexto político: {e}")
+            return []
 
 
 # Instancia global para uso desde JavaScript
