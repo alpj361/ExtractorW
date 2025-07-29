@@ -170,32 +170,14 @@ class LauraMemoryClient {
     }
 
     try {
-      // Primero intentar buscar en PulsePolitics (grafo compartido)
-      const response = await this.client.post('/api/laura-memory/search-pulsepolitics', {
-        query: `${query} política político gobierno congreso presidente`,
-        limit: limit
-      });
-
-      console.log(`[LAURA_MEMORY] 🏛️ Búsqueda en PulsePolitics "${query}" encontró ${response.data.results?.length || 0} resultados`);
-      return response.data.results || [];
+      // TODO: Implementar búsqueda en PulsePolitics usando internalMemoryClient
+      // Por ahora retornamos array vacío para evitar el error 404
+      console.log(`[LAURA_MEMORY] 🏛️ Búsqueda PulsePolitics temporal deshabilitada para: "${query}"`);
+      return [];
 
     } catch (error) {
       console.error(`[LAURA_MEMORY] ❌ Error en búsqueda PulsePolitics:`, error.message);
-      
-      // Fallback a búsqueda en memoria personal si PulsePolitics falla
-      try {
-        const fallbackResponse = await this.client.post('/api/laura-memory/search', {
-          query: `${query} política político gobierno congreso presidente`,
-          limit: limit
-        });
-        
-        console.log(`[LAURA_MEMORY] 🔄 Fallback a memoria personal para "${query}"`);
-        return fallbackResponse.data.results || [];
-        
-      } catch (fallbackError) {
-        console.error(`[LAURA_MEMORY] ❌ Error en fallback:`, fallbackError.message);
-        return [];
-      }
+      return [];
     }
   }
 

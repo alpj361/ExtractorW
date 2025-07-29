@@ -7,6 +7,7 @@ const { AGENT_CAPABILITIES } = require('../config/agentCapabilities');
 const { communicationBus } = require('../shared/agentCommunication');
 const mcpService = require('../../mcp');
 const { LauraMemoryClient } = require('./memoryClient');
+const { InternalMemoryClient } = require('./internalMemoryClient');
 
 // Módulos especializados de Laura
 const { SocialAnalysisEngine } = require('./socialAnalysis');
@@ -27,6 +28,13 @@ class LauraAgent {
       enabled: (process.env.LAURA_MEMORY_ENABLED || 'true').toLowerCase() === 'true'
     });
     console.log(`[LAURA] 🧠 Cliente de memoria HTTP configurado: ${process.env.LAURA_MEMORY_URL || 'http://localhost:5001'}`);
+    
+    // Cliente interno para UserHandles (Zep search/save)
+    this.internalMemoryClient = new InternalMemoryClient({
+      enabled: (process.env.LAURA_MEMORY_ENABLED || 'true').toLowerCase() === 'true',
+      baseUrl: process.env.LAURA_MEMORY_URL || 'http://localhost:5001'
+    });
+    console.log(`[LAURA] 🔍 Cliente interno de memoria configurado para UserHandles`);
     
     // Inicializar motores especializados
     this.socialAnalysis = new SocialAnalysisEngine(this);

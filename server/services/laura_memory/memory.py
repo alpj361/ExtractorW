@@ -482,26 +482,26 @@ def search_userhandles(query: str, limit: int = 5) -> List[str]:
             return client.graph.search(
                 group_id="userhandles",
                 query=query,
-                scope="episodes",  # Buscar en episodios (datos guardados con graph.add)
+                scope="edges",  # Buscar en edges (datos guardados con graph.add)
                 limit=limit
             )
         
         search_results = _retry_with_backoff(_search_operation)
         
         facts = []
-        # Procesar episodios (la respuesta principal para datos guardados con graph.add)
-        if hasattr(search_results, 'episodes') and search_results.episodes:
-            for episode in search_results.episodes:
+        # Procesar edges (la respuesta principal para datos guardados con graph.add)
+        if hasattr(search_results, 'edges') and search_results.edges:
+            for edge in search_results.edges:
                 try:
-                    # Los datos están en episode.data según el formato de episodios
-                    if hasattr(episode, 'data') and episode.data:
-                        facts.append(episode.data)
-                        logger.debug(f"[DEBUG] Episode data encontrado: {episode.data[:100]}")
-                    elif hasattr(episode, 'content') and episode.content:
-                        facts.append(episode.content)
-                        logger.debug(f"[DEBUG] Episode content encontrado: {episode.content[:100]}")
+                    # Los datos están en edge.fact según la documentación de Zep
+                    if hasattr(edge, 'fact') and edge.fact:
+                        facts.append(edge.fact)
+                        logger.debug(f"[DEBUG] Edge fact encontrado: {edge.fact[:100]}")
+                    elif hasattr(edge, 'data') and edge.data:
+                        facts.append(edge.data)
+                        logger.debug(f"[DEBUG] Edge data encontrado: {edge.data[:100]}")
                 except Exception as e:
-                    logger.error(f"[DEBUG] Error procesando episode UserHandles: {e}")
+                    logger.error(f"[DEBUG] Error procesando edge UserHandles: {e}")
                     continue
         
         logger.info(f"👥 Búsqueda UserHandles: '{query}' → {len(facts)} resultados")

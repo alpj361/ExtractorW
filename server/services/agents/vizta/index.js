@@ -657,6 +657,31 @@ class ViztaAgent {
         case 'twitter_analysis':
           return await this.lauraHandlers.handleTwitterAnalysis(userMessage, user, conversationId);
           
+        case 'user_discovery':
+          console.log(`[VIZTA] 🔍 Ejecutando User Discovery para: "${userMessage}"`);
+          const userDiscoveryResult = await this.lauraHandlers.handleUserDiscovery(userMessage, user, conversationId);
+          
+          // Procesar resultado a través del responseOrchestrator
+          if (userDiscoveryResult && userDiscoveryResult.data) {
+            const orchestratedResponse = await this.responseOrchestrator.orchestrateResponse(
+              [userDiscoveryResult], 
+              userMessage, 
+              { agents: ['laura'] },
+              { id: conversationId }
+            );
+            
+            return {
+              agent: orchestratedResponse.agent || 'Vizta',
+              message: orchestratedResponse.processedContent,
+              processedContent: orchestratedResponse.processedContent,
+              type: userDiscoveryResult.type,
+              timestamp: userDiscoveryResult.timestamp,
+              mode: 'agential_processed'
+            };
+          }
+          
+          return userDiscoveryResult;
+
         case 'twitter_profile':
           const profileResult = await this.lauraHandlers.handleTwitterProfile(userMessage, user, conversationId);
           

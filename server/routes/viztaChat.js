@@ -1646,6 +1646,51 @@ router.get('/scrapes/grouped-stats', verifyUserAccess, async (req, res) => {
 });
 
 /**
+ * POST /api/vizta-chat/test-user-discovery
+ * Endpoint de prueba para verificar User Discovery
+ */
+router.post('/test-user-discovery', verifyUserAccess, async (req, res) => {
+  try {
+    const { message } = req.body;
+    
+    if (!message) {
+      return res.status(400).json({
+        success: false,
+        message: 'Parámetro "message" es requerido'
+      });
+    }
+
+    console.log(`🧪 TEST USER DISCOVERY: "${message}"`);
+
+    // Procesar el mensaje usando el sistema completo
+    const result = await agentesService.processUserQuery(message, req.user);
+
+    res.json({
+      success: true,
+      test_input: message,
+      intent_detected: result.metadata?.intent,
+      intent_confidence: result.metadata?.intentConfidence,
+      intent_method: result.metadata?.intentMethod,
+      mode: result.metadata?.mode,
+      agent_response: result.response?.agent,
+      processing_time: result.metadata?.processingTime,
+      user_discovery_activated: result.metadata?.intent === 'user_discovery',
+      response_preview: result.response?.message?.substring(0, 200) + '...',
+      full_result: process.env.NODE_ENV === 'development' ? result : undefined,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Error en test user discovery:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error probando user discovery',
+      error: error.message
+    });
+  }
+});
+
+/**
  * DELETE /api/vizta-chat/scrapes/:scrapeId
  * Eliminar un scrape específico del usuario
  */

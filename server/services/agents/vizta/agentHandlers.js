@@ -31,6 +31,11 @@ class LauraHandlers {
 
       const result = await this.laura.executeTask(task, user);
       
+      // Verificar si encontró información de usuario y guardarlo en userhandles
+      if (result && result.success && result.data) {
+        await this.saveUserIfFound(result.data, message, user, tool);
+      }
+      
       return {
         agent: 'Laura',
         data: result,
@@ -88,6 +93,65 @@ class LauraHandlers {
     }
   }
 
+  async handleUserDiscovery(message, user, conversationId) {
+    console.log(`[LAURA_HANDLER] 🔍 User Discovery: "${message}"`);
+    
+    try {
+      // Usar directamente el UserDiscoveryEngine de Laura
+      const userDiscoveryResult = await this.laura.userDiscovery.enhancedUserDetection(message, user);
+      
+      if (userDiscoveryResult && userDiscoveryResult !== 'USER_NOT_FOUND') {
+        // Si encontró el usuario, obtener su perfil
+        const task = {
+          id: `user_discovery_profile_${Date.now()}`,
+          agent: 'laura',
+          tool: 'nitter_profile',
+          type: 'profile',
+          originalQuery: message,
+          args: {
+            username: userDiscoveryResult
+          },
+          user: user
+        };
+
+        const profileResult = await this.laura.executeTask(task, user);
+        
+        return {
+          agent: 'Laura',
+          data: {
+            ...profileResult,
+            discovered_username: userDiscoveryResult,
+            original_query: message,
+            discovery_successful: true
+          },
+          type: 'user_discovery_result',
+          timestamp: new Date().toISOString()
+        };
+      } else {
+        // Usuario no encontrado
+        return {
+          agent: 'Laura',
+          data: {
+            discovery_successful: false,
+            original_query: message,
+            message: `No pude encontrar información sobre "${message}" en Twitter. El usuario podría no existir o no tener cuenta pública.`
+          },
+          type: 'user_discovery_result',
+          timestamp: new Date().toISOString()
+        };
+      }
+      
+    } catch (error) {
+      console.error(`[LAURA_HANDLER] ❌ Error en User Discovery:`, error);
+      return {
+        agent: 'Laura',
+        error: error.message,
+        type: 'error',
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
   async handleTwitterProfile(message, user, conversationId) {
     console.log(`[LAURA_HANDLER] 👤 Búsqueda de perfil: "${message}"`);
     
@@ -110,6 +174,11 @@ class LauraHandlers {
       };
 
       const result = await this.laura.executeTask(task, user);
+      
+      // Verificar si encontró información de usuario y guardarlo en userhandles
+      if (result && result.success && result.data) {
+        await this.saveUserIfFound(result.data, message, user, 'nitter_profile');
+      }
       
       return {
         agent: 'Laura',
@@ -152,9 +221,13 @@ class LauraHandlers {
 
       const result = await this.laura.executeTask(task, user);
       
+      // Verificar si encontró información de usuario y guardarlo en userhandles
+      if (result && result.success && result.data) {
+        await this.saveUserIfFound(result.data, message, user, 'perplexity_search');
+      }
+      
       return {
         agent: 'Laura',
-        
         data: result,
         type: 'web_search_result',
         timestamp: new Date().toISOString()
@@ -164,11 +237,72 @@ class LauraHandlers {
       console.error(`[LAURA_HANDLER] ❌ Error en búsqueda web:`, error);
       return {
         agent: 'Laura',
-        
         error: error.message,
         type: 'error',
         timestamp: new Date().toISOString()
       };
+    }
+  }
+
+  /**
+   * Guardar usuario en userhandles si se encontró información relevante
+   */
+  async saveUserIfFound(resultData, originalQuery, user, discoveryMethod) {
+    try {
+      if (!this.laura.internalMemoryClient?.enabled) {
+        return false;
+      }
+
+      // Buscar información de usuario en el resultado
+      let userName = null;
+      let twitterHandle = null;
+      let description = '';
+
+      // Extraer de texto usando patrones comunes
+      const content = typeof resultData === 'string' ? resultData : 
+                     resultData.formatted_response || resultData.content || JSON.stringify(resultData);
+
+      if (content) {
+        // Buscar handles de Twitter (@username)
+        const handleMatch = content.match(/@([a-zA-Z0-9_]+)/);
+        if (handleMatch) {
+          twitterHandle = handleMatch[1];
+        }
+
+        // Buscar nombres en el contexto original
+        const nameMatch = originalQuery.match(/(?:busca a|encuentra a|tweets de|perfil de|extrae|información sobre|quién es)\s+([^.?!]+)/i);
+        if (nameMatch) {
+          userName = nameMatch[1].trim();
+        }
+
+        // Si tenemos tanto nombre como handle, guardar
+        if (userName && twitterHandle && userName.length > 2) {
+          console.log(`[LAURA_HANDLER] 💾 Guardando usuario descubierto: ${userName} → @${twitterHandle}`);
+          
+          const saveResult = await this.laura.internalMemoryClient.saveUserDiscovery({
+            user_name: userName,
+            twitter_username: twitterHandle,
+            description: `Descubierto vía ${discoveryMethod}`,
+            category: 'discovered'
+          }, {
+            discovery_type: discoveryMethod,
+            context: originalQuery,
+            confidence: 0.8
+          });
+
+          if (saveResult.success) {
+            console.log(`[LAURA_HANDLER] ✅ Usuario guardado en userhandles: ${userName} → @${twitterHandle}`);
+            return true;
+          } else {
+            console.warn(`[LAURA_HANDLER] ⚠️ Error guardando usuario:`, saveResult.error);
+          }
+        }
+      }
+
+      return false;
+    } catch (error) {
+      console.error(`[LAURA_HANDLER] ❌ Error en saveUserIfFound:`, error);
+      return false;
     }
   }
 

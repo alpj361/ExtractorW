@@ -223,29 +223,55 @@ CRÍTICO: En originalText pon SOLO el nombre de la persona, NO toda la frase.`;
             console.log(`[LAURA] 🔍 Buscando en UserHandles: "${potentialUser.originalText}"`);
             const userHandleResults = await this.laura.internalMemoryClient.searchUserHandles(potentialUser.originalText, 3);
             
-            // Buscar coincidencia exacta o muy similar
-            const exactMatch = userHandleResults.find(result => {
-              const similarity = this.calculateSimilarity(
-                potentialUser.originalText.toLowerCase(),
-                result.user_name?.toLowerCase() || ''
-              );
-              return similarity > 0.85; // 85% de similitud o más
-            });
+            // Parse results from Zep - they come as strings like "Usuario: Name (@handle) - description"
+            let existingHandleFromMemory = null;
+            console.log(`[LAURA] 🔍 Procesando ${userHandleResults.length} resultados de UserHandles para "${potentialUser.originalText}"`);
             
-            if (exactMatch && exactMatch.twitter_username) {
-              existingHandle = exactMatch.twitter_username.replace('@', '');
-              console.log(`[LAURA] ✅ Usuario encontrado en UserHandles: "${potentialUser.originalText}" → @${existingHandle}`);
-              
+            for (const result of userHandleResults) {
+              if (typeof result === 'string' && result.trim()) {
+                // Extract Twitter handle from string format
+                const handleMatch = result.match(/@([a-zA-Z0-9_]+)/);
+                if (handleMatch) {
+                  const foundHandle = handleMatch[1];
+                  
+                  // Extract name from the result string for comparison
+                  let nameFromResult = '';
+                  const userMatch = result.match(/Usuario:\s*([^(@]+)/);
+                  if (userMatch) {
+                    nameFromResult = userMatch[1].trim();
+                  }
+                  
+                  // Check if this result matches the person we're looking for
+                  const searchName = potentialUser.originalText.toLowerCase();
+                  const resultNameLower = nameFromResult.toLowerCase();
+                  const fullResultLower = result.toLowerCase();
+                  
+                  // Multiple matching strategies
+                  const exactNameMatch = resultNameLower === searchName;
+                  const nameContains = resultNameLower.includes(searchName) || searchName.includes(resultNameLower);
+                  const fullTextContains = fullResultLower.includes(searchName);
+                  const similarity = this.calculateSimilarity(searchName, resultNameLower);
+                  
+                  if (exactNameMatch || nameContains || (fullTextContains && similarity > 0.5)) {
+                    existingHandleFromMemory = foundHandle;
+                    console.log(`[LAURA] ✅ Usuario encontrado en UserHandles: "${potentialUser.originalText}" → @${foundHandle}`);
+                    console.log(`[LAURA] 📄 Matched: "${nameFromResult}" (${similarity.toFixed(2)} similarity)`);
+                    break;
+                  }
+                }
+              }
+            }
+            
+            if (existingHandleFromMemory) {
               resolvedUsers.push({
                 originalQuery: potentialUser.originalText,
-                username: existingHandle,
-                confidence: 0.95, // Alta confianza porque ya lo conocemos
+                username: existingHandleFromMemory,
+                confidence: 0.95,
                 source: 'userhandles_memory'
               });
-              
-              continue; // Saltamos la búsqueda externa
+              continue; // Skip external search
             } else {
-              console.log(`[LAURA] 🔍 Usuario no encontrado en UserHandles, procediendo con búsqueda externa`);
+              console.log(`[LAURA] 🔍 Usuario "${potentialUser.originalText}" no encontrado en UserHandles, procediendo con búsqueda externa`);
             }
           } catch (error) {
             console.warn(`[LAURA] ⚠️ Error buscando en UserHandles:`, error.message);

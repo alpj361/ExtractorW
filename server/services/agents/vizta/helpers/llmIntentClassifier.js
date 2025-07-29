@@ -34,6 +34,7 @@ MODO AGÉNTICO (delegar a agentes especializados):
 - "nitter_search" → buscar en Twitter/X, hashtags, trending topics
 - "twitter_analysis" → analizar sentimientos, tendencias en Twitter
 - "twitter_profile" → buscar perfiles específicos en Twitter
+- "user_discovery" → buscar información sobre personas, políticos, usuarios, handles
 - "web_search" → investigar información general en internet
 - "search_codex" → buscar en documentos personales/codex del usuario
 - "search_projects" → consultar proyectos activos del usuario
@@ -81,7 +82,7 @@ Responde SOLO con la categoría correspondiente (ejemplo: "casual_conversation")
       // Validar que la respuesta sea una de las categorías válidas
       const validIntents = [
         'casual_conversation', 'capability_question', 'help_request', 'small_talk',
-        'nitter_search', 'twitter_analysis', 'twitter_profile', 'web_search',
+        'nitter_search', 'twitter_analysis', 'twitter_profile', 'user_discovery', 'web_search',
         'search_codex', 'search_projects', 'analyze_document', 'mixed_analysis',
         'unknown'
       ];
@@ -124,8 +125,8 @@ Responde SOLO con la categoría correspondiente (ejemplo: "casual_conversation")
       return { intent: 'capability_question', confidence: 0.7, method: 'fallback' };
     }
     
-    // Agéntico
-    if (/buscar en twitter|twitter|nitter|trending|hashtag|viral/i.test(text)) {
+    // Agéntico - pero DESPUÉS de user discovery para evitar conflictos
+    if (/buscar en twitter|nitter|trending|hashtag|viral/i.test(text)) {
       return { intent: 'nitter_search', confidence: 0.6, method: 'fallback' };
     }
     
@@ -137,7 +138,30 @@ Responde SOLO con la categoría correspondiente (ejemplo: "casual_conversation")
       return { intent: 'twitter_profile', confidence: 0.6, method: 'fallback' };
     }
     
-    if (/busca información|investiga sobre|búsqueda web/i.test(text)) {
+    // User discovery patterns - deben ir ANTES de los patrones generales
+    
+    // Handles y menciones de Twitter (máxima prioridad)
+    if (/@\w+/i.test(text)) {
+      return { intent: 'user_discovery', confidence: 0.8, method: 'fallback' };
+    }
+    
+    // Búsqueda específica de personas con nombres propios
+    if (/^(busca|quien es|encuentra|información sobre) [A-Z][a-z]+(\s+[A-Z][a-z]+)*$/i.test(text)) {
+      return { intent: 'user_discovery', confidence: 0.8, method: 'fallback' };
+    }
+    
+    // Twitter de + nombres propios
+    if (/twitter de [A-Z][a-z]+(\s+[A-Z][a-z]+)*$/i.test(text)) {
+      return { intent: 'user_discovery', confidence: 0.8, method: 'fallback' };
+    }
+    
+    // Handle/cuenta de + nombres propios
+    if (/(handle|cuenta) de [A-Z][a-z]+(\s+[A-Z][a-z]+)+/i.test(text)) {
+      return { intent: 'user_discovery', confidence: 0.8, method: 'fallback' };
+    }
+    
+    // Web search - solo si no es sobre personas
+    if (/busca información sobre (el|la|los|las)|investiga sobre (el|la|los|las)|búsqueda web/i.test(text)) {
       return { intent: 'web_search', confidence: 0.6, method: 'fallback' };
     }
     

@@ -15,7 +15,7 @@ class InternalMemoryClient {
     // URL del Laura Memory Service
     this.baseUrl = options.baseUrl || process.env.LAURA_MEMORY_URL || 'http://host.docker.internal:5001';
     
-    // Ruta al módulo Python (para funciones legacy que aún lo usen)
+    // Ruta al módulo Python interno  
     this.pythonPath = path.join(__dirname, '../../laura_memory');
     
     console.log(`[LAURA_MEMORY_INTERNAL] 🧠 Cliente interno inicializado - Enabled: ${this.enabled}, URL: ${this.baseUrl}`);
@@ -34,6 +34,7 @@ class InternalMemoryClient {
       const argsJson = JSON.stringify({ function: functionName, args });
       
       // Usar el entorno virtual donde están instaladas las dependencias
+      // En Docker, usar python3 con el path correcto al directorio de trabajo
       const venvPath = path.join(this.pythonPath, 'venv', 'bin', 'python');
       const pythonCommand = fs.existsSync(venvPath) ? venvPath : 'python3';
       
@@ -84,7 +85,7 @@ class InternalMemoryClient {
   }
 
   /**
-   * Guardar usuario descubierto en UserHandles usando HTTP endpoint
+   * Guardar usuario descubierto en UserHandles usando Python directo
    */
   async saveUserDiscovery(userInfo, discoveryContext = {}) {
     if (!this.enabled) {
@@ -92,7 +93,6 @@ class InternalMemoryClient {
     }
 
     try {
-      const axios = require('axios');
       const userData = {
         user_name: userInfo.user_name || userInfo.name || userInfo.originalText || 'Unknown',
         twitter_username: userInfo.twitter_username || userInfo.handle || userInfo.username || '',
@@ -100,21 +100,15 @@ class InternalMemoryClient {
         category: userInfo.category || discoveryContext.context || 'general'
       };
 
-      const response = await axios.post(
-        `${this.baseUrl}/api/laura-memory/save-userhandle`,
-        userData,
-        {
-          headers: { 'Content-Type': 'application/json' },
-          timeout: 10000
-        }
-      );
+      // Usar Python directo con la función correcta
+      const result = await this.executePythonCommand('save_user_discovery', userData);
 
-      if (response.data.success) {
+      if (result.success) {
         console.log(`[LAURA_MEMORY_INTERNAL] 👤 Usuario guardado en UserHandles: ${userData.user_name} → @${userData.twitter_username}`);
         return { success: true };
       } else {
-        console.error(`[LAURA_MEMORY_INTERNAL] ❌ Error del servidor:`, response.data.error);
-        return { success: false, error: response.data.error };
+        console.error(`[LAURA_MEMORY_INTERNAL] ❌ Error guardando:`, result.error);
+        return { success: false, error: result.error };
       }
       
     } catch (error) {
@@ -124,7 +118,7 @@ class InternalMemoryClient {
   }
 
   /**
-   * Buscar usuarios en UserHandles usando HTTP endpoint
+   * Buscar usuarios en UserHandles usando Python directo
    */
   async searchUserHandles(query, limit = 5) {
     if (!this.enabled) {
@@ -132,20 +126,16 @@ class InternalMemoryClient {
     }
 
     try {
-      const axios = require('axios');
+      const result = await this.executePythonCommand('search_userhandles', { query, limit });
       
-      const response = await axios.post(
-        `${this.baseUrl}/api/laura-memory/search-userhandles`,
-        { query, limit },
-        {
-          headers: { 'Content-Type': 'application/json' },
-          timeout: 10000
-        }
-      );
-
-      const results = response.data.results || [];
-      console.log(`[LAURA_MEMORY_INTERNAL] 🔍 UserHandles búsqueda '${query}': ${results.length} resultados`);
-      return results;
+      if (result.success) {
+        const results = result.results || [];
+        console.log(`[LAURA_MEMORY_INTERNAL] 🔍 UserHandles búsqueda '${query}': ${results.length} resultados`);
+        return results;
+      } else {
+        console.error(`[LAURA_MEMORY_INTERNAL] ❌ Error en búsqueda:`, result.error);
+        return [];
+      }
       
     } catch (error) {
       console.error(`[LAURA_MEMORY_INTERNAL] ❌ Error buscando usuarios:`, error.message);
