@@ -12,6 +12,7 @@ const { RoutingEngine } = require('./routingEngine');
 const { ConversationManager } = require('./conversationManager');
 const llmIntentClassifier = require('./helpers/llmIntentClassifier');
 const { LauraHandlers, RobertHandlers, MixedHandlers } = require('./agentHandlers');
+const ViztaOpenPipeIntegration = require('./openPipeIntegration');
 
 class ViztaAgent {
   constructor() {
@@ -31,6 +32,9 @@ class ViztaAgent {
     this.lauraHandlers = new LauraHandlers(this.laura);
     this.robertHandlers = new RobertHandlers(this.robert);
     this.mixedHandlers = new MixedHandlers(this.laura, this.robert);
+    
+    // Inicializar integración con OpenPipe
+    this.openPipeIntegration = new ViztaOpenPipeIntegration(this);
     
     // Estado interno
     this.activeConversations = new Map();
@@ -83,7 +87,7 @@ class ViztaAgent {
         };
         
       } else {
-        // MODO AGÉNTICO - Requiere inicialización completa y agentes
+        // MODO AGÉNTICO - Priorizar OpenPipe si está disponible
         console.log(`[VIZTA] 🤖 Modo agéntico activado para: ${intentAnalysis.intent}`);
         
         // Inicializar conversación completa solo para modo agéntico
@@ -102,32 +106,52 @@ class ViztaAgent {
         communicationBus.registerAgent(conversation.id, 'laura');
         communicationBus.registerAgent(conversation.id, 'robert');
         
-        // Ejecutar modo agéntico y devolver inmediatamente si está procesado
-        const agenticResponse = await this.executeAgenticMode(userMessage, user, conversation.id, intentAnalysis.intent);
+        // PRIORIDAD 1: Intentar con OpenPipe si está disponible
+        if (this.openPipeIntegration.isAvailable()) {
+          console.log(`[VIZTA] 🎯 Usando OpenPipe para procesamiento agéntico`);
+          const openPipeResponse = await this.openPipeIntegration.processWithOpenPipe(
+            userMessage, 
+            user, 
+            conversation.id
+          );
+          
+          // Si OpenPipe procesa exitosamente, usar su resultado
+          if (openPipeResponse && openPipeResponse.success) {
+            console.log(`[VIZTA] ✅ OpenPipe procesó exitosamente con modo: ${openPipeResponse.mode}`);
+            response = openPipeResponse;
+          } else {
+            console.log(`[VIZTA] ⚠️ OpenPipe falló, usando modo agéntico tradicional`);
+            response = await this.executeAgenticMode(userMessage, user, conversation.id, intentAnalysis.intent);
+          }
+        } else {
+          // PRIORIDAD 2: Usar modo agéntico tradicional
+          console.log(`[VIZTA] 🔄 OpenPipe no disponible, usando modo agéntico tradicional`);
+          response = await this.executeAgenticMode(userMessage, user, conversation.id, intentAnalysis.intent);
+        }
         
         // Si el modo agéntico devuelve contenido procesado, usarlo directamente
-        if (agenticResponse && agenticResponse.mode === 'agential_processed') {
-          console.log(`[VIZTA] ✅ Devolviendo respuesta agéntica procesada directamente`);
+        if (response && (response.mode === 'agential_processed' || response.mode?.startsWith('openpipe_'))) {
+          console.log(`[VIZTA] ✅ Devolviendo respuesta procesada directamente (modo: ${response.mode})`);
           return {
             conversationId: conversation.id,
             response: {
-              agent: agenticResponse.agent || 'Vizta',
-              message: agenticResponse.message,
-              type: agenticResponse.type || 'chat_response',
-              timestamp: agenticResponse.timestamp || new Date().toISOString()
+              agent: response.agent || 'Vizta',
+              message: response.message,
+              type: response.type || 'chat_response',
+              timestamp: response.timestamp || new Date().toISOString()
             },
             metadata: {
               intent: intentAnalysis.intent,
               intentConfidence: intentAnalysis.confidence,
               intentMethod: intentAnalysis.method,
-              mode: agenticResponse.mode,
-              processingTime: Date.now() - startTime,
+              mode: response.mode,
+              functionUsed: response.functionUsed,
+              processingTime: response.processingTime || Date.now() - startTime,
+              openPipeUsage: response.openPipeUsage,
               timestamp: new Date().toISOString()
             }
           };
         }
-        
-        response = agenticResponse;
       }
       
       // Actualizar contexto de conversación solo si no es modo conversacional simple
@@ -625,7 +649,8 @@ class ViztaAgent {
       agentStates: this.agentStates.size,
       busStats: busStats,
       capabilities: this.config.capabilities,
-      coordinationCriteria: this.config.coordinationCriteria
+      coordinationCriteria: this.config.coordinationCriteria,
+      openPipeIntegration: this.openPipeIntegration?.getStats() || { enabled: false }
     };
   }
 

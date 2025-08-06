@@ -118,19 +118,23 @@ function formatChatResponse(response, toolResult = null) {
 }
 
 // Cargar dependencias de forma condicional
-let OpenAI, openai, uuidv4;
+let OpenAI, openai, uuidv4, openPipeService;
 
 try {
   OpenAI = require('openai');
   const { v4 } = require('uuid');
   uuidv4 = v4;
   
-  // Configurar OpenAI
+  // Configurar OpenAI (para fallback)
   openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
   });
   
+  // Configurar OpenPipe Service
+  openPipeService = require('../services/openPipeService');
+  
   console.log('✅ Dependencias de Vizta Chat cargadas correctamente');
+  console.log('🎯 OpenPipe Service inicializado para function calling');
 } catch (error) {
   console.warn('⚠️ Dependencias de Vizta Chat no disponibles:', error.message);
   console.warn('📦 Instala las dependencias con: npm install openai uuid');
@@ -267,11 +271,116 @@ router.post('/query', verifyUserAccess, async (req, res) => {
       result = await processProjectSearch(message, req.user, chatSessionId);
       
     } else {
-      // PASO 3: Para consultas no casuales, usar el sistema modular completo
-      result = await agentesService.processUserQuery(message, req.user, {
-        sessionId: chatSessionId,
-        previousMessages: previousMessages
-      });
+      // PASO 3: Para consultas no casuales, usar OpenPipe con function calling
+      console.log('🎯 Usando OpenPipe para function calling optimizado...');
+      
+      const openPipeResult = await openPipeService.processViztaQuery(message, chatSessionId);
+      
+      if (openPipeResult.success && openPipeResult.type === 'function_call') {
+        // Ejecutar TODAS las herramientas decididas por el modelo en orden
+        const toolCalls = Array.isArray(openPipeResult.allFunctionCalls) && openPipeResult.allFunctionCalls.length > 0
+          ? openPipeResult.allFunctionCalls
+          : [openPipeResult.functionCall];
+        
+        const toolExecutions = [];
+        for (const call of toolCalls) {
+          // Normalizar estructura de tool_call del SDK de OpenAI/OpenPipe
+          const normalized = call.function
+            ? { name: call.function.name, arguments: call.function.arguments }
+            : call; // ya viene como { name, arguments }
+          
+          const toolName = normalized.name || 'desconocido';
+          let argsObj = undefined;
+          try {
+            argsObj = typeof normalized.arguments === 'string'
+              ? JSON.parse(normalized.arguments || '{}')
+              : (normalized.arguments || {});
+          } catch (e) {
+            console.warn(`⚠️ No se pudo parsear arguments de ${toolName}:`, e.message);
+          }
+
+          console.log(`🔧 Ejecutando función: ${toolName}`);
+          const exec = await openPipeService.executeFunctionCall(
+            { name: toolName, arguments: argsObj },
+            req.user,
+            chatSessionId
+          );
+          toolExecutions.push({ call: normalized, exec });
+          
+          // Persistir breve rastro de cada ejecución en memories
+          try {
+            await memoriesService.saveMessage({
+              userId: req.user.id,
+              sessionId: chatSessionId,
+              role: 'assistant',
+              content: exec?.success ? `✅ Herramienta ${toolName} ejecutada` : `❌ Error ejecutando ${toolName}: ${exec?.error || 'desconocido'}`,
+              messageType: 'function_result',
+              metadata: {
+                conversationType: 'function_call',
+                functionCall: call,
+                functionResult: exec
+              }
+            });
+          } catch (e) {
+            console.warn('⚠️ No se pudo guardar rastro de ejecución en memories:', e.message);
+          }
+        }
+        
+        // Construir respuesta final priorizando la última herramienta ejecutada
+        const last = toolExecutions[toolExecutions.length - 1];
+        const lastToolName = last?.call?.name || last?.call?.function?.name || 'desconocido';
+        const lastExec = last?.exec || {};
+        
+        result = {
+          success: lastExec.success,
+          response: {
+            agent: lastExec.agent || 'Vizta',
+            message: await formatFunctionResult(lastExec, message),
+            type: 'function_response',
+            timestamp: new Date().toISOString(),
+            functionUsed: lastToolName,
+            data: lastExec.data
+          },
+          conversationId: chatSessionId,
+          metadata: {
+            conversationType: 'function_call',
+            functionCalls: toolCalls,
+            executions: toolExecutions.map(te => ({
+              tool: te.call?.name || te.call?.function?.name,
+              success: !!te.exec?.success
+            })),
+            agent: lastExec.agent,
+            processingTime: Date.now() - startTime,
+            openPipeUsage: openPipeResult.usage
+          }
+        };
+        
+      } else if (openPipeResult.success && openPipeResult.type === 'conversational') {
+        // Respuesta conversacional directa de OpenPipe
+        result = {
+          success: true,
+          response: {
+            agent: 'Vizta',
+            message: openPipeResult.message,
+            type: 'conversational_ai',
+            timestamp: new Date().toISOString()
+          },
+          conversationId: chatSessionId,
+          metadata: {
+            conversationType: 'ai_conversational',
+            processingTime: Date.now() - startTime,
+            openPipeUsage: openPipeResult.usage
+          }
+        };
+        
+      } else {
+        // Fallback al sistema modular si OpenPipe falla
+        console.log('⚠️ OpenPipe falló, usando fallback al sistema modular');
+        result = await agentesService.processUserQuery(message, req.user, {
+          sessionId: chatSessionId,
+          previousMessages: previousMessages
+        });
+      }
     }
 
     // Formatear respuesta para el chat y asegurar estructura correcta
@@ -316,6 +425,95 @@ async function saveToHistory(userId, message, response, sessionId) {
   } catch (error) {
     console.error('❌ Error guardando en historial:', error);
     // No lanzar el error para no interrumpir el flujo principal
+  }
+}
+
+// Función para formatear resultados de function calling
+async function formatFunctionResult(functionResult, originalQuery) {
+  try {
+    if (!functionResult.success) {
+      return `❌ Error ejecutando ${functionResult.tool}: ${functionResult.error}`;
+    }
+
+    const { agent, tool, data } = functionResult;
+    
+    switch (tool) {
+      case 'nitter_context':
+        if (data.tweets && data.tweets.length > 0) {
+          return `📊 **Análisis de ${data.tweets.length} tweets sobre "${originalQuery}"**\n\n` +
+                 `✅ Encontré conversaciones relevantes en Twitter sobre este tema.\n` +
+                 `🎯 **Tendencias detectadas:** ${data.tweets.slice(0, 3).map(t => t.text?.substring(0, 100) + '...').join('\n• ')}\n\n` +
+                 `💡 Los datos han sido procesados por ${agent} y están disponibles para análisis detallado.`;
+        } else {
+          return `🔍 No se encontraron tweets recientes sobre "${originalQuery}". Intenta con términos diferentes o más específicos.`;
+        }
+        
+      case 'nitter_profile':
+        if (data.tweets && data.tweets.length > 0) {
+          return `👤 **Posts recientes de @${data.username || 'usuario'}**\n\n` +
+                 `📝 Últimos ${data.tweets.length} posts analizados por ${agent}.\n` +
+                 `🗓️ Desde: ${new Date(data.tweets[data.tweets.length - 1]?.created_at || Date.now()).toLocaleDateString()}\n\n` +
+                 `💬 **Contenido reciente:** ${data.tweets.slice(0, 2).map(t => `"${t.text?.substring(0, 150) + '...'}"`).join('\n• ')}\n\n` +
+                 `✅ Análisis completo disponible en el sistema.`;
+        } else {
+          return `❌ No se pudieron obtener posts del perfil solicitado. El usuario podría tener perfil privado o no existir.`;
+        }
+        
+      case 'perplexity_search':
+        if (data.answer) {
+          return `🔍 **Información encontrada sobre "${originalQuery}"**\n\n${data.answer}\n\n` +
+                 `📚 *Investigación realizada por ${agent} usando fuentes web actualizadas.*`;
+        } else {
+          return `🔍 Búsqueda realizada por ${agent}, pero no se encontró información específica sobre "${originalQuery}".`;
+        }
+        
+      case 'search_political_context':
+        if (data && data.length > 0) {
+          return `🧠 **Información en memoria política**\n\n` +
+                 `✅ Encontré ${data.length} resultado(s) relevante(s) en mi memoria sobre "${originalQuery}":\n\n` +
+                 `${data.slice(0, 3).map((item, i) => `${i + 1}. ${item.substring(0, 200) + '...'}`).join('\n')}\n\n` +
+                 `💭 *Datos recuperados por ${agent} desde la sesión pulse-politics.*`;
+        } else {
+          return `🧠 Busqué en mi memoria política pero no encontré información específica sobre "${originalQuery}". Podría estar en fuentes externas.`;
+        }
+        
+      case 'resolve_twitter_handle':
+        if (data.handle) {
+          return `🔍 **Handle encontrado:** @${data.handle}\n\n` +
+                 `✅ ${agent} identificó la cuenta de Twitter asociada con "${originalQuery}".\n` +
+                 `📱 Ahora puedo extraer sus posts si lo necesitas.`;
+        } else {
+          return `❌ No se pudo encontrar el handle de Twitter para "${originalQuery}". La persona podría no tener cuenta pública.`;
+        }
+        
+      case 'user_projects':
+        if (data.projects && data.projects.length > 0) {
+          const activeProjects = data.projects.filter(p => p.status === 'active').length;
+          return `📋 **Tus Proyectos**\n\n` +
+                 `✅ Tienes **${data.count}** proyecto(s) total, **${activeProjects}** activo(s).\n\n` +
+                 `🎯 **Proyectos recientes:**\n${data.projects.slice(0, 5).map(p => `• ${p.title} (${p.status})`).join('\n')}\n\n` +
+                 `📊 *Datos gestionados por ${agent}.*`;
+        } else {
+          return `📋 No tienes proyectos registrados aún. ¿Te gustaría que te ayude a crear uno?`;
+        }
+        
+      case 'user_codex':
+        if (data.items && data.items.length > 0) {
+          return `📚 **Elementos encontrados en tu Codex**\n\n` +
+                 `✅ Encontré **${data.count}** elemento(s) relacionado(s) con "${originalQuery}":\n\n` +
+                 `${data.items.slice(0, 5).map(item => `📄 ${item.titulo} (${item.tipo})\n   ${item.descripcion?.substring(0, 100) + '...' || 'Sin descripción'}`).join('\n\n')}\n\n` +
+                 `🔍 *Búsqueda realizada por ${agent} en tu biblioteca personal.*`;
+        } else {
+          return `📚 No encontré elementos en tu Codex relacionados con "${originalQuery}". Intenta con términos diferentes.`;
+        }
+        
+      default:
+        return `✅ ${agent} procesó tu consulta usando ${tool}. Resultado disponible en el sistema.`;
+    }
+    
+  } catch (error) {
+    console.error('❌ Error formateando resultado de función:', error);
+    return `✅ Función ejecutada por ${functionResult.agent || 'Agente'}, pero hubo un error formateando la respuesta.`;
   }
 }
 
@@ -1691,6 +1889,70 @@ router.post('/test-user-discovery', verifyUserAccess, async (req, res) => {
 });
 
 /**
+ * POST /api/vizta-chat/test-openpipe
+ * Endpoint de prueba para verificar integración con OpenPipe
+ */
+router.post('/test-openpipe', verifyUserAccess, async (req, res) => {
+  try {
+    if (!openPipeService) {
+      return res.status(503).json({
+        success: false,
+        message: 'OpenPipe service no disponible',
+        error: 'Dependencias no cargadas'
+      });
+    }
+
+    const { message } = req.body;
+    
+    if (!message) {
+      return res.status(400).json({
+        success: false,
+        message: 'Parámetro "message" es requerido'
+      });
+    }
+
+    console.log(`🧪 TEST OPENPIPE: "${message}"`);
+
+    const startTime = Date.now();
+    
+    // Procesar con OpenPipe
+    const openPipeResult = await openPipeService.processViztaQuery(message, 'test_session');
+    
+    let testResult = {
+      success: true,
+      test_input: message,
+      openpipe_result: openPipeResult,
+      processing_time: Date.now() - startTime,
+      timestamp: new Date().toISOString()
+    };
+
+    // Si hay function call, ejecutarlo
+    if (openPipeResult.success && openPipeResult.type === 'function_call') {
+      console.log(`🔧 Ejecutando función de prueba: ${openPipeResult.functionCall.name}`);
+      
+      const functionResult = await openPipeService.executeFunctionCall(
+        openPipeResult.functionCall,
+        req.user,
+        'test_session'
+      );
+      
+      testResult.function_execution = functionResult;
+      testResult.formatted_response = await formatFunctionResult(functionResult, message);
+    }
+
+    res.json(testResult);
+
+  } catch (error) {
+    console.error('❌ Error en test OpenPipe:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error probando OpenPipe',
+      error: error.message
+    });
+  }
+});
+
+/**
  * DELETE /api/vizta-chat/scrapes/:scrapeId
  * Eliminar un scrape específico del usuario
  */
@@ -1738,4 +2000,4 @@ router.delete('/scrapes/:scrapeId', verifyUserAccess, async (req, res) => {
   }
 });
 
-module.exports = router; 
+module.exports = router;

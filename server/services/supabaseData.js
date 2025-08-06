@@ -211,7 +211,27 @@ async function getUserCodex(userId, options = {}) {
         is_drive,
         drive_file_id,
         audio_transcription,
-        document_analysis
+        document_analysis,
+        recent_scrape_id,
+        recent_scrapes:recent_scrape_id (
+          id,
+          query_original,
+          query_clean,
+          herramienta,
+          categoria,
+          tweet_id,
+          usuario,
+          fecha_tweet,
+          texto,
+          enlace,
+          likes,
+          retweets,
+          replies,
+          verified,
+          sentimiento,
+          location,
+          created_at
+        )
       `)
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
@@ -244,10 +264,16 @@ async function getUserCodex(userId, options = {}) {
       throw new Error(`Database error: ${error.message}`);
     }
 
+    // Mapear los datos para incluir recent_scrape en el nivel superior
+    const mappedData = (data || []).map(item => ({
+      ...item,
+      recent_scrape: item.recent_scrapes || null
+    }));
+
     return {
       success: true,
-      data: data || [],
-      count: data ? data.length : 0
+      data: mappedData,
+      count: mappedData.length
     };
 
   } catch (error) {

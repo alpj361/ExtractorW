@@ -211,7 +211,8 @@ async function extractCapturadoCardsInChunks(fullText) {
   const seen = new Set();
   
   for (const card of allCards) {
-    const fingerprint = `${card.entity || ''}|${card.city || ''}|${card.department || ''}|${card.discovery || ''}|${(card.description || '').substring(0, 50)}`;
+    // Mejorar fingerprint para mejor deduplicación
+    const fingerprint = `${card.title || ''}|${card.entity || ''}|${card.discovery || ''}|${(card.source || '').substring(0, 100)}|${card.amount || ''}|${card.item_count || ''}`;
     if (!seen.has(fingerprint)) {
       seen.add(fingerprint);
       uniqueCards.push(card);
@@ -478,7 +479,7 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
   if (existingErr) throw new Error(`Error leyendo capturado_cards existentes: ${existingErr.message}`);
 
   const existingFingerprints = new Set(
-    (existingCards || []).map(c => `${c.entity}|${c.city}|${c.department}|${c.discovery}|${c.description}`)
+    (existingCards || []).map(c => `${c.title || ''}|${c.entity || ''}|${c.discovery || ''}|${(c.source || '').substring(0, 100)}|${c.amount || ''}|${c.item_count || ''}`)
   );
 
   // 4. Preparar datos filtrando duplicados
@@ -491,7 +492,7 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
         codex_item_id: codexItemId
       };
     })
-    .filter(c => !existingFingerprints.has(`${c.entity}|${c.city}|${c.department}|${c.discovery}|${c.description}`));
+    .filter(c => !existingFingerprints.has(`${c.title || ''}|${c.entity || ''}|${c.discovery || ''}|${(c.source || '').substring(0, 100)}|${c.amount || ''}|${c.item_count || ''}`));
 
   if (initialData.length === 0) return [];
 
@@ -506,82 +507,64 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
       pais: card.pais
     }));
 
-    // ✅ USAR SISTEMA ACTUALIZADO: Mismo que en coverages con coordenadas
-    const { batchNormalizeGeographyWithCoordinates } = require('../services/mapsAgent');
-    const normalizedGeoData = await batchNormalizeGeographyWithCoordinates(geoData);
-
-    // ✅ MANEJAR MÚLTIPLES UBICACIONES: Puede haber más resultados que inputs originales
+    // ✅ DETECTAR Y PROCESAR MÚLTIPLES UBICACIONES CORRECTAMENTE
+    const { parseLocationString } = require('../utils/geographic-ai-detector');
+    const { normalizeGeographicInfoSync } = require('../services/mapsAgent');
     const insertData = [];
     
-    // Agrupar resultados normalizados por índice original
-    const resultsByOriginalIndex = {};
-    normalizedGeoData.forEach(normalized => {
-      const originalIndex = normalized._originalIndex || 0;
-      if (!resultsByOriginalIndex[originalIndex]) {
-        resultsByOriginalIndex[originalIndex] = [];
-      }
-      resultsByOriginalIndex[originalIndex].push(normalized);
-    });
-    
-    // Crear cards: una card por cada ubicación normalizada
-    initialData.forEach((card, index) => {
-      const normalizedForThisCard = resultsByOriginalIndex[index] || [{}];
+    // Procesar cada card, detectando múltiples ubicaciones pero manteniendo 1 card
+    initialData.forEach((card) => {
+      // Detectar si hay múltiples ubicaciones
+      const parsedLocations = parseLocationString({ city: card.city, department: card.department, pais: card.pais });
       
-      normalizedForThisCard.forEach((normalized, subIndex) => {
+      if (Array.isArray(parsedLocations) && parsedLocations.length > 1) {
+        // CASO: Múltiples ubicaciones detectadas - crear 1 card con ubicación principal
+        console.log(`🔄 [MULTI-GEO] Detectadas ${parsedLocations.length} ubicaciones en hallazgo: ${card.title}`);
+        
+        // Usar la primera ubicación como principal
+        const primaryLocation = parsedLocations[0];
+        const normalized = normalizeGeographicInfoSync(primaryLocation);
+        
+        const cardWithGeo = {
+          ...card,
+          city: normalized.city || primaryLocation.city,
+          department: normalized.department || primaryLocation.department,
+          pais: normalized.pais || primaryLocation.pais,
+          _multiLocation: true,
+          _allLocations: parsedLocations // Guardar todas las ubicaciones para crear coberturas
+        };
+        
+        insertData.push(cardWithGeo);
+      } else {
+        // CASO: Ubicación única
+        const normalized = normalizeGeographicInfoSync({
+          city: card.city,
+          department: card.department,
+          pais: card.pais
+        });
+        
         const cardWithGeo = {
           ...card,
           city: normalized.city || card.city,
           department: normalized.department || card.department,
           pais: normalized.pais || card.pais,
-          coordinates: normalized.coordinates || null, // ✅ INCLUIR COORDENADAS
-          // Agregar metadatos de detección como campos internos (no se guardan en DB)
-          _detection_method: normalized.detection_method || 'original',
-          _confidence: normalized.confidence || 'medium',
-          _reasoning: normalized.reasoning || 'Sin normalización geográfica',
-          _geocoded: normalized.geocoded || false,
-          _isMultiLocation: normalized._isMultiLocation || false,
-          _multiType: normalized._multiType || null,
-          _locationIndex: subIndex // Para diferenciar múltiples ubicaciones de la misma card
+          _multiLocation: false
         };
         
         insertData.push(cardWithGeo);
-      });
+      }
     });
 
-    console.log(`✅ Normalización geográfica completada para ${insertData.length} hallazgos (incluyendo múltiples ubicaciones)`);
+    console.log(`✅ Normalización geográfica completada para ${insertData.length} hallazgos`);
     
-    // Log resumen de detecciones
-    const detectionStats = {
-      original_cards: initialData.length,
-      final_cards: insertData.length,
-      expansion_factor: (insertData.length / initialData.length).toFixed(2),
-      mapsAgent_detections: insertData.filter(c => c._detection_method === 'mapsAgent').length,
-      mapsAgent_multi_detections: insertData.filter(c => c._detection_method === 'mapsAgent_multi').length,
-      ai_detections: insertData.filter(c => c._detection_method === 'ai').length,
-      manual_detections: insertData.filter(c => c._detection_method === 'manual').length,
-      geocoded_locations: insertData.filter(c => c._geocoded).length,
-      with_coordinates: insertData.filter(c => c.coordinates).length,
-      multi_location_cards: insertData.filter(c => c._isMultiLocation).length,
-      multi_departments: insertData.filter(c => c._multiType === 'departments').length,
-      multi_municipalities: insertData.filter(c => c._multiType === 'municipalities').length
-    };
-    
-    console.log(`📊 Estadísticas de detección:`, detectionStats);
-
-    // Limpiar metadatos antes de insertar (manteniendo coordinates)
+    // Limpiar metadatos antes de insertar (pero guardar _allLocations para crear coberturas)
     const cleanInsertData = insertData.map(card => {
       const { 
-        _detection_method, 
-        _confidence, 
-        _reasoning, 
-        _geocoded, 
-        _isMultiLocation, 
-        _multiType, 
         _locationIndex, 
-        _originalIndex,
+        _totalLocations, 
         ...cleanCard 
       } = card;
-      return cleanCard;
+      return cleanCard; // Mantener _multiLocation y _allLocations temporalmente
     });
 
     // =============================================
@@ -594,6 +577,20 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
       city = norm.city;
       department = norm.department;
       pais = norm.pais;
+      
+      // Obtener coordenadas para nueva cobertura
+      let coordinates = null;
+      if (city || department) {
+        try {
+          const { batchNormalizeGeographyWithCoordinates } = require('../services/mapsAgent');
+          const geoResults = await batchNormalizeGeographyWithCoordinates([{ city, department, pais }]);
+          if (geoResults && geoResults.length > 0 && geoResults[0].coordinates) {
+            coordinates = geoResults[0].coordinates;
+          }
+        } catch (coordError) {
+          console.warn(`⚠️ No se pudieron obtener coordenadas para ${city || department}:`, coordError.message);
+        }
+      }
       // Prioridad: ciudad > departamento > país
       let coverageRow = null;
       if (city) {
@@ -616,7 +613,8 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
             description: `Cobertura municipal generada al crear tarjeta capturado`,
             detection_source: 'ai_detection',
             confidence_score: 0.9,
-            local_name: 'Municipio'
+            local_name: 'Municipio',
+            coordinates: coordinates
           };
           const { data: inserted } = await supabase
             .from('project_coverages')
@@ -645,7 +643,8 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
             description: `Cobertura departamental generada al crear tarjeta capturado`,
             detection_source: 'ai_detection',
             confidence_score: 0.85,
-            local_name: 'Departamento'
+            local_name: 'Departamento',
+            coordinates: coordinates
           };
           const { data: inserted } = await supabase
             .from('project_coverages')
@@ -673,7 +672,8 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
             description: `Cobertura nacional generada al crear tarjeta capturado`,
             detection_source: 'ai_detection',
             confidence_score: 1.0,
-            local_name: 'País'
+            local_name: 'País',
+            coordinates: coordinates
           };
           const { data: inserted } = await supabase
             .from('project_coverages')
@@ -689,20 +689,53 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
     // Añadir coverage_id a cada card antes de insertar
     for (const card of cleanInsertData) {
       try {
-        const coverageId = await getOrCreateCoverage({
-          projectId,
-          city: card.city,
-          department: card.department,
-          pais: card.pais
-        });
-        card.coverage_id = coverageId;
+        if (card._multiLocation && card._allLocations) {
+          // CASO: Múltiples ubicaciones - crear coberturas para todas pero usar la primera como principal
+          console.log(`🔄 [MULTI-COVERAGE] Creando coberturas para ${card._allLocations.length} ubicaciones`);
+          
+          const coverageIds = [];
+          
+          // Crear cobertura para cada ubicación
+          for (const location of card._allLocations) {
+            const normalized = normalizeGeographicInfoSync(location);
+            const coverageId = await getOrCreateCoverage({
+              projectId,
+              city: normalized.city || location.city,
+              department: normalized.department || location.department,
+              pais: normalized.pais || location.pais
+            });
+            if (coverageId) {
+              coverageIds.push(coverageId);
+            }
+          }
+          
+          // Usar la primera cobertura como principal
+          card.coverage_id = coverageIds[0] || null;
+          console.log(`✅ [MULTI-COVERAGE] Creadas ${coverageIds.length} coberturas, usando ${coverageIds[0]} como principal`);
+          
+        } else {
+          // CASO: Ubicación única
+          const coverageId = await getOrCreateCoverage({
+            projectId,
+            city: card.city,
+            department: card.department,
+            pais: card.pais
+          });
+          card.coverage_id = coverageId;
+        }
       } catch (covErr) {
         console.error('⚠️ No se pudo vincular coverage para card:', covErr.message);
       }
     }
 
+    // Limpiar metadatos finales antes de insertar
+    const finalInsertData = cleanInsertData.map(card => {
+      const { _multiLocation, _allLocations, ...finalCard } = card;
+      return finalCard;
+    });
+
     // Log de los datos antes de insertar para debug
-    console.log(`🔍 Insertando ${cleanInsertData.length} cards con datos:`, cleanInsertData.slice(0, 2).map(card => ({
+    console.log(`🔍 Insertando ${finalInsertData.length} cards con datos:`, finalInsertData.slice(0, 2).map(card => ({
       coverage_id: card.coverage_id,
       duration_days: card.duration_days,
       item_count: card.item_count,
@@ -711,11 +744,11 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
 
     const { data: inserted, error: insertError } = await supabase
       .from('capturado_cards')
-      .insert(cleanInsertData)
+      .insert(finalInsertData)
       .select();
 
     if (insertError) {
-      console.error(`❌ Error en inserción - Datos problemáticos:`, cleanInsertData.slice(0, 2));
+      console.error(`❌ Error en inserción - Datos problemáticos:`, finalInsertData.slice(0, 2));
       throw new Error(`Error insertando capturado_cards: ${insertError.message}`);
     }
 
@@ -726,9 +759,9 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
     console.log(`🔄 Continuando con fallback manual...`);
     
     // Fallback: usar normalización manual para todas las cards
-    const { batchNormalizeGeography: manualBatch } = require('../utils/guatemala-geography');
+    const { normalizeGeographicInfo } = require('../utils/guatemala-geography');
     const insertData = initialData.map(card => {
-      const manualNormalized = manualNormalize({
+      const manualNormalized = normalizeGeographicInfo({
         city: card.city,
         department: card.department,
         pais: card.pais
@@ -751,6 +784,20 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
       city = norm.city;
       department = norm.department;
       pais = norm.pais;
+      
+      // Para fallback, usar coordenadas básicas si es posible
+      let coordinates = null;
+      if (city || department) {
+        try {
+          const { batchNormalizeGeographyWithCoordinates } = require('../services/mapsAgent');
+          const geoResults = await batchNormalizeGeographyWithCoordinates([{ city, department, pais }]);
+          if (geoResults && geoResults.length > 0 && geoResults[0].coordinates) {
+            coordinates = geoResults[0].coordinates;
+          }
+        } catch (coordError) {
+          console.warn(`⚠️ Fallback: No se pudieron obtener coordenadas para ${city || department}:`, coordError.message);
+        }
+      }
       // Misma lógica que la función principal
       let coverageRow = null;
       if (city) {
@@ -772,7 +819,8 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
             description: `Cobertura municipal generada al crear tarjeta capturado (fallback)`,
             detection_source: 'ai_detection',
             confidence_score: 0.9,
-            local_name: 'Municipio'
+            local_name: 'Municipio',
+            coordinates: coordinates
           };
           const { data: inserted } = await supabase
             .from('project_coverages')
@@ -801,7 +849,8 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
             description: `Cobertura departamental generada al crear tarjeta capturado (fallback)`,
             detection_source: 'ai_detection',
             confidence_score: 0.85,
-            local_name: 'Departamento'
+            local_name: 'Departamento',
+            coordinates: coordinates
           };
           const { data: inserted } = await supabase
             .from('project_coverages')
@@ -829,7 +878,8 @@ async function createCardsFromCodex({ codexItemId, projectId, userId }) {
             description: `Cobertura nacional generada al crear tarjeta capturado (fallback)`,
             detection_source: 'ai_detection',
             confidence_score: 1.0,
-            local_name: 'País'
+            local_name: 'País',
+            coordinates: coordinates
           };
           const { data: inserted } = await supabase
             .from('project_coverages')
