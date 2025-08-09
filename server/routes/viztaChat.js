@@ -274,7 +274,7 @@ router.post('/query', verifyUserAccess, async (req, res) => {
       // PASO 3: Para consultas no casuales, usar OpenPipe con function calling
       console.log('🎯 Usando OpenPipe para function calling optimizado...');
       
-      const openPipeResult = await openPipeService.processViztaQuery(message, chatSessionId);
+      const openPipeResult = await openPipeService.processViztaQuery(message, req.user, chatSessionId);
       
       if (openPipeResult.success && openPipeResult.type === 'function_call') {
         // Ejecutar TODAS las herramientas decididas por el modelo en orden
@@ -1916,7 +1916,7 @@ router.post('/test-openpipe', verifyUserAccess, async (req, res) => {
     const startTime = Date.now();
     
     // Procesar con OpenPipe
-    const openPipeResult = await openPipeService.processViztaQuery(message, 'test_session');
+    const openPipeResult = await openPipeService.processViztaQuery(message, req.user, 'test_session');
     
     let testResult = {
       success: true,

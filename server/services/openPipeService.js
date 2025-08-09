@@ -22,7 +22,7 @@ class OpenPipeService {
    * Procesar consulta del usuario usando el modelo fine-tuneado de Vizta
    * Incluye function calling optimizado para herramientas específicas
    */
-  async processViztaQuery(userMessage, sessionId = null) {
+  async processViztaQuery(userMessage, user, sessionId = null) {
     try {
       console.log(`[OPENPIPE] 🤖 Procesando consulta Vizta: "${userMessage}"`);
       
@@ -108,7 +108,7 @@ class OpenPipeService {
 
             const execResult = await this.executeFunctionCall(
               { name: fnName, arguments: parsedArgs },
-              { id: 'system_user' },
+              user,
               sessionId
             );
 
@@ -183,6 +183,10 @@ class OpenPipeService {
 - user_codex: Para buscar en documentos del usuario
 
 REGLAS IMPORTANTES (CHAIN-OF-TOOLS):
+0) Consultas sobre TEMAS/TENDENCIAS (no personas específicas):
+   a. PRIMERO usa perplexity_search para identificar palabras clave, sinónimos, hashtags y entidades relevantes (mes/año actual y "Guatemala").
+   b. Con esos términos, luego usa nitter_context con formato OR palabra-por-palabra y hashtags pertinentes.
+   c. Devuelve al usuario: qué está pasando, señales relevantes y menciones relacionadas en redes (enfocadas al tema). Máximo 2 hops.
 1) Cargos/posiciones y datos institucionales:
    a. Ejecuta primero search_political_context (memoria política Zep, grupo pulse-politics) con la consulta del usuario.
    b. Si la herramienta devuelve count==0 o evidencia insuficiente, NO respondas aún; ejecuta luego perplexity_search con un query enriquecido:
@@ -190,10 +194,10 @@ REGLAS IMPORTANTES (CHAIN-OF-TOOLS):
       - location="Guatemala", focus="institucional"
    c. Solo emite la respuesta final después de ejecutar las herramientas necesarias. No generes una respuesta intermedia.
 2) "Extráeme lo que dice X": si incluye @, usa nitter_profile. Si no incluye @, usa resolve_twitter_handle y luego nitter_profile.
-3) nitter_context SOLO para temas/palabras clave, NO para personas específicas.
+3) nitter_context SOLO para temas/palabras clave, NO para personas específicas. Idealmente precedido por perplexity_search para construir buena query.
 4) Siempre usa "Guatemala" como location cuando corresponda.
 5) No asumas; valida con herramientas incluso si tú "sabes" la respuesta.
-6) Máximo 2 hops de herramientas por consulta: memoria → web.
+6) Máximo 2 hops de herramientas por consulta: memoria → web, o perplexity → nitter.
 
 AÑO_ACTUAL = ${currentYear}
 
@@ -203,7 +207,14 @@ Assistant (tool_call): search_political_context({ "query": "presidente del congr
 Tool (search_political_context): { "groupId": "group:pulsepolitics", "query": "presidente del congreso", "count": 0, "results": [] }
 Assistant (tool_call): perplexity_search({ "query": "presidente del congreso guatemala ${currentYear} cargo actual", "location": "Guatemala", "focus": "institucional" })
 Tool (perplexity_search): { "summary": "...", "sources": [ ... ] }
-Assistant (final): "El presidente del Congreso de Guatemala es ... (según fuentes recientes)".`;
+Assistant (final): "El presidente del Congreso de Guatemala es ... (según fuentes recientes)".
+
+EJEMPLO (temas → perplexity → nitter):
+Usuario: "¿Qué se dice sobre la reforma fiscal?"
+Assistant (tool_call): perplexity_search({ "query": "reforma fiscal Guatemala ${currentYear} términos clave hashtags actores" , "location": "Guatemala", "focus": "actualidad" })
+Tool (perplexity_search): { "keywords": ["reforma fiscal", "SAT", "impuestos", "IVA", "exenciones"], "hashtags": ["#ReformaFiscal", "#SAT"], "entities": ["SAT", "Congreso"], "summary": "..." }
+Assistant (tool_call): nitter_context({ "q": "reforma fiscal OR SAT OR impuestos OR IVA OR exenciones Guatemala #ReformaFiscal #SAT", "location": "Guatemala", "limit": 25 })
+Assistant (final): "Se discuten X e Y. En redes se mencionan ...".`;
   }
 
   /**

@@ -28,7 +28,7 @@ class ViztaOpenPipeIntegration {
       const startTime = Date.now();
       
       // PASO 1: Obtener decisión del modelo fine-tuneado
-      const openPipeResult = await openPipeService.processViztaQuery(userMessage, conversationId);
+      const openPipeResult = await openPipeService.processViztaQuery(userMessage, user, conversationId);
       
       if (!openPipeResult.success) {
         console.log(`[VIZTA_OPENPIPE] ❌ Error en OpenPipe, usando fallback`);

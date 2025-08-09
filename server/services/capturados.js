@@ -251,6 +251,45 @@ function sanitizeCard(card, codexItem = null) {
     const num = Number(sanitized.amount);
     sanitized.amount = isNaN(num) ? null : num;
   }
+  // porcentaje numeric → percentage
+  if (sanitized.porcentaje !== undefined && sanitized.porcentaje !== null) {
+    const num = Number(sanitized.porcentaje);
+    sanitized.percentage = isNaN(num) ? null : num;
+    delete sanitized.porcentaje;
+  }
+  if (sanitized.percentage !== undefined && sanitized.percentage !== null) {
+    const num = Number(sanitized.percentage);
+    sanitized.percentage = isNaN(num) ? null : num;
+  }
+  // contador numeric → counter
+  if (sanitized.contador !== undefined && sanitized.contador !== null) {
+    const num = Number(sanitized.contador);
+    sanitized.counter = isNaN(num) ? null : num;
+    delete sanitized.contador;
+  }
+  if (sanitized.counter !== undefined && sanitized.counter !== null) {
+    const num = Number(sanitized.counter);
+    sanitized.counter = isNaN(num) ? null : num;
+  }
+  // cantidad numeric → quantity (no monetaria)
+  if (sanitized.cantidad !== undefined && sanitized.cantidad !== null) {
+    const num = Number(sanitized.cantidad);
+    sanitized.quantity = isNaN(num) ? null : num;
+    delete sanitized.cantidad;
+  }
+  if (sanitized.quantity !== undefined && sanitized.quantity !== null) {
+    const num = Number(sanitized.quantity);
+    sanitized.quantity = isNaN(num) ? null : num;
+  }
+  // Duración avanzada: si vienen componentes, calcular total en segundos (solo D/H/M)
+  if (sanitized.duration_components && typeof sanitized.duration_components === 'object') {
+    const c = sanitized.duration_components;
+    const days = Number(c.days || 0);
+    const hours = Number(c.hours || 0);
+    const minutes = Number(c.minutes || 0);
+    const totalSeconds = (isNaN(days) ? 0 : days) * 86400 + (isNaN(hours) ? 0 : hours) * 3600 + (isNaN(minutes) ? 0 : minutes) * 60;
+    sanitized.duration_total_seconds = totalSeconds;
+  }
   // item_count derivado de amount cuando no es dinero
   if (!sanitized.currency && sanitized.amount !== null) {
     const hintText = `${card.description || ''} ${card.discovery || ''}`.toLowerCase();

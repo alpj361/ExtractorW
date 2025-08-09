@@ -96,6 +96,197 @@ router.get('/', verifyUserAccess, async (req, res) => {
   }
 });
 
+/**
+ * POST /api/capturados
+ * Crea una tarjeta capturado manualmente
+ * Body params: { project_id, entity?, city?, department?, description?, discovery?, amount?, currency?, source?, start_date?, duration_days? }
+ */
+router.post('/', verifyUserAccess, async (req, res) => {
+  const {
+    project_id,
+    entity,
+    city,
+    department,
+    description,
+    discovery,
+    amount,
+    currency,
+    source,
+    start_date,
+    duration_days,
+    counter,
+    percentage,
+    quantity,
+    // Duración avanzada
+    duration_text,
+    duration_years,
+    duration_months,
+    duration_hours,
+    duration_minutes,
+    // Tiempo/periodo avanzado
+    time_type, // 'day'|'year_range'|'decade'|'custom'
+    time_date, // YYYY-MM-DD for 'day'
+    time_start_year,
+    time_end_year,
+    time_decade_start_year, // ej 1990 -> 1990s
+    time_lower_date, // custom lower YYYY-MM-DD
+    time_upper_date, // custom upper YYYY-MM-DD
+    time_bounds // '[]'|'[)'|'()'|'(]'
+  } = req.body || {};
+
+  if (!project_id) {
+    return res.status(400).json({ error: 'Parámetro faltante', message: 'project_id requerido' });
+  }
+
+  try {
+    // Helpers ---------------------------------
+    function computeDurationTotalSeconds(components) {
+      const days = Number(components.days || 0);
+      const hours = Number(components.hours || 0);
+      const minutes = Number(components.minutes || 0);
+      const seconds = 0;
+      return days * 86400 + hours * 3600 + minutes * 60 + seconds;
+    }
+
+    function buildDuration() {
+      // Prioridad: duration_text directa; si no, construir desde componentes
+      const comp = {
+        years: Number(duration_years || 0) || 0,
+        months: Number(duration_months || 0) || 0,
+        days: Number(duration_days || 0) || 0,
+        hours: Number(duration_hours || 0) || 0,
+        minutes: Number(duration_minutes || 0) || 0,
+      };
+
+      // Normaliza texto si no se provee
+      const text = (duration_text && typeof duration_text === 'string')
+        ? duration_text
+        : `${String(comp.years).padStart(2,'0')}:${String(comp.months).padStart(2,'0')}:${String(comp.days).padStart(2,'0')}:${String(comp.hours).padStart(2,'0')}:${String(comp.minutes).padStart(2,'0')}`;
+
+      // Total en segundos: solo días/horas/minutos para exactitud
+      const totalSeconds = computeDurationTotalSeconds(comp);
+      return { text, totalSeconds, components: comp };
+    }
+
+    function toISODate(d) {
+      return d && typeof d === 'string' ? d : null;
+    }
+
+    function daterangeText(lower, upper, bounds = '[)') {
+      return `${bounds[0]}${lower || ''},${upper || ''}${bounds[1]}`;
+    }
+
+    function addDays(dateStr, days) {
+      const d = new Date(dateStr + 'T00:00:00Z');
+      if (isNaN(d.getTime())) return null;
+      d.setUTCDate(d.getUTCDate() + days);
+      return d.toISOString().slice(0,10);
+    }
+
+    function buildTimeRange() {
+      let range = null, label = null, gran = null;
+      const bounds = (typeof time_bounds === 'string' && ['[]','[)','()','(]'].includes(time_bounds)) ? time_bounds : '[)';
+
+      if (time_type === 'day' && time_date) {
+        const lower = toISODate(time_date);
+        const upper = addDays(lower, 1);
+        if (lower && upper) {
+          range = daterangeText(lower, upper, bounds);
+          label = lower;
+          gran = 'day';
+        }
+      } else if (time_type === 'year_range' && time_start_year && time_end_year) {
+        const sy = Number(time_start_year), ey = Number(time_end_year);
+        if (!isNaN(sy) && !isNaN(ey) && ey >= sy) {
+          const lower = `${sy}-01-01`;
+          const upper = `${ey + 1}-01-01`;
+          range = daterangeText(lower, upper, bounds);
+          label = `${sy}–${ey}`;
+          gran = 'year';
+        }
+      } else if (time_type === 'decade' && time_decade_start_year) {
+        const dy = Number(time_decade_start_year);
+        if (!isNaN(dy)) {
+          const lower = `${dy}-01-01`;
+          const upper = `${dy + 10}-01-01`;
+          range = daterangeText(lower, upper, bounds);
+          label = `${dy}s`;
+          gran = 'decade';
+        }
+      } else if (time_type === 'custom' && time_lower_date && time_upper_date) {
+        const lower = toISODate(time_lower_date);
+        const upper = toISODate(time_upper_date);
+        if (lower && upper) {
+          range = daterangeText(lower, upper, bounds);
+          label = `${lower} → ${upper}`;
+          gran = 'custom';
+        }
+      }
+      return { range, label, granularity: gran };
+    }
+
+    const duration = buildDuration();
+    const time = buildTimeRange();
+    // Verificar permisos del usuario sobre el proyecto
+    const { data: project, error: projectErr } = await supabase
+      .from('projects')
+      .select('id, user_id, collaborators')
+      .eq('id', project_id)
+      .single();
+
+    if (projectErr || !project) {
+      return res.status(404).json({ error: 'Proyecto no encontrado' });
+    }
+
+    const hasAccess = project.user_id === req.user.id ||
+      (project.collaborators && project.collaborators.includes(req.user.id));
+
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'No tienes permisos para crear hallazgos en este proyecto' });
+    }
+
+    const insertData = {
+      project_id,
+      entity: entity?.trim() || null,
+      city: city?.trim() || null,
+      department: department?.trim() || null,
+      description: description?.trim() || null,
+      discovery: discovery?.trim() || null,
+      amount: amount !== undefined && amount !== null ? Number(amount) : null,
+      currency: currency?.trim() || null,
+      source: source?.trim() || null,
+      start_date: start_date || null,
+      duration_days: duration_days !== undefined && duration_days !== null ? Number(duration_days) : null,
+      counter: counter !== undefined && counter !== null ? Number(counter) : null,
+      percentage: percentage !== undefined && percentage !== null ? Number(percentage) : null,
+      quantity: quantity !== undefined && quantity !== null ? Number(quantity) : null,
+      // Nuevos campos de duración/tiempo
+      duration_text: duration.text || null,
+      duration_total_seconds: duration.totalSeconds || null,
+      duration_components: duration.components || {},
+      time_range: time.range || null,
+      time_label: time.label || null,
+      time_granularity: time.granularity || null,
+    };
+
+    const { data: created, error: insertError } = await supabase
+      .from('capturado_cards')
+      .insert([insertData])
+      .select('*')
+      .single();
+
+    if (insertError) throw insertError;
+
+    await logUsage(req.user, '/api/capturados/create', 0, req);
+
+    return res.json({ success: true, card: created });
+  } catch (error) {
+    console.error('❌ Error en POST /capturados:', error);
+    await logError('/api/capturados/create', error, req.user, req);
+    return res.status(500).json({ error: 'Error interno', message: error.message });
+  }
+});
+
 // =============== BULK EXTRACTION ===============
 router.post('/bulk', verifyUserAccess, async (req, res) => {
   const { project_id, codex_item_ids } = req.body || {};
