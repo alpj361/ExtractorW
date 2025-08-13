@@ -267,10 +267,10 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                     .from('codex_items')
                     .select('*')
                     .eq('user_id', userId)
-                    .eq('tipo', 'enlace')
                     .in('id', itemIds);
                 
-                pendingItems = data;
+                // Aceptar tanto el esquema antiguo (tipo = 'enlace') como el nuevo (tipo = 'item' + original_type = 'link')
+                pendingItems = (data || []).filter((i) => i && (i.tipo === 'enlace' || (i.tipo === 'item' && (i.original_type === 'link' || i.original_type === 'enlace'))));
                 fetchError = error;
                 
                 console.log(`✅ Consulta específica completada. Encontrados ${pendingItems?.length || 0} elementos`);
@@ -286,9 +286,10 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
                     .from('codex_items')
                     .select('*')
                     .eq('user_id', userId)
-                    .eq('tipo', 'enlace');
+                    .in('tipo', ['enlace', 'item']);
                 
-                pendingItems = data;
+                // Filtrar por tipos soportados
+                pendingItems = (data || []).filter((i) => i && (i.tipo === 'enlace' || (i.tipo === 'item' && (i.original_type === 'link' || i.original_type === 'enlace'))));
                 fetchError = error;
                 
                 console.log(`✅ Consulta general completada. Encontrados ${pendingItems?.length || 0} enlaces totales`);
@@ -346,7 +347,8 @@ router.post('/analyze-pending-links', verifyUserAccess, async (req, res) => {
             try {
                 console.log(`\n🔄 Procesando item ${index + 1}/${pendingItems.length}: ${item.id} - ${item.titulo}`);
                 
-                const url = item.url;
+                // Compatibilidad con nuevo modelo: usar source_url cuando url esté vacío
+                const url = item.url || item.source_url;
                 if (!url) {
                     console.log(`⚠️ Item sin URL: ${item.id}`);
                     results.push({

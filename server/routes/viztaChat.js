@@ -3,6 +3,7 @@ const router = express.Router();
 const { verifyUserAccess } = require('../middlewares/auth');
 const mcpService = require('../services/mcp');
 const recentScrapesService = require('../services/recentScrapes');
+const geminiService = require('../services/gemini');
 const memoriesService = require('../services/memories');
 const agentesService = require('../services/agentesService');
 const supabase = require('../utils/supabase');
@@ -271,10 +272,163 @@ router.post('/query', verifyUserAccess, async (req, res) => {
       result = await processProjectSearch(message, req.user, chatSessionId);
       
     } else {
-      // PASO 3: Para consultas no casuales, usar OpenPipe con function calling
-      console.log('🎯 Usando OpenPipe para function calling optimizado...');
-      
-      const openPipeResult = await openPipeService.processViztaQuery(message, req.user, chatSessionId);
+      // Modo memoria explícita: si el usuario pide "según tu memoria" o menciona Pulse_Politics,
+      // NO usar web ni social hasta tener un tema concreto. Responder con memoria o pedir precisión.
+      const asksMemory = /(seg[uú]n tu memoria|en tu memoria|tu memoria|memoria)/i.test(message) || /pulse[_-]?politics/i.test(message);
+      if (asksMemory) {
+        const generic = /^(que sabes|qué sabes|que conoces|qué conoces|guatemala|info general)/i.test(message.trim());
+        if (generic) {
+          // Pregunta aclaratoria en modo memoria-only
+          return res.json({
+            success: true,
+            response: {
+              agent: 'Vizta',
+              message: '¿Sobre qué tema específico de tu memoria política quieres que revise? Puedo buscar personas, cargos, eventos o fechas. Ejemplos: "personas vinculadas a X", "cargos del Congreso", "eventos en agosto".',
+              type: 'memory_clarification',
+              timestamp: new Date().toISOString()
+            },
+            conversationId: chatSessionId,
+            metadata: { conversationType: 'memory_only' }
+          });
+        }
+        try {
+          const memExec = await openPipeService.executeFunctionCall(
+            { name: 'search_political_context', arguments: { query: message, limit: 10 } },
+            req.user,
+            chatSessionId
+          );
+          const results = memExec?.data?.results || [];
+          const count = memExec?.data?.count ?? results.length;
+          const preview = results.slice(0, 5).map((r, i) => `- ${r?.title || r?.id || `item_${i+1}`}`).join('\n');
+          return res.json({
+            success: true,
+            response: {
+              agent: 'Vizta',
+              message: count > 0
+                ? `En tu memoria política encontré ${count} registros relacionados. Algunos:
+${preview}
+¿Quieres que profundice en alguno o que genere una búsqueda social a partir de esto?`
+                : 'No encontré resultados en tu memoria política con esa descripción. ¿Puedes especificar persona, cargo o evento?',
+              type: 'memory_response',
+              timestamp: new Date().toISOString()
+            },
+            conversationId: chatSessionId,
+            metadata: { conversationType: 'memory_only', count }
+          });
+        } catch (e) {
+          return res.json({
+            success: true,
+            response: {
+              agent: 'Vizta',
+              message: 'Hubo un problema consultando tu memoria política. ¿Puedes especificar el tema para intentarlo de nuevo?',
+              type: 'memory_error',
+              timestamp: new Date().toISOString()
+            },
+            conversationId: chatSessionId,
+            metadata: { conversationType: 'memory_only', error: e.message }
+          });
+        }
+      }
+      // Helper local para sanear queries sociales
+      const sanitizeSocialQuery = (q) => {
+        try {
+          if (!q || typeof q !== 'string') return null;
+          // Eliminar signos de interrogación y fechas tipo dd/mm/yyyy incrustadas al inicio
+          let s = q
+            .replace(/[?¿]/g, ' ')
+            .replace(/\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/g, ' ')
+            .replace(/\s+/g, ' ') // colapsar espacios
+            .trim();
+          // Evitar prefijos tipo enunciado; quedarnos desde el primer hashtag o palabra OR
+          const firstOr = s.search(/\sOR\s/i);
+          const firstHash = s.indexOf('#');
+          if (firstHash > -1 && (firstOr === -1 || firstHash < firstOr)) {
+            s = s.slice(firstHash);
+          }
+          // Asegurar espacios alrededor de OR
+          s = s.replace(/\s*OR\s*/gi, ' OR ');
+          // Quitar palabras genéricas aisladas si no están combinadas (muy agresivo → sólo eliminar si longitud total < 30)
+          if (s.length < 30) {
+            s = s.replace(/\b(hoy|lista|facultades|elecciones)\b/gi, '').replace(/\s+/g, ' ').trim();
+          }
+          // Reglas mínimas: debe contener OR o hashtag o USAC
+          if (!(/\sOR\s/i.test(s) || s.includes('#') || /USAC/i.test(s))) return null;
+          return s;
+        } catch { return null; }
+      };
+      // PASO 3: Pipeline especializado previo para USAC/elecciones: Gemini primero → Perplexity → Nitter
+      const msgLowerPre = (message || '').toLowerCase();
+      const isLocalTemporalQuery = (
+        /(eleccion|elecciones|candidato|candidatos|planilla|planillas|consejo estudiantil|convocatoria|inscripci[oó]n|n[oó]mina|postulantes|horario|sede|asamblea|debate|votaci[oó]n)/.test(msgLowerPre) ||
+        /(hoy|mañana|pasado|esta semana|este mes|\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b)/.test(msgLowerPre)
+      );
+      let openPipeResult;
+      if (isLocalTemporalQuery) {
+        console.log('🧭 Gemini-first pipeline enabled for local/temporal query');
+        try {
+          // 0) Memoria política previa para contexto (consulta original)
+          const memQ = message;
+          let memEntities = [];
+          try {
+            const memExec0 = await openPipeService.executeFunctionCall(
+              { name: 'search_political_context', arguments: { query: memQ, limit: 8 } },
+              req.user,
+              chatSessionId
+            );
+            const res0 = memExec0?.data?.results || [];
+            for (const r of res0) {
+              if (r?.title) memEntities.push(r.title);
+              if (r?.entities && Array.isArray(r.entities)) memEntities.push(...r.entities.slice(0, 5));
+            }
+          } catch {}
+
+          // 1) Gemini: generar pregunta web específica y query social candidata (sin role system)
+          const now = new Date();
+          const dateCtx = now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
+          const gemPrompt = `Devuelve SOLO JSON con: {"web_question":"...","social_q":"..."}.
+Reglas:
+- web_question: pregunta concreta para web, con fecha (${dateCtx}) si aplica; orientada a listas/candidatos/información oficial relevante al tema.
+- social_q: query de X/Twitter en formato tokens con OR, usando jerga/hashtags del dominio, evitando frases completas, preguntas y fechas.
+Entrada:
+- Consulta usuario: ${message}
+- Entidades/memoria: ${memEntities.slice(0,8).join(', ')}`;
+          const rawGem = await geminiService.generateContent([
+            { role: 'user', content: gemPrompt }
+          ], { temperature: 0.2, max_tokens: 400 });
+          const gm = rawGem.match(/\{[\s\S]*\}/);
+          const gj = gm ? JSON.parse(gm[0]) : JSON.parse(rawGem);
+          const webQuestion = (gj?.web_question || message).toString().slice(0, 400);
+          const socialQCandidate = sanitizeSocialQuery(gj?.social_q);
+
+          // 2) Ejecutar OpenPipe normal pero forzando perplexity primero con improve_nitter_search
+          openPipeResult = await openPipeService.processViztaQuery(webQuestion, req.user, chatSessionId);
+
+          // 3) Si ya hubo function_call, seguimos; si no, forzamos una pasada social con socialQCandidate
+          if (!(openPipeResult?.success)) {
+            throw new Error('OpenPipe no devolvió éxito; forzando nitter_context con social_q');
+          }
+
+          // 4) Si tenemos social_q de Gemini, ejecutamos un nitter adicional y combinamos si mejora
+          if (socialQCandidate) {
+            const execN = await openPipeService.executeFunctionCall(
+              { name: 'nitter_context', arguments: { q: socialQCandidate, location: 'Guatemala', limit: 35 } },
+              req.user,
+              chatSessionId
+            );
+            if (execN?.success) {
+              // Enlazar en metadata para que el post-proceso pueda elegir el mejor
+              openPipeResult.extraSocial = execN;
+            }
+          }
+        } catch (e) {
+          console.warn('⚠️ Gemini-first pipeline failed, falling back to OpenPipe default:', e.message);
+          openPipeResult = await openPipeService.processViztaQuery(message, req.user, chatSessionId);
+        }
+      } else {
+        // Ruta estándar
+        console.log('🎯 Usando OpenPipe para function calling optimizado...');
+        openPipeResult = await openPipeService.processViztaQuery(message, req.user, chatSessionId);
+      }
       
       if (openPipeResult.success && openPipeResult.type === 'function_call') {
         // Ejecutar TODAS las herramientas decididas por el modelo en orden
@@ -349,6 +503,18 @@ router.post('/query', verifyUserAccess, async (req, res) => {
               tool: te.call?.name || te.call?.function?.name,
               success: !!te.exec?.success
             })),
+            executionsDetailed: toolExecutions.map(te => ({
+              tool: te.call?.name || te.call?.function?.name,
+              success: !!te.exec?.success,
+              exec: {
+                function: te.exec?.function,
+                tool: te.exec?.tool,
+                data: te.exec?.data ? {
+                  nitter_optimization: te.exec.data.nitter_optimization,
+                  web_search_result: te.exec.data.web_search_result
+                } : undefined
+              }
+            })),
             agent: lastExec.agent,
             processingTime: Date.now() - startTime,
             openPipeUsage: openPipeResult.usage
@@ -381,6 +547,158 @@ router.post('/query', verifyUserAccess, async (req, res) => {
           previousMessages: previousMessages
         });
       }
+    }
+
+    // Post-procesamiento: si la consulta parece de elecciones estudiantiles USAC y no ejecutamos nitter_context, forzar hop social
+    try {
+      const msgLower = (message || '').toLowerCase();
+      const isStudentElectionQuery = (
+        /(eleccion|elecciones|candidato|candidatos|planilla|planillas|consejo estudiantil)/.test(msgLower) &&
+        /(usac|universidad de san carlos|facultad)/.test(msgLower)
+      );
+
+      const alreadyUsedNitter = !!(result?.metadata?.executions || []).some(e => e.tool === 'nitter_context' && e.success);
+
+      if (isStudentElectionQuery && !alreadyUsedNitter) {
+        console.log('🎯 Detected USAC student elections query without social hop. Auto-chaining to nitter_context...');
+
+        // Intentar enriquecer query a partir de text/plain previo o la original
+        const enrichedParts = [];
+        const base = message;
+        if (/derecho/.test(msgLower)) enrichedParts.push('Derecho USAC');
+        if (/ingenier/.test(msgLower)) enrichedParts.push('Ingeniería USAC');
+        if (/medicin/.test(msgLower)) enrichedParts.push('Medicina USAC');
+        enrichedParts.push('consejo estudiantil', 'planillas', 'elecciones USAC');
+
+        const nitterQ = `${enrichedParts.join(' OR ')} Guatemala #USAC`;
+
+        // Si el hop previo fue perplexity_search y trae optimización para nitter, combínala
+        const prevDetailed = (result?.metadata?.executionsDetailed || []).map(e => e.exec || {});
+        const pxx = prevDetailed.find(e => (e.function === 'perplexity_search') || (e.tool === 'perplexity_search'));
+        const pxxOptim = pxx?.data?.nitter_optimization?.optimized_query;
+        const finalQ = pxxOptim ? `${nitterQ} OR ${pxxOptim}` : nitterQ;
+
+        const exec = await openPipeService.executeFunctionCall(
+          { name: 'nitter_context', arguments: { q: finalQ, location: 'Guatemala', limit: 30 } },
+          req.user,
+          chatSessionId
+        );
+
+        if (exec?.success) {
+          // Construir respuesta final usando el resultado social
+          result = {
+            success: true,
+            response: {
+              agent: exec.agent || 'Vizta',
+              message: await formatFunctionResult(exec, message),
+              type: 'function_response',
+              timestamp: new Date().toISOString(),
+              functionUsed: 'nitter_context',
+              data: exec.data
+            },
+            conversationId: chatSessionId,
+            metadata: {
+              ...(result?.metadata || {}),
+              conversationType: 'function_call',
+              autoChained: 'student_elections_usac',
+              processingTime: Date.now() - startTime
+            }
+          };
+        }
+      }
+    } catch (postErr) {
+      console.warn('⚠️ Auto-chaining nitter_context failed:', postErr.message);
+    }
+
+    // Post-procesamiento 2: si ya ejecutamos nitter_context pero devolvió 0-2 tweets, refinar con memoria (Pulse_Politics) + Gemini
+    try {
+      const lastTool = result?.response?.functionUsed;
+      const lastData = result?.response?.data;
+      const fewTweets = lastTool === 'nitter_context' && (!lastData?.tweets || lastData.tweets.length <= 2);
+      const msgLower2 = (message || '').toLowerCase();
+      const isStudentElectionQuery2 = (
+        /(eleccion|elecciones|candidato|candidatos|planilla|planillas|consejo estudiantil)/.test(msgLower2) &&
+        /(usac|universidad de san carlos|facultad)/.test(msgLower2)
+      );
+
+      if (fewTweets && isStudentElectionQuery2) {
+        console.log('🔁 Few tweets found. Refining with Pulse_Politics memory + Gemini query synthesis...');
+
+        // 1) Buscar en memoria política
+        const memoryQuery = /derecho/.test(msgLower2) ? 'elecciones consejo estudiantil Derecho USAC' : 'elecciones consejo estudiantil USAC';
+        const memExec = await openPipeService.executeFunctionCall(
+          { name: 'search_political_context', arguments: { query: memoryQuery, limit: 8 } },
+          req.user,
+          chatSessionId
+        );
+
+        // Extraer posibles nombres/entidades de memoria
+        const memEntities = [];
+        try {
+          const memRes = memExec?.data?.results || [];
+          for (const r of memRes) {
+            if (r?.title) memEntities.push(r.title);
+            if (r?.entities && Array.isArray(r.entities)) memEntities.push(...r.entities.slice(0, 5));
+          }
+        } catch {}
+
+        // 2) Recuperar optimización de Perplexity si existe
+        const prevDetailed2 = (result?.metadata?.executionsDetailed || []).map(e => e.exec || {});
+        const pxx2 = prevDetailed2.find(e => (e.function === 'perplexity_search') || (e.tool === 'perplexity_search'));
+        const pxxOptim2 = pxx2?.data?.nitter_optimization?.optimized_query;
+
+        // 3) Pedir a Gemini que sintetice la mejor query OR para X/Twitter
+        const now = new Date();
+        const dateCtx = now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
+        const userMsg = `Devuelve SOLO JSON con {"q":"..."} (query para X/Twitter en formato tokens con OR, sin preguntas/fechas/frases).\nFecha actual: ${dateCtx}\nConsulta: ${message}\nOptimización Perplexity: ${pxxOptim2 || ''}\nEntidades/Nombres memoria: ${memEntities.slice(0,8).join(', ')}`;
+        let gemOut;
+        try {
+          const rawGem = await geminiService.generateContent([
+            { role: 'user', content: userMsg }
+          ], { temperature: 0.2, max_tokens: 300 });
+          const match = rawGem.match(/\{[\s\S]*\}/);
+          const json = match ? JSON.parse(match[0]) : JSON.parse(rawGem);
+          gemOut = json?.q;
+        } catch (e) {
+          console.warn('⚠️ Gemini synthesis failed, falling back to concatenation');
+        }
+
+        const refinedQ = gemOut || [pxxOptim2, 'consejo estudiantil', 'elecciones USAC', ...memEntities.slice(0, 5)]
+          .filter(Boolean)
+          .join(' OR ');
+
+        if (refinedQ) {
+          const exec2 = await openPipeService.executeFunctionCall(
+            { name: 'nitter_context', arguments: { q: refinedQ, location: 'Guatemala', limit: 35 } },
+            req.user,
+            chatSessionId
+          );
+
+          if (exec2?.success && exec2?.data?.tweets?.length > (lastData?.tweets?.length || 0)) {
+            // Merge simple: usar el mejor resultado
+            result = {
+              success: true,
+              response: {
+                agent: exec2.agent || 'Vizta',
+                message: await formatFunctionResult(exec2, message),
+                type: 'function_response',
+                timestamp: new Date().toISOString(),
+                functionUsed: 'nitter_context',
+                data: exec2.data
+              },
+              conversationId: chatSessionId,
+              metadata: {
+                ...(result?.metadata || {}),
+                conversationType: 'function_call',
+                autoChained: 'student_elections_usac_refined',
+                processingTime: Date.now() - startTime
+              }
+            };
+          }
+        }
+      }
+    } catch (refineErr) {
+      console.warn('⚠️ Refinement with Pulse_Politics + Gemini failed:', refineErr.message);
     }
 
     // Formatear respuesta para el chat y asegurar estructura correcta

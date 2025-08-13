@@ -42,6 +42,27 @@ class OpenPipeService {
       // Herramientas disponibles para function calling
       const tools = this.getViztaTools();
 
+      // Inyectar SIEMPRE contexto de memoria (Zep) antes del bucle de tools
+      try {
+        const { InternalMemoryClient } = require('./agents/laura/internalMemoryClient');
+        const zep = new InternalMemoryClient();
+        const memResults = await zep.searchPoliticalContext(userMessage, 5);
+        if (Array.isArray(memResults) && memResults.length > 0) {
+          const snippet = JSON.stringify(memResults.slice(0, 5));
+          messages.splice(1, 0, {
+            role: 'system',
+            content: `[MEMORIA_ZEP] Contexto político relacionado (top ${Math.min(5, memResults.length)}): ${snippet}`
+          });
+        } else {
+          messages.splice(1, 0, {
+            role: 'system',
+            content: `[MEMORIA_ZEP] Sin resultados directos para esta consulta`
+          });
+        }
+      } catch (memErr) {
+        console.warn('[OPENPIPE] ⚠️ No se pudo cargar contexto de memoria Zep:', memErr?.message || memErr);
+      }
+
       // Bucle de encadenamiento de tool-calls: permitir que el LLM llame varias herramientas antes de responder
       let loopMessages = messages;
       let safetyHops = 0;
@@ -185,8 +206,9 @@ class OpenPipeService {
 REGLAS IMPORTANTES (CHAIN-OF-TOOLS):
 0) Consultas sobre TEMAS/TENDENCIAS (no personas específicas):
    a. PRIMERO usa perplexity_search para identificar palabras clave, sinónimos, hashtags y entidades relevantes (mes/año actual y "Guatemala").
-   b. Con esos términos, luego usa nitter_context con formato OR palabra-por-palabra y hashtags pertinentes.
-   c. Devuelve al usuario: qué está pasando, señales relevantes y menciones relacionadas en redes (enfocadas al tema). Máximo 2 hops.
+    b. Con esos términos, luego usa nitter_context con formato OR palabra-por-palabra y hashtags pertinentes.
+    c. Devuelve al usuario: qué está pasando, señales relevantes y menciones relacionadas en redes (enfocadas al tema). Máximo 2 hops.
+    d. REGLA GENERALIZADA: Cuando el tema implique consultas dependientes de contexto local/temporal (p.ej. elecciones universitarias, convocatorias, procesos internos, eventos locales), encadena: search_political_context (si aplica) → perplexity_search (improve_nitter_search=true) → nitter_context. Adapta términos a jerga/hashtags del dominio y evita frases completas.
 1) Cargos/posiciones y datos institucionales:
    a. Ejecuta primero search_political_context (memoria política Zep, grupo pulse-politics) con la consulta del usuario.
    b. Si la herramienta devuelve count==0 o evidencia insuficiente, NO respondas aún; ejecuta luego perplexity_search con un query enriquecido:
@@ -201,20 +223,7 @@ REGLAS IMPORTANTES (CHAIN-OF-TOOLS):
 
 AÑO_ACTUAL = ${currentYear}
 
-EJEMPLO (chain-of-tools):
-Usuario: "¿Quién es el presidente del congreso?"
-Assistant (tool_call): search_political_context({ "query": "presidente del congreso", "limit": 3 })
-Tool (search_political_context): { "groupId": "group:pulsepolitics", "query": "presidente del congreso", "count": 0, "results": [] }
-Assistant (tool_call): perplexity_search({ "query": "presidente del congreso guatemala ${currentYear} cargo actual", "location": "Guatemala", "focus": "institucional" })
-Tool (perplexity_search): { "summary": "...", "sources": [ ... ] }
-Assistant (final): "El presidente del Congreso de Guatemala es ... (según fuentes recientes)".
-
-EJEMPLO (temas → perplexity → nitter):
-Usuario: "¿Qué se dice sobre la reforma fiscal?"
-Assistant (tool_call): perplexity_search({ "query": "reforma fiscal Guatemala ${currentYear} términos clave hashtags actores" , "location": "Guatemala", "focus": "actualidad" })
-Tool (perplexity_search): { "keywords": ["reforma fiscal", "SAT", "impuestos", "IVA", "exenciones"], "hashtags": ["#ReformaFiscal", "#SAT"], "entities": ["SAT", "Congreso"], "summary": "..." }
-Assistant (tool_call): nitter_context({ "q": "reforma fiscal OR SAT OR impuestos OR IVA OR exenciones Guatemala #ReformaFiscal #SAT", "location": "Guatemala", "limit": 25 })
-Assistant (final): "Se discuten X e Y. En redes se mencionan ...".`;
+`;
   }
 
   /**

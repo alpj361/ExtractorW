@@ -912,6 +912,7 @@ async function executeNitterContext(query, location = 'guatemala', limit = 10, s
     // DETECCIÓN DE QUERY OPTIMIZADA POR LLM (Laura)
     // Si la query contiene hashtags, emojis o jerga específica, es de Laura y NO debe modificarse
     const isLLMOptimized = query.includes('#') || 
+                          /\sOR\s/i.test(query) ||
                           query.includes('⚽') || 
                           query.includes('chapin') || 
                           query.includes('guate') ||
