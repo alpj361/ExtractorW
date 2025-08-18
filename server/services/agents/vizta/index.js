@@ -13,6 +13,7 @@ const { ConversationManager } = require('./conversationManager');
 const llmIntentClassifier = require('./helpers/llmIntentClassifier');
 const { LauraHandlers, RobertHandlers, MixedHandlers } = require('./agentHandlers');
 const ViztaOpenPipeIntegration = require('./openPipeIntegration');
+const { ReasoningLayer } = require('./reasoningLayer');
 
 class ViztaAgent {
   constructor() {
@@ -35,6 +36,8 @@ class ViztaAgent {
     
     // Inicializar integración con OpenPipe
     this.openPipeIntegration = new ViztaOpenPipeIntegration(this);
+    // Inicializar capa de razonamiento propio (contexto PulsePolitics)
+    this.reasoningLayer = new ReasoningLayer(this);
     
     // Estado interno
     this.activeConversations = new Map();
@@ -106,7 +109,12 @@ class ViztaAgent {
         communicationBus.registerAgent(conversation.id, 'laura');
         communicationBus.registerAgent(conversation.id, 'robert');
         
-        // PRIORIDAD 1: Intentar con OpenPipe si está disponible
+        // PRIORIDAD 0: Intentar una respuesta directa razonada con PulsePolitics (sin delegar)
+        const reasoned = await this.reasoningLayer.tryDirectPulseAnswer(userMessage, user, conversation.id);
+        if (reasoned && reasoned.success) {
+          response = reasoned;
+        } else {
+          // PRIORIDAD 1: Intentar con OpenPipe si está disponible
         if (this.openPipeIntegration.isAvailable()) {
           console.log(`[VIZTA] 🎯 Usando OpenPipe para procesamiento agéntico`);
           const openPipeResponse = await this.openPipeIntegration.processWithOpenPipe(
@@ -123,10 +131,11 @@ class ViztaAgent {
             console.log(`[VIZTA] ⚠️ OpenPipe falló, usando modo agéntico tradicional`);
             response = await this.executeAgenticMode(userMessage, user, conversation.id, intentAnalysis.intent);
           }
-        } else {
+          } else {
           // PRIORIDAD 2: Usar modo agéntico tradicional
           console.log(`[VIZTA] 🔄 OpenPipe no disponible, usando modo agéntico tradicional`);
           response = await this.executeAgenticMode(userMessage, user, conversation.id, intentAnalysis.intent);
+          }
         }
         
         // Si el modo agéntico devuelve contenido procesado, usarlo directamente

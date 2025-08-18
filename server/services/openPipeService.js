@@ -193,7 +193,7 @@ class OpenPipeService {
   buildViztaSystemPrompt() {
     const currentYear = new Date().getFullYear();
     
-    return `Eres Vizta, un asistente especializado en análisis político y social de Guatemala. Tienes acceso a las siguientes herramientas:
+    return `Eres Vizta, un asistente especializado en análisis político y social de Guatemala. RAZONAS antes de actuar y usas memoria política para enriquecer queries. Tienes acceso a las siguientes herramientas:
 
 - nitter_context: Para buscar tweets sobre TEMAS/PALABRAS CLAVE (no personas específicas)
 - nitter_profile: Para extraer posts de usuarios específicos de Twitter
@@ -202,11 +202,15 @@ class OpenPipeService {
 - resolve_twitter_handle: Para encontrar handles de Twitter por nombre
 - user_projects: Para consultar proyectos del usuario
 - user_codex: Para buscar en documentos del usuario
+ - project_findings: Para ver hallazgos del proyecto (capturado_cards)
+ - project_coverages: Para ver coberturas del proyecto y estadísticas
+ - latest_trends: Para obtener el snapshot más reciente de tendencias (about + statistics)
 
-REGLAS IMPORTANTES (CHAIN-OF-TOOLS):
+REGLAS IMPORTANTES (CHAIN-OF-TOOLS + RAZONAMIENTO):
+PRE-PASO) Si la consulta es política o institucional, ejecuta primero search_political_context para recuperar nombres, alias, hashtags y términos. Usa esos hallazgos para MEJORAR cualquier query posterior (perplexity_search o nitter_context). Documenta esta expansión en tu pensamiento interno.
 0) Consultas sobre TEMAS/TENDENCIAS (no personas específicas):
    a. PRIMERO usa perplexity_search para identificar palabras clave, sinónimos, hashtags y entidades relevantes (mes/año actual y "Guatemala").
-    b. Con esos términos, luego usa nitter_context con formato OR palabra-por-palabra y hashtags pertinentes.
+    b. Con esos términos y con lo recuperado de memoria política (si aplica), luego usa nitter_context con formato OR palabra-por-palabra y hashtags pertinentes.
     c. Devuelve al usuario: qué está pasando, señales relevantes y menciones relacionadas en redes (enfocadas al tema). Máximo 2 hops.
     d. REGLA GENERALIZADA: Cuando el tema implique consultas dependientes de contexto local/temporal (p.ej. elecciones universitarias, convocatorias, procesos internos, eventos locales), encadena: search_political_context (si aplica) → perplexity_search (improve_nitter_search=true) → nitter_context. Adapta términos a jerga/hashtags del dominio y evita frases completas.
 1) Cargos/posiciones y datos institucionales:
@@ -220,6 +224,13 @@ REGLAS IMPORTANTES (CHAIN-OF-TOOLS):
 4) Siempre usa "Guatemala" como location cuando corresponda.
 5) No asumas; valida con herramientas incluso si tú "sabes" la respuesta.
 6) Máximo 2 hops de herramientas por consulta: memoria → web, o perplexity → nitter.
+
+ACCESO A DATOS DEL USUARIO (cuando el usuario pida ver sus proyectos, hallazgos, coberturas o documentos):
+- Usa user_projects para listar proyectos
+- project_findings para hallazgos de un proyecto
+- project_coverages para coberturas y estadísticas del proyecto
+- user_codex para documentos/transcripciones del usuario
+- latest_trends para tendencias actuales y su about
 
 AÑO_ACTUAL = ${currentYear}
 
@@ -390,6 +401,46 @@ AÑO_ACTUAL = ${currentYear}
       {
         type: "function",
         function: {
+          name: "project_findings",
+          description: "Ver hallazgos (capturado_cards) de un proyecto específico",
+          parameters: {
+            type: "object",
+            properties: {
+              project_id: { type: "string", description: "ID del proyecto" },
+              limit: { type: "number", description: "Máximo hallazgos a obtener", default: 50 }
+            },
+            required: ["project_id"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
+          name: "project_coverages",
+          description: "Ver coberturas y estadísticas de un proyecto",
+          parameters: {
+            type: "object",
+            properties: {
+              project_id: { type: "string", description: "ID del proyecto" },
+              type: { type: "string", description: "Filtro por tipo" },
+              status: { type: "string", description: "Filtro por estado" },
+              source: { type: "string", description: "Filtro por fuente" }
+            },
+            required: ["project_id"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
+          name: "latest_trends",
+          description: "Obtener snapshot más reciente de tendencias (about + statistics)",
+          parameters: { type: "object", properties: {} }
+        }
+      },
+      {
+        type: "function",
+        function: {
           name: "user_codex",
           description: "Buscar en los documentos del usuario (Codex)",
           parameters: {
@@ -450,8 +501,23 @@ AÑO_ACTUAL = ${currentYear}
           
         case 'user_projects':
         case 'user_codex':
+        case 'project_findings':
+        case 'project_coverages':
           // Estas herramientas van a Robert
           return await this.delegateToRobert(name, parsedArgs, user, sessionId);
+        
+        case 'latest_trends': {
+          // Tool genérica de solo lectura (MCP)
+          const mcpService = require('./mcp');
+          const result = await mcpService.executeTool('latest_trends', {}, user);
+          return {
+            success: true,
+            agent: 'Vizta',
+            tool: 'latest_trends',
+            data: result,
+            sessionId: sessionId
+          };
+        }
           
         default:
           throw new Error(`Función desconocida: ${name}`);

@@ -493,6 +493,70 @@ async function getUserStats(userId) {
   }
 }
 
+/**
+ * Obtiene hallazgos (capturado_cards) de un proyecto
+ */
+async function getProjectFindings(projectId, options = {}) {
+  const { limit = 50 } = options;
+  const { data, error } = await supabase
+    .from('capturado_cards')
+    .select('*')
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`Error obteniendo hallazgos: ${error.message}`);
+  return data || [];
+}
+
+/**
+ * Obtiene coberturas de un proyecto
+ */
+async function getProjectCoverages(projectId, filters = {}) {
+  let query = supabase
+    .from('project_coverages')
+    .select('*')
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: false });
+  if (filters.type) query = query.eq('coverage_type', filters.type);
+  if (filters.status) query = query.eq('coverage_status', filters.status);
+  if (filters.source) query = query.eq('detection_source', filters.source);
+  const { data, error } = await query;
+  if (error) throw new Error(`Error obteniendo coberturas: ${error.message}`);
+  return data || [];
+}
+
+/**
+ * Obtiene estadísticas de coberturas por proyecto
+ */
+async function getProjectCoveragesStats(projectId) {
+  const { data, error } = await supabase
+    .from('project_coverages')
+    .select('coverage_type, detection_source, coverage_status, relevance')
+    .eq('project_id', projectId);
+  if (error) throw new Error(`Error obteniendo estadísticas de coberturas: ${error.message}`);
+  const stats = { total: data.length, by_type: {}, by_source: {}, by_status: {}, by_relevance: {} };
+  data.forEach(c => {
+    stats.by_type[c.coverage_type] = (stats.by_type[c.coverage_type] || 0) + 1;
+    stats.by_source[c.detection_source] = (stats.by_source[c.detection_source] || 0) + 1;
+    stats.by_status[c.coverage_status] = (stats.by_status[c.coverage_status] || 0) + 1;
+    stats.by_relevance[c.relevance] = (stats.by_relevance[c.relevance] || 0) + 1;
+  });
+  return stats;
+}
+
+/**
+ * Obtiene el último snapshot de tendencias (incluye about y statistics)
+ */
+async function getLatestTrends() {
+  const { data, error } = await supabase
+    .from('trends')
+    .select('*')
+    .order('timestamp', { ascending: false })
+    .limit(1);
+  if (error) throw new Error(`Error obteniendo últimas tendencias: ${error.message}`);
+  return (data && data[0]) ? data[0] : null;
+}
+
 // -------------------------------------------------------------
 // Exportar funciones públicas del servicio
 // -------------------------------------------------------------
@@ -503,5 +567,9 @@ module.exports = {
   getUserCodex,
   getProjectDecisions,
   searchUserCodex,
-  getUserStats
+  getUserStats,
+  getProjectFindings,
+  getProjectCoverages,
+  getProjectCoveragesStats,
+  getLatestTrends
 };

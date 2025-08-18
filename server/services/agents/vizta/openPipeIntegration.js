@@ -112,9 +112,13 @@ class ViztaOpenPipeIntegration {
           
         case 'search_political_context':
           return await this.delegateToLauraMemory(toolName, parsedArgs, user, conversationId);
+        case 'latest_trends':
+          return await this.delegateToOpenPipeDirect(toolName, parsedArgs, user, conversationId);
           
         case 'user_projects':
         case 'user_codex':
+        case 'project_findings':
+        case 'project_coverages':
           return await this.delegateToRobert(toolName, parsedArgs, user, conversationId);
           
         default:
@@ -249,6 +253,26 @@ class ViztaOpenPipeIntegration {
         tool: toolName,
         error: error.message
       };
+    }
+  }
+
+  /**
+   * Delegación directa a OpenPipe-executor genérico (para herramientas de solo lectura)
+   */
+  async delegateToOpenPipeDirect(toolName, args, user, conversationId) {
+    try {
+      console.log(`[VIZTA_OPENPIPE] 📡 Delegando ${toolName} a OpenPipeService.executeFunctionCall`);
+      const result = await openPipeService.executeFunctionCall({ name: toolName, arguments: args }, user, conversationId);
+      return {
+        success: true,
+        agent: 'Vizta',
+        tool: toolName,
+        data: result,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      console.error(`[VIZTA_OPENPIPE] ❌ Error delegando ${toolName} directo:`, error);
+      return { success: false, agent: 'Vizta', tool: toolName, error: error.message };
     }
   }
 

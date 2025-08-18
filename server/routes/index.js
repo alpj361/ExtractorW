@@ -83,6 +83,9 @@ function setupRoutes(app) {
   // Configurar rutas de Nitter Profile (herramienta de análisis de perfiles de usuarios)
   app.use('/api', nitterProfileRoutes);
   
+  // Configurar rutas de Knowledge (PublicKnowledge)
+  app.use('/api/knowledge', require('./knowledge'));
+
   // Configurar rutas de análisis de enlaces pendientes
   app.use('/api/pending-analysis', pendingAnalysisRoutes);
   

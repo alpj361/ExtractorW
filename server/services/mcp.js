@@ -7,6 +7,10 @@ const {
   getProjectDecisions,
   searchUserCodex, 
   getUserStats,
+  getProjectFindings,
+  getProjectCoverages,
+  getProjectCoveragesStats,
+  getLatestTrends,
   saveNitterProfileTweets 
 } = require('./supabaseData');
 
@@ -557,6 +561,44 @@ const AVAILABLE_TOOLS = {
       'Histórico ordenado por fecha de creación'
     ]
   },
+
+  project_findings: {
+    name: 'project_findings',
+    description: 'Obtiene hallazgos (capturado_cards) de un proyecto específico',
+    parameters: {
+      project_id: { type: 'string', required: true, description: 'ID del proyecto' },
+      limit: { type: 'integer', required: false, default: 50, description: 'Máximo hallazgos' }
+    },
+    service_endpoint: '/api/capturados',
+    service_url: 'internal',
+    category: 'user_data',
+    usage_credits: 0
+  },
+
+  project_coverages: {
+    name: 'project_coverages',
+    description: 'Obtiene coberturas de un proyecto y estadísticas básicas',
+    parameters: {
+      project_id: { type: 'string', required: true, description: 'ID del proyecto' },
+      type: { type: 'string', required: false, description: 'Filtro por tipo' },
+      status: { type: 'string', required: false, description: 'Filtro por estado' },
+      source: { type: 'string', required: false, description: 'Filtro por fuente' }
+    },
+    service_endpoint: '/api/coverages',
+    service_url: 'internal',
+    category: 'user_data',
+    usage_credits: 0
+  },
+
+  latest_trends: {
+    name: 'latest_trends',
+    description: 'Obtiene el snapshot más reciente de tendencias con about y estadísticas',
+    parameters: {},
+    service_endpoint: '/api/latestTrends',
+    service_url: 'internal',
+    category: 'trends',
+    usage_credits: 0
+  },
   
   resolve_twitter_handle: {
     name: 'resolve_twitter_handle',
@@ -716,6 +758,20 @@ async function executeTool(toolName, parameters = {}, user = null) {
           parameters.project_id,
           user
         );
+      case 'project_findings':
+        return await executeProjectFindings(
+          parameters.project_id,
+          parameters.limit || 50,
+          user
+        );
+      case 'project_coverages':
+        return await executeProjectCoverages(
+          parameters.project_id,
+          { type: parameters.type, status: parameters.status, source: parameters.source },
+          user
+        );
+      case 'latest_trends':
+        return await executeLatestTrends();
       case 'resolve_twitter_handle':
         return await executeResolveTwitterHandle(
           parameters.name,
@@ -1587,6 +1643,69 @@ Las decisiones están ordenadas de más reciente a más antigua.`;
 
   } catch (error) {
     console.error(`❌ Error ejecutando project_decisions MCP:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Ejecuta la herramienta project_findings: obtiene hallazgos del proyecto
+ */
+async function executeProjectFindings(projectId, limit = 50, user = null) {
+  try {
+    if (!user || !user.id) {
+      throw new Error('Usuario no autenticado. Se requiere autenticación para ver hallazgos.');
+    }
+    if (!projectId) {
+      throw new Error('project_id requerido');
+    }
+    const cards = await getProjectFindings(projectId, { limit });
+    return {
+      success: true,
+      project_id: projectId,
+      total: cards.length,
+      cards
+    };
+  } catch (error) {
+    console.error('❌ Error ejecutando project_findings MCP:', error);
+    throw error;
+  }
+}
+
+/**
+ * Ejecuta la herramienta project_coverages: obtiene coberturas y estadísticas
+ */
+async function executeProjectCoverages(projectId, filters = {}, user = null) {
+  try {
+    if (!user || !user.id) {
+      throw new Error('Usuario no autenticado. Se requiere autenticación para ver coberturas.');
+    }
+    if (!projectId) {
+      throw new Error('project_id requerido');
+    }
+    const coverages = await getProjectCoverages(projectId, filters);
+    const stats = await getProjectCoveragesStats(projectId);
+    return {
+      success: true,
+      project_id: projectId,
+      filters,
+      stats,
+      coverages
+    };
+  } catch (error) {
+    console.error('❌ Error ejecutando project_coverages MCP:', error);
+    throw error;
+  }
+}
+
+/**
+ * Ejecuta la herramienta latest_trends: obtiene el snapshot más reciente
+ */
+async function executeLatestTrends() {
+  try {
+    const snapshot = await getLatestTrends();
+    return { success: true, snapshot };
+  } catch (error) {
+    console.error('❌ Error ejecutando latest_trends MCP:', error);
     throw error;
   }
 }

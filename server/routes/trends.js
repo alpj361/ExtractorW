@@ -985,7 +985,7 @@ function setupTrendsRoutes(app) {
           nombre: sanitizeForJSON(trendName, 100),
           tipo: sanitizeForJSON(about.tipo || 'hashtag', 30),
           relevancia: about.relevancia || 'Media',
-          razon_tendencia: sanitizeForJSON(about.razon_tendencia || '', 300),
+          razon_tendencia: sanitizeForJSON(about.razon_tendencia || '', 1200),
           fecha_evento: sanitizeForJSON(about.fecha_evento || '', 50),
           palabras_clave: Array.isArray(about.palabras_clave) ? 
             about.palabras_clave.slice(0, 5).map(palabra => sanitizeForJSON(palabra, 30)) : [],
@@ -1425,7 +1425,7 @@ async function processDetailedInBackground(processingTimestamp, trendsData, loca
         nombre: sanitizeForJSON(trendName, 100),
         tipo: sanitizeForJSON(about.tipo || 'hashtag', 30),
         relevancia: about.relevancia || 'Media',
-        razon_tendencia: sanitizeForJSON(about.razon_tendencia || '', 300),
+        razon_tendencia: sanitizeForJSON(about.razon_tendencia || '', 1200),
         fecha_evento: sanitizeForJSON(about.fecha_evento || '', 50),
         palabras_clave: Array.isArray(about.palabras_clave) ? 
           about.palabras_clave.slice(0, 5).map(palabra => sanitizeForJSON(palabra, 30)) : [],
