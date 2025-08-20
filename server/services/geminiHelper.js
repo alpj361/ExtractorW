@@ -1,44 +1,41 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
 /**
- * Helper genérico para Gemini 2.5 Flash como motor de razonamiento
- * @param {Array} messages - Array de mensajes con formato {role, content}
- * @param {Object} options - Opciones de generación (temperature, maxTokens, etc.)
- * @returns {string} Texto generado por Gemini
+ * Helper genérico para usar OpenAI Chat Completions con modelo GPT-5-mini
+ * Mantiene la misma firma que el helper anterior para no romper dependencias.
+ * @param {Array<{role: string, content: string}>} messages
+ * @param {Object} options
+ * @returns {Promise<string>} Texto generado por el modelo
  */
 async function geminiChat(messages, options = {}) {
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY no configurado');
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY no configurado');
   }
-  
-  const model = genAI.getGenerativeModel({ 
-    model: 'gemini-2.5-flash' // Actualizado a 2.5 Flash como principal
+
+  const body = {
+    model: 'gpt-5-mini',
+    messages: messages,
+    temperature: options.temperature ?? 0.2,
+    max_tokens: options.maxTokens ?? 2048,
+    top_p: options.topP ?? 0.95
+  };
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
   });
-  
-  // Convertir mensajes al formato de Gemini
-  const history = messages.slice(0, -1).map(msg => ({
-    role: msg.role === 'system' ? 'user' : msg.role,
-    parts: [{ text: msg.content }]
-  }));
-  
-  const lastMessage = messages[messages.length - 1];
-  
-  const chat = model.startChat({ 
-    history: history,
-    generationConfig: {
-      temperature: options.temperature || 0.2,
-      maxOutputTokens: options.maxTokens || 2048,
-      topP: options.topP || 0.95,
-      topK: options.topK || 40
-    }
-  });
-  
-  const result = await chat.sendMessage(lastMessage.content);
-  const response = await result.response;
-  
-  return response.text();
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`OpenAI API error: ${res.status} ${errText}`);
+  }
+
+  const data = await res.json();
+  const text = data.choices?.[0]?.message?.content || '';
+  return text.trim();
 }
 
 module.exports = { geminiChat };

@@ -2,6 +2,9 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { TextShimmer } from './ui/text-shimmer';
+import { Card } from './ui/card';
+import { Badge } from './ui/badge';
 import { cn } from '../lib/utils';
 
 // ------------------------------------------------------------
@@ -53,12 +56,12 @@ export function ViztalChat({
   placeholder = 'Pregúntame sobre tendencias, análisis de redes sociales o búsquedas web...',
   userToken
 }: ViztalChatProps) {
-  const [messages, setMessages] = useState([] as Message[]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [sessionId, setSessionId] = useState('');
-  const messagesEndRef = useRef(null as any);
-  const inputRef = useRef(null as any);
+  const [sessionId, setSessionId] = useState<string>('');
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -73,9 +76,6 @@ export function ViztalChat({
     const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     setSessionId(newSessionId);
   }, []);
-
-  const [isReasoning, setIsReasoning] = useState(false);
-  const [reasoningVisible, setReasoningVisible] = useState(false);
 
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
@@ -96,7 +96,6 @@ export function ViztalChat({
     console.log('🔧 ViztalChat: URL API base utilizada:', apiBase);
 
     try {
-      setIsReasoning(true);
       const response = await fetch(`${apiBase}/vizta-chat/query`, {
         method: 'POST',
         headers: {
@@ -162,11 +161,10 @@ export function ViztalChat({
       setMessages(prev => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
-      setIsReasoning(false);
     }
   };
 
-  const handleKeyPress = (e: any) => {
+  const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
@@ -181,7 +179,7 @@ export function ViztalChat({
       .replace(/### (.*?)\n/g, '<h3 class="text-lg font-semibold mt-4 mb-2 text-gray-800 dark:text-gray-200">$1</h3>')
       .replace(/## (.*?)\n/g, '<h2 class="text-xl font-semibold mt-4 mb-2 text-gray-800 dark:text-gray-200">$1</h2>')
       .replace(/• (.*?)\n/g, '<li class="ml-4 mb-1">$1</li>')
-      .replace(/\n/g, '<br/>' );
+      .replace(/\n/g, '<br/>');
   };
 
   return (
@@ -198,9 +196,13 @@ export function ViztalChat({
             </p>
           </div>
           <div className="flex items-center space-x-2">
-            <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold bg-green-50 text-green-700 border-green-200">🟢 Conectado</span>
+            <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
+              🟢 Conectado
+            </Badge>
             {sessionId && (
-              <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold bg-blue-50 text-blue-700 border-blue-200">{sessionId.split('_')[2]}</span>
+              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                {sessionId.split('_')[2]}
+              </Badge>
             )}
           </div>
         </div>
@@ -208,22 +210,6 @@ export function ViztalChat({
 
       {/* Messages Container */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
-        {/* Razonamiento indicator */}
-        {isLoading && (
-          <div className="flex items-center justify-center mb-2">
-            <button
-              onClick={() => setReasoningVisible((v: boolean) => !v)}
-              className="text-xs text-gray-600 dark:text-gray-300 hover:underline"
-            >
-              {reasoningVisible ? 'Ocultar' : 'Mostrando'} razonamiento…
-            </button>
-          </div>
-        )}
-        {isLoading && reasoningVisible && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mx-auto max-w-[80%]">
-            <div className="p-3 bg-gray-50 dark:bg-gray-900 text-xs text-gray-700 dark:text-gray-300 rounded-lg border">Vizta está razonando con memoria política y evaluando qué herramientas invocar (memoria → web → social | datos del usuario).</div>
-          </motion.div>
-        )}
         <AnimatePresence>
           {messages.length === 0 ? (
             <motion.div
@@ -252,11 +238,11 @@ export function ViztalChat({
                   message.role === 'user' ? "justify-end" : "justify-start"
                 )}
               >
-                <div className={cn(
-                  "max-w-[80%] p-4 rounded-lg border shadow-sm",
+                <Card className={cn(
+                  "max-w-[80%] p-4",
                   message.role === 'user' 
                     ? "bg-blue-500 text-white ml-12" 
-                    : "bg-white dark:bg-gray-800 mr-12 text-gray-900 dark:text-gray-100"
+                    : "bg-white dark:bg-gray-800 mr-12"
                 )}>
                   <div 
                     className={cn(
@@ -271,20 +257,31 @@ export function ViztalChat({
                   {/* Message metadata */}
                   <div className="flex items-center justify-between mt-3 pt-2 border-t border-opacity-20">
                     <div className="flex items-center space-x-2 text-xs opacity-70">
-                      <span>{message.timestamp.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</span>
+                      <span>
+                        {message.timestamp.toLocaleTimeString('es-ES', { 
+                          hour: '2-digit', 
+                          minute: '2-digit' 
+                        })}
+                      </span>
                       {message.toolUsed && (
-                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold">{message.toolUsed}</span>
+                        <Badge variant="outline" className="text-xs py-0 px-1">
+                          {message.toolUsed}
+                        </Badge>
                       )}
                     </div>
                     
                     {message.role === 'assistant' && (
                       <div className="flex items-center space-x-1 text-xs opacity-70">
-                        {message.executionTime && (<span>{(message.executionTime / 1000).toFixed(1)}s</span>)}
-                        {message.tweetAnalyzed && (<span>• {message.tweetAnalyzed} tweets</span>)}
+                        {message.executionTime && (
+                          <span>{(message.executionTime / 1000).toFixed(1)}s</span>
+                        )}
+                        {message.tweetAnalyzed && (
+                          <span>• {message.tweetAnalyzed} tweets</span>
+                        )}
                       </div>
                     )}
                   </div>
-                </div>
+                </Card>
               </motion.div>
             ))
           )}
@@ -297,7 +294,7 @@ export function ViztalChat({
             animate={{ opacity: 1, y: 0 }}
             className="flex justify-start"
           >
-            <div className="max-w-[80%] p-4 bg-white dark:bg-gray-800 mr-12 rounded-lg border shadow-sm">
+            <Card className="max-w-[80%] p-4 bg-white dark:bg-gray-800 mr-12">
               <div className="flex items-center space-x-3">
                 <div className="flex-shrink-0">
                   <div className="w-8 h-8 rounded-full bg-gradient-to-r from-blue-400 to-purple-400 flex items-center justify-center">
@@ -305,13 +302,25 @@ export function ViztalChat({
                   </div>
                 </div>
                 <div className="flex-1">
-                  <p className="text-sm text-gray-600 dark:text-gray-400 animate-pulse">Analizando tu consulta...</p>
+                  <TextShimmer 
+                    className="text-sm text-gray-600 dark:text-gray-400" 
+                    duration={1.5}
+                    spread={1}
+                  >
+                    Analizando tu consulta...
+                  </TextShimmer>
                   <div className="mt-2">
-                    <p className="text-xs text-gray-500 dark:text-gray-500 animate-pulse">Procesando datos y generando respuesta inteligente</p>
+                    <TextShimmer 
+                      className="text-xs text-gray-500 dark:text-gray-500" 
+                      duration={2}
+                      spread={2}
+                    >
+                      Procesando datos y generando respuesta inteligente
+                    </TextShimmer>
                   </div>
                 </div>
               </div>
-            </div>
+            </Card>
           </motion.div>
         )}
 
@@ -329,14 +338,21 @@ export function ViztalChat({
             onKeyPress={handleKeyPress}
             placeholder={placeholder}
             disabled={isLoading}
-            className="flex-1 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed placeholder-gray-500 dark:placeholder-gray-400"
+            className="flex-1 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 
+                     bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100
+                     focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                     disabled:opacity-50 disabled:cursor-not-allowed
+                     placeholder-gray-500 dark:placeholder-gray-400"
           />
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             onClick={sendMessage}
             disabled={!input.trim() || isLoading}
-            className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-lg font-medium hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+            className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-500 text-white 
+                     rounded-lg font-medium hover:from-blue-600 hover:to-purple-600
+                     disabled:opacity-50 disabled:cursor-not-allowed
+                     transition-all duration-200"
           >
             {isLoading ? (
               <div className="flex items-center space-x-2">
@@ -366,7 +382,10 @@ export function ViztalChat({
                 inputRef.current?.focus();
               }}
               disabled={isLoading}
-              className="px-3 py-1 text-xs bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
+              className="px-3 py-1 text-xs bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300
+                       rounded-full hover:bg-gray-300 dark:hover:bg-gray-600
+                       disabled:opacity-50 disabled:cursor-not-allowed
+                       transition-colors duration-200"
             >
               {suggestion}
             </motion.button>
