@@ -3,6 +3,14 @@ const router = express.Router();
 const { verifyUserAccess } = require('../middlewares/auth');
 const { processNitterContext } = require('../services/nitterContext');
 
+// Importar fetch para Node.js (compatibilidad como en nitterProfile)
+let fetch;
+try {
+  fetch = require('node-fetch');
+} catch (error) {
+  fetch = global.fetch;
+}
+
 /**
  * POST /api/nitter-context
  * Herramienta para obtener tweets usando nitter_context de ExtractorT
@@ -70,28 +78,111 @@ router.post('/nitter-context', verifyUserAccess, async (req, res) => {
  * GET /api/nitter-context/test
  * Endpoint de prueba para verificar que el servicio funciona
  */
-router.get('/test', verifyUserAccess, async (req, res) => {
+router.get('/nitter-context/test', async (req, res) => {
   try {
     const testQuery = 'Guatemala';
-    const userId = req.user.id;
-    const sessionId = `test_${Date.now()}`;
 
-    console.log(`🧪 Ejecutando prueba de nitter_context para usuario ${userId}`);
+    console.log('🧪 Probando conectividad de nitter_context');
 
-    const result = await processNitterContext(testQuery, userId, sessionId, 'guatemala', 3);
+    // Llamada directa a ExtractorT (compat GET /nitter_context)
+    const extractorBase = process.env.EXTRACTOR_T_URL || 'http://localhost:8000';
+    const url = `${extractorBase}/nitter_context?q=${encodeURIComponent(testQuery)}&location=guatemala&limit=3`;
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'ExtractorW-Test/1.0'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`ExtractorT error: ${response.status}`);
+    }
+
+    const data = await response.json();
 
     res.json({
       success: true,
-      message: 'Prueba de nitter_context completada',
+      message: 'Conectividad con ExtractorT (nitter_context) exitosa',
       test_query: testQuery,
-      result: result
+      extractorT_status: data.status || 'desconocido',
+      tweets_found: Array.isArray(data.tweets) ? data.tweets.length : 0,
+      extractorT_url: extractorBase
     });
 
   } catch (error) {
     console.error('Error en prueba de nitter_context:', error);
     res.status(500).json({
       success: false,
-      error: 'Error en prueba',
+      error: 'Error de conectividad con ExtractorT',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/nitter-context/stats/:userId
+ * Obtiene estadísticas de uso de nitter_context para un usuario
+ */
+router.get('/nitter-context/stats/:userId', verifyUserAccess, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const requestingUserId = req.user.id;
+
+    if (userId !== requestingUserId && !req.user.is_admin) {
+      return res.status(403).json({
+        success: false,
+        error: 'No autorizado para ver estadísticas de otro usuario'
+      });
+    }
+
+    const supabase = require('../utils/supabase');
+
+    const { data: contextStats, error } = await supabase
+      .from('recent_scrapes')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('herramienta', 'nitter_context')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      throw new Error(`Error obteniendo estadísticas: ${error.message}`);
+    }
+
+    const totalSessions = contextStats.filter(item => item.tweet_id === null).length;
+    const totalTweets = contextStats.filter(item => item.tweet_id !== null).length;
+    const totalEngagement = contextStats.reduce((sum, item) => sum + (item.total_engagement || 0), 0);
+
+    const topQueriesCount = {};
+    contextStats
+      .filter(item => item.tweet_id === null)
+      .forEach(item => {
+        const key = item.query || 'desconocido';
+        topQueriesCount[key] = (topQueriesCount[key] || 0) + 1;
+      });
+
+    const topQueries = Object.entries(topQueriesCount)
+      .sort(([,a], [,b]) => b - a)
+      .slice(0, 5)
+      .map(([query, count]) => ({ query, analisis_count: count }));
+
+    res.json({
+      success: true,
+      stats: {
+        user_id: userId,
+        total_sessions: totalSessions,
+        total_tweets_processed: totalTweets,
+        total_engagement: totalEngagement,
+        avg_engagement_per_session: totalSessions > 0 ? Math.round(totalEngagement / totalSessions) : 0,
+        top_queries: topQueries,
+        last_analysis: contextStats.length > 0 ? contextStats[0].created_at : null
+      }
+    });
+  } catch (error) {
+    console.error('Error obteniendo estadísticas de nitter_context:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error obteniendo estadísticas',
       details: error.message
     });
   }

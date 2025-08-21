@@ -7,10 +7,6 @@ const {
   getProjectDecisions,
   searchUserCodex, 
   getUserStats,
-  getProjectFindings,
-  getProjectCoverages,
-  getProjectCoveragesStats,
-  getLatestTrends,
   saveNitterProfileTweets 
 } = require('./supabaseData');
 
@@ -45,40 +41,6 @@ function getExtractorTUrl() {
     // DESARROLLO: Usar contenedor local con IP del host
     return process.env.EXTRACTORT_LOCAL_URL || 'http://127.0.0.1:8000';
   }
-}
-
-/**
- * Proxy genérico a MCP Chrome por HTTP.
- * Requiere MCP_CHROME_URL en env. Asume contrato: POST /execute { tool_name, parameters }
- */
-async function executeChromeTool(toolName, parameters = {}, user = null) {
-  const baseUrl = process.env.MCP_CHROME_URL || 'http://host.docker.internal:9223';
-  try {
-    if (!user || !user.id) {
-      throw new Error('Usuario autenticado requerido para ejecutar herramientas de Chrome');
-    }
-    console.log(`🧩 Enviando a MCP Chrome: ${toolName} @ ${baseUrl}`);
-    const resp = await axios.post(`${baseUrl}/execute`, {
-      tool_name: toolName,
-      parameters
-    }, {
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': reqServiceAuthHeader()
-      },
-      timeout: 60000
-    });
-    if (resp.data && resp.data.success) return resp.data.result || resp.data;
-    return resp.data;
-  } catch (error) {
-    console.error(`❌ Error en MCP Chrome (${toolName}):`, error.response?.data || error.message);
-    throw new Error(error.response?.data?.message || error.message || `Error ejecutando ${toolName}`);
-  }
-}
-
-function reqServiceAuthHeader() {
-  const token = process.env.MCP_SERVICE_TOKEN || '';
-  return token ? `Bearer ${token}` : undefined;
 }
 
 const EXTRACTOR_T_URL = getExtractorTUrl();
@@ -451,111 +413,6 @@ const AVAILABLE_TOOLS = {
       'Contexto guatemalteco especializado'
     ]
   },
-
-  // =======================
-  // Chrome MCP (browser automation & scraping)
-  // =======================
-  chrome_navigate: {
-    name: 'chrome_navigate',
-    description: 'Abre una URL en Chrome controlado por MCP (navegación inicial)',
-    parameters: {
-      url: { type: 'string', required: true, description: 'URL completa a navegar' }
-    },
-    service_endpoint: '/api/mcp/execute',
-    service_url: 'external:mcp-chrome',
-    category: 'browser_automation',
-    usage_credits: 1,
-    features: ['Navegación a URL', 'Inicializa contexto de página']
-  },
-  chrome_screenshot: {
-    name: 'chrome_screenshot',
-    description: 'Captura de pantalla de la página actual (visión global)',
-    parameters: {
-      full_page: { type: 'boolean', required: false, default: true },
-      format: { type: 'string', required: false, default: 'png' },
-      quality: { type: 'integer', required: false, default: 80 }
-    },
-    service_endpoint: '/api/mcp/execute',
-    service_url: 'external:mcp-chrome',
-    category: 'browser_automation',
-    usage_credits: 1,
-    features: ['Screenshot', 'Soporte full page']
-  },
-  chrome_get_interactive_elements: {
-    name: 'chrome_get_interactive_elements',
-    description: 'Lista elementos interactivos (botones, links, inputs) detectados en la página',
-    parameters: {
-      include_hidden: { type: 'boolean', required: false, default: false }
-    },
-    service_endpoint: '/api/mcp/execute',
-    service_url: 'external:mcp-chrome',
-    category: 'browser_automation',
-    usage_credits: 1,
-    features: ['Detección de elementos', 'Selectores sugeridos']
-  },
-  chrome_click_element: {
-    name: 'chrome_click_element',
-    description: 'Click en un elemento por selector/identificador',
-    parameters: {
-      selector: { type: 'string', required: true, description: 'CSS/XPath del elemento' }
-    },
-    service_endpoint: '/api/mcp/execute',
-    service_url: 'external:mcp-chrome',
-    category: 'browser_automation',
-    usage_credits: 1,
-    features: ['Click por selector']
-  },
-  chrome_fill_or_select: {
-    name: 'chrome_fill_or_select',
-    description: 'Rellena un input o selecciona opción en un select',
-    parameters: {
-      selector: { type: 'string', required: true },
-      value: { type: 'string', required: true }
-    },
-    service_endpoint: '/api/mcp/execute',
-    service_url: 'external:mcp-chrome',
-    category: 'browser_automation',
-    usage_credits: 1,
-    features: ['Input typing', 'Select option']
-  },
-  chrome_keyboard: {
-    name: 'chrome_keyboard',
-    description: 'Envía texto o teclas especiales (ej. Enter) al foco actual',
-    parameters: {
-      text: { type: 'string', required: false },
-      key: { type: 'string', required: false, description: 'Tecla especial, ej. Enter' }
-    },
-    service_endpoint: '/api/mcp/execute',
-    service_url: 'external:mcp-chrome',
-    category: 'browser_automation',
-    usage_credits: 1,
-    features: ['Keyboard input']
-  },
-  chrome_network_debugger_start: {
-    name: 'chrome_network_debugger_start',
-    description: 'Inicia captura de red para detectar XHR/Fetch y descargas',
-    parameters: {
-      patterns: { type: 'array', required: false, description: 'Patrones de URL a priorizar' }
-    },
-    service_endpoint: '/api/mcp/execute',
-    service_url: 'external:mcp-chrome',
-    category: 'browser_automation',
-    usage_credits: 1,
-    features: ['Network tracing']
-  },
-  chrome_get_web_content: {
-    name: 'chrome_get_web_content',
-    description: 'Obtiene DOM y texto de la página actual',
-    parameters: {
-      include_dom: { type: 'boolean', required: false, default: true },
-      extract_text: { type: 'boolean', required: false, default: true }
-    },
-    service_endpoint: '/api/mcp/execute',
-    service_url: 'external:mcp-chrome',
-    category: 'browser_automation',
-    usage_credits: 1,
-    features: ['Extrae DOM', 'Texto visible']
-  },
   
   user_projects: {
     name: 'user_projects',
@@ -700,44 +557,6 @@ const AVAILABLE_TOOLS = {
       'Histórico ordenado por fecha de creación'
     ]
   },
-
-  project_findings: {
-    name: 'project_findings',
-    description: 'Obtiene hallazgos (capturado_cards) de un proyecto específico',
-    parameters: {
-      project_id: { type: 'string', required: true, description: 'ID del proyecto' },
-      limit: { type: 'integer', required: false, default: 50, description: 'Máximo hallazgos' }
-    },
-    service_endpoint: '/api/capturados',
-    service_url: 'internal',
-    category: 'user_data',
-    usage_credits: 0
-  },
-
-  project_coverages: {
-    name: 'project_coverages',
-    description: 'Obtiene coberturas de un proyecto y estadísticas básicas',
-    parameters: {
-      project_id: { type: 'string', required: true, description: 'ID del proyecto' },
-      type: { type: 'string', required: false, description: 'Filtro por tipo' },
-      status: { type: 'string', required: false, description: 'Filtro por estado' },
-      source: { type: 'string', required: false, description: 'Filtro por fuente' }
-    },
-    service_endpoint: '/api/coverages',
-    service_url: 'internal',
-    category: 'user_data',
-    usage_credits: 0
-  },
-
-  latest_trends: {
-    name: 'latest_trends',
-    description: 'Obtiene el snapshot más reciente de tendencias con about y estadísticas',
-    parameters: {},
-    service_endpoint: '/api/latestTrends',
-    service_url: 'internal',
-    category: 'trends',
-    usage_credits: 0
-  },
   
   resolve_twitter_handle: {
     name: 'resolve_twitter_handle',
@@ -862,23 +681,6 @@ async function executeTool(toolName, parameters = {}, user = null) {
           parameters.improve_nitter_search || false,
           user
         );
-      // Chrome MCP tools
-      case 'chrome_navigate':
-        return await executeChromeTool('chrome_navigate', parameters, user);
-      case 'chrome_screenshot':
-        return await executeChromeTool('chrome_screenshot', parameters, user);
-      case 'chrome_get_interactive_elements':
-        return await executeChromeTool('chrome_get_interactive_elements', parameters, user);
-      case 'chrome_click_element':
-        return await executeChromeTool('chrome_click_element', parameters, user);
-      case 'chrome_fill_or_select':
-        return await executeChromeTool('chrome_fill_or_select', parameters, user);
-      case 'chrome_keyboard':
-        return await executeChromeTool('chrome_keyboard', parameters, user);
-      case 'chrome_network_debugger_start':
-        return await executeChromeTool('chrome_network_debugger_start', parameters, user);
-      case 'chrome_get_web_content':
-        return await executeChromeTool('chrome_get_web_content', parameters, user);
       case 'user_projects':
         return await executeUserProjects(
           parameters.limit || 20,
@@ -914,20 +716,6 @@ async function executeTool(toolName, parameters = {}, user = null) {
           parameters.project_id,
           user
         );
-      case 'project_findings':
-        return await executeProjectFindings(
-          parameters.project_id,
-          parameters.limit || 50,
-          user
-        );
-      case 'project_coverages':
-        return await executeProjectCoverages(
-          parameters.project_id,
-          { type: parameters.type, status: parameters.status, source: parameters.source },
-          user
-        );
-      case 'latest_trends':
-        return await executeLatestTrends();
       case 'resolve_twitter_handle':
         return await executeResolveTwitterHandle(
           parameters.name,
@@ -1799,69 +1587,6 @@ Las decisiones están ordenadas de más reciente a más antigua.`;
 
   } catch (error) {
     console.error(`❌ Error ejecutando project_decisions MCP:`, error);
-    throw error;
-  }
-}
-
-/**
- * Ejecuta la herramienta project_findings: obtiene hallazgos del proyecto
- */
-async function executeProjectFindings(projectId, limit = 50, user = null) {
-  try {
-    if (!user || !user.id) {
-      throw new Error('Usuario no autenticado. Se requiere autenticación para ver hallazgos.');
-    }
-    if (!projectId) {
-      throw new Error('project_id requerido');
-    }
-    const cards = await getProjectFindings(projectId, { limit });
-    return {
-      success: true,
-      project_id: projectId,
-      total: cards.length,
-      cards
-    };
-  } catch (error) {
-    console.error('❌ Error ejecutando project_findings MCP:', error);
-    throw error;
-  }
-}
-
-/**
- * Ejecuta la herramienta project_coverages: obtiene coberturas y estadísticas
- */
-async function executeProjectCoverages(projectId, filters = {}, user = null) {
-  try {
-    if (!user || !user.id) {
-      throw new Error('Usuario no autenticado. Se requiere autenticación para ver coberturas.');
-    }
-    if (!projectId) {
-      throw new Error('project_id requerido');
-    }
-    const coverages = await getProjectCoverages(projectId, filters);
-    const stats = await getProjectCoveragesStats(projectId);
-    return {
-      success: true,
-      project_id: projectId,
-      filters,
-      stats,
-      coverages
-    };
-  } catch (error) {
-    console.error('❌ Error ejecutando project_coverages MCP:', error);
-    throw error;
-  }
-}
-
-/**
- * Ejecuta la herramienta latest_trends: obtiene el snapshot más reciente
- */
-async function executeLatestTrends() {
-  try {
-    const snapshot = await getLatestTrends();
-    return { success: true, snapshot };
-  } catch (error) {
-    console.error('❌ Error ejecutando latest_trends MCP:', error);
     throw error;
   }
 }

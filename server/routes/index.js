@@ -10,6 +10,8 @@ const hybridCoveragesRoutes = require('./hybridCoverages');
 const nitterContextRoutes = require('./nitterContext');
 const nitterProfileRoutes = require('./nitterProfile');
 const pendingAnalysisRoutes = require('./pendingAnalysis');
+const nitterCommentProxyRoutes = require('./nitterComment');
+const tweetCommentsRoutes = require('./tweetComments');
 const aiRoutes = require('./ai');
 const mapsRoutes = require('./maps');
 const path = require('path');
@@ -83,6 +85,12 @@ function setupRoutes(app) {
   // Configurar rutas de Nitter Profile (herramienta de análisis de perfiles de usuarios)
   app.use('/api', nitterProfileRoutes);
   
+  // Configurar rutas de Nitter Comment (proxy hacia ExtractorT)
+  app.use('/api', nitterCommentProxyRoutes);
+
+  // Rutas de gestión de comentarios (obtener/eliminar)
+  app.use('/api/tweet-comments', tweetCommentsRoutes);
+
   // Configurar rutas de Knowledge (PublicKnowledge)
   app.use('/api/knowledge', require('./knowledge'));
 
