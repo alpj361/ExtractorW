@@ -22,7 +22,8 @@ function getExtractorTUrl() {
 }
 
 const EXTRACTOR_T_URL = getExtractorTUrl();
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const PROFILE_MODEL = (process.env.NITTER_PROFILE_MODEL || 'gpt-5').trim();
 
 // Log de configuración
 console.log(`🔗 ExtractorT URL configurada para Profile: ${EXTRACTOR_T_URL}`);
@@ -33,8 +34,8 @@ console.log(`🔗 ExtractorT URL configurada para Profile: ${EXTRACTOR_T_URL}`);
  */
 async function analyzeTweetSentimentProfile(tweet, profileContext) {
   try {
-    if (!GEMINI_API_KEY) {
-      console.warn('⚠️ GEMINI_API_KEY no configurada, usando análisis básico');
+    if (!OPENAI_API_KEY) {
+      console.warn('⚠️ OPENAI_API_KEY no configurada, usando análisis básico');
       return {
         sentimiento: 'neutral',
         score_sentimiento: 0.0,
@@ -45,14 +46,13 @@ async function analyzeTweetSentimentProfile(tweet, profileContext) {
         analisis_ai_metadata: {
           model: 'fallback',
           timestamp: new Date().toISOString(),
-          context: 'sin_gemini'
+          context: 'sin_openai'
         }
       };
     }
 
     const tweetText = tweet.text || tweet.texto || '';
     const username = tweet.author || tweet.usuario || 'usuario';
-    
     if (tweetText.length < 10) {
       return {
         sentimiento: 'neutral',
@@ -62,133 +62,52 @@ async function analyzeTweetSentimentProfile(tweet, profileContext) {
         intencion_comunicativa: 'informativo',
         entidades_mencionadas: [],
         analisis_ai_metadata: {
-          model: 'gemini-1.5-flash',
+          model: PROFILE_MODEL,
           timestamp: new Date().toISOString(),
           context: 'tweet_muy_corto'
         }
       };
     }
 
-    const prompt = `
-Eres un experto en análisis de redes sociales especializándote en el contexto guatemalteco. Analiza este tweet de un perfil específico y devuelve ÚNICAMENTE un JSON válido sin texto adicional.
+    const system = 'Eres un analista de redes sociales en contexto guatemalteco. Responde solo JSON válido.';
+    const user = `CONTEXTO DEL PERFIL: ${profileContext}\nUSUARIO: @${username}\nTWEET: "${tweetText}"\n\nDevuelve JSON: {"sentimiento":"positivo|negativo|neutral","score":0.0,"confianza":0.0,"emociones":["..."],"intencion_comunicativa":"...","entidades_mencionadas":["..."],"contexto_local":"...","intensidad":"baja|media|alta"}`;
 
-CONTEXTO DEL PERFIL: ${profileContext}
-USUARIO: @${username}
-TWEET: "${tweetText}"
-
-Analiza y devuelve EXACTAMENTE este formato JSON (sin explicaciones adicionales):
-
-{
-  "sentimiento": "positivo|negativo|neutral",
-  "score": 0.0,
-  "confianza": 0.0,
-  "emociones": ["alegria", "enojo", "tristeza", "miedo", "sorpresa", "asco", "neutral"],
-  "intencion_comunicativa": "informativo|opinativo|humoristico|alarmista|critico|promocional|conversacional|protesta",
-  "entidades_mencionadas": ["Persona", "Organización", "Lugar", "Evento"],
-  "contexto_local": "Explicación del contexto guatemalteco relevante",
-  "intensidad": "baja|media|alta"
-}
-
-INSTRUCCIONES:
-- Score de -1.0 (muy negativo) a 1.0 (muy positivo)
-- Confianza de 0.0 a 1.0
-- Considera el contexto político, social y cultural de Guatemala
-- Identifica menciones de personas públicas, instituciones, lugares guatemaltecos
-- Para perfiles oficiales/institucionales, enfócate en el mensaje oficial
-- Para perfiles personales, considera el tono personal
-`;
-
-    const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent', {
+    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': GEMINI_API_KEY
-      },
-      body: JSON.stringify({
-        contents: [{
-          parts: [{ text: prompt }]
-        }],
-        generationConfig: {
-          temperature: 0.1,
-          topK: 1,
-          topP: 0.1,
-          maxOutputTokens: 1000
-        }
-      })
+      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: PROFILE_MODEL, messages: [{ role:'system', content: system }, { role:'user', content: user }], temperature: 0.2, max_tokens: 500 })
     });
-
-    if (!response.ok) {
-      throw new Error(`Gemini API error: ${response.status}`);
+    if (!resp.ok) {
+      const t = await resp.text();
+      throw new Error(`OpenAI error: ${resp.status} ${resp.statusText} - ${t}`);
     }
-
-    const data = await response.json();
-    
-    if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
-      throw new Error('Respuesta vacía de Gemini API');
-    }
-
-    let rawResponse = data.candidates[0].content.parts[0].text;
-    
-    // Limpiar respuesta para extraer JSON
-    let cleanResponse = rawResponse.trim();
-    if (cleanResponse.startsWith('```json')) {
-      cleanResponse = cleanResponse.replace(/```json\s*/, '').replace(/```\s*$/, '');
-    } else if (cleanResponse.startsWith('```')) {
-      cleanResponse = cleanResponse.replace(/```\s*/, '').replace(/```\s*$/, '');
-    }
-
+    const data = await resp.json();
+    let clean = (data.choices?.[0]?.message?.content || '').replace(/```json|```/g, '').trim();
     let analysis;
-    try {
-      analysis = JSON.parse(cleanResponse);
-    } catch (firstError) {
-      try {
-        // Intentar arreglar JSON común
-        cleanResponse = cleanResponse
-          .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
-          .replace(/\n/g, '\\n')
-          .replace(/\r/g, '\\r')
-          .replace(/\t/g, '\\t')
-          .replace(/'/g, "\\'");
-        
-        analysis = JSON.parse(cleanResponse);
-      } catch (secondError) {
-        console.warn(`JSON malformado de Gemini para perfil, extrayendo manualmente: ${secondError.message}`);
-        
-        // Extraer información básica usando regex
-        const sentimientoMatch = cleanResponse.match(/"?sentimiento"?\s*:\s*"?(\w+)"?/i);
-        const scoreMatch = cleanResponse.match(/"?score"?\s*:\s*(\d*\.?\d+)/i);
-        const confianzaMatch = cleanResponse.match(/"?confianza"?\s*:\s*(\d*\.?\d+)/i);
-        const intencionMatch = cleanResponse.match(/"?intencion_comunicativa"?\s*:\s*"?(\w+)"?/i);
-        
-        analysis = {
-          sentimiento: sentimientoMatch ? sentimientoMatch[1] : 'neutral',
-          score: scoreMatch ? parseFloat(scoreMatch[1]) : 0.0,
-          confianza: confianzaMatch ? parseFloat(confianzaMatch[1]) : 0.5,
-          emociones: [],
-          intencion_comunicativa: intencionMatch ? intencionMatch[1] : 'informativo',
-          entidades_mencionadas: [],
-          contexto_local: 'Análisis básico por error de parsing',
-          intensidad: 'media'
-        };
-      }
+    try { analysis = JSON.parse(clean); }
+    catch {
+      const sentimientoMatch = clean.match(/"?sentimiento"?\s*:\s*"?(\w+)"?/i);
+      const scoreMatch = clean.match(/"?score"?\s*:\s*(-?\d*\.?\d+)/i);
+      const confMatch = clean.match(/"?confianza"?\s*:\s*(\d*\.?\d+)/i);
+      const intencionMatch = clean.match(/"?intencion_comunicativa"?\s*:\s*"?(\w+)"?/i);
+      analysis = {
+        sentimiento: sentimientoMatch ? sentimientoMatch[1] : 'neutral',
+        score: scoreMatch ? parseFloat(scoreMatch[1]) : 0.0,
+        confianza: confMatch ? parseFloat(confMatch[1]) : 0.5,
+        emociones: [],
+        intencion_comunicativa: intencionMatch ? intencionMatch[1] : 'informativo',
+        entidades_mencionadas: [],
+        contexto_local: 'Análisis básico',
+        intensidad: 'media'
+      };
     }
-    
-    // Validar y normalizar datos
-    const sentimiento = ['positivo', 'negativo', 'neutral'].includes(analysis.sentimiento) 
-      ? analysis.sentimiento 
-      : 'neutral';
-    
-    const score = typeof analysis.score === 'number' && analysis.score >= -1 && analysis.score <= 1 
-      ? analysis.score 
-      : 0.0;
-    
-    const confianza = typeof analysis.confianza === 'number' && analysis.confianza >= 0 && analysis.confianza <= 1 
-      ? analysis.confianza 
-      : 0.5;
 
+    const sentimiento = ['positivo', 'negativo', 'neutral'].includes(analysis.sentimiento) ? analysis.sentimiento : 'neutral';
+    const score = typeof analysis.score === 'number' && analysis.score >= -1 && analysis.score <= 1 ? analysis.score : 0.0;
+    const confianza = typeof analysis.confianza === 'number' && analysis.confianza >= 0 && analysis.confianza <= 1 ? analysis.confianza : 0.5;
     const emociones = Array.isArray(analysis.emociones) ? analysis.emociones.slice(0, 5) : [];
     const entidades = Array.isArray(analysis.entidades_mencionadas) ? analysis.entidades_mencionadas.slice(0, 10) : [];
-    
+
     return {
       sentimiento: sentimiento,
       score_sentimiento: score,
@@ -197,7 +116,7 @@ INSTRUCCIONES:
       intencion_comunicativa: analysis.intencion_comunicativa || 'informativo',
       entidades_mencionadas: entidades,
       analisis_ai_metadata: {
-        model: 'gemini-1.5-flash',
+        model: PROFILE_MODEL,
         timestamp: new Date().toISOString(),
         context: 'nitter_profile',
         profile_context: profileContext,
@@ -206,11 +125,8 @@ INSTRUCCIONES:
         intensidad: analysis.intensidad || 'media'
       }
     };
-
   } catch (error) {
     console.error(`Error analizando sentimiento del tweet de perfil:`, error.message);
-    
-    // Fallback básico en caso de error
     return {
       sentimiento: 'neutral',
       score_sentimiento: 0.0,

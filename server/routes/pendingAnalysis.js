@@ -3,51 +3,39 @@ const router = express.Router();
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const fetch = require('node-fetch');
 const { transcribeFile, transcribeImageWithGemini } = require('../services/transcription');
 const { checkCreditsFunction, debitCreditsFunction } = require('../middlewares/credits');
 const { verifyUserAccess } = require('../middlewares/auth');
 const supabase = require('../utils/supabase');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const PENDING_DESC_MODEL = (process.env.PENDING_DESC_MODEL || 'gpt-5').trim();
 
 // Función para generar descripción basada en transcripción
 async function generateDescriptionFromTranscription(transcription, url = null) {
     try {
-        if (!process.env.GEMINI_API_KEY) {
-            console.warn('❌ GEMINI_API_KEY no configurada, saltando generación de descripción');
+        if (!OPENAI_API_KEY) {
+            console.warn('❌ OPENAI_API_KEY no configurada, saltando generación de descripción');
             return null;
         }
 
-        const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const model = genai.getGenerativeModel({ model: 'gemini-2.5-flash' });
+        const system = 'Eres un redactor que resume transcripciones de X (Twitter) en español. Responde texto plano, ≤150 caracteres.';
+        const user = `TRANSCRIPCIÓN:\n"""\n${transcription}\n"""\n\nGenera una descripción concisa (≤150 chars) útil como resumen.`;
 
-        const prompt = `Analiza la siguiente transcripción de un audio/video de X (Twitter) y genera una descripción concisa y útil.
-
-TRANSCRIPCIÓN:
-"""
-${transcription}
-"""
-
-INSTRUCCIONES:
-1. Identifica el tema principal y los puntos clave mencionados
-2. Describe el tipo de contenido (entrevista, opinión, noticia, explicación, etc.)
-3. Menciona si hay datos importantes, nombres relevantes o información específica
-4. Mantén un tono profesional y objetivo
-5. Máximo 150 caracteres para que sea útil como descripción
-
-FORMATO DE RESPUESTA:
-Solo devuelve la descripción en texto plano, sin JSON ni formateo adicional.
-
-Ejemplos de buenas descripciones:
-- "Entrevista sobre políticas públicas con datos estadísticos y propuestas específicas"
-- "Explicación detallada del proceso electoral guatemalteco con ejemplos prácticos"
-- "Análisis político sobre declaraciones presidenciales con contexto histórico"
-
-Genera una descripción similar basada en la transcripción proporcionada.`;
-
-        console.log('🤖 Generando descripción con Gemini...');
-        const result = await model.generateContent(prompt);
-        const description = result.response.text().trim();
-        
+        console.log('🤖 Generando descripción con OpenAI...');
+        const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: PENDING_DESC_MODEL,
+                messages: [ { role: 'system', content: system }, { role: 'user', content: user } ],
+                temperature: 0.2,
+                max_tokens: 80
+            })
+        });
+        if (!resp.ok) { const t = await resp.text(); throw new Error(`OpenAI desc error: ${resp.status} ${resp.statusText} - ${t}`); }
+        const data = await resp.json();
+        const description = (data.choices?.[0]?.message?.content || '').trim();
         console.log('✅ Descripción generada:', description.substring(0, 100) + '...');
         return description;
 

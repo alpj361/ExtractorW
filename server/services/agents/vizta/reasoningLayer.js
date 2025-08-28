@@ -1,10 +1,67 @@
 const { InternalMemoryClient } = require('../laura/internalMemoryClient');
 
-async function gptChat(messages, options = {}) {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY no configurado');
+// DeepSeek (v3.1 / Reasoner) - Direct API
+async function deepseekChat(messages, options = {}) {
+  const dsKey = process.env.DEEPSEEK_API_KEY;
+  const model = (process.env.VIZTA_DEEPSEEK_MODEL || 'deepseek-reasoner').trim();
+
+  // Prefer direct DeepSeek API if key present
+  if (dsKey) {
+    const resp = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${dsKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: options.temperature ?? 0.2,
+        max_tokens: options.maxTokens ?? 800,
+        top_p: options.topP ?? 0.95
+      })
+    });
+    if (!resp.ok) {
+      const t = await resp.text();
+      throw new Error(`DeepSeek API error: ${resp.status} - ${t}`);
+    }
+    const data = await resp.json();
+    return data.choices?.[0]?.message?.content || '';
   }
 
+  // Fallback to OpenRouter if configured (optional)
+  const orKey = process.env.OPENROUTER_API_KEY;
+  if (orKey) {
+    const orModel = model.startsWith('deepseek/') ? model : `deepseek/${model}`;
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${orKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: orModel,
+        messages,
+        temperature: options.temperature ?? 0.2,
+        max_tokens: options.maxTokens ?? 800,
+        top_p: options.topP ?? 0.95
+      })
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`DeepSeek/OpenRouter error: ${response.status} - ${errorText}`);
+    }
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || '';
+  }
+
+  throw new Error('No hay credenciales para DeepSeek (DEEPSEEK_API_KEY u OPENROUTER_API_KEY)');
+}
+
+// Fallback: GPT‑4o Mini (OpenAI)
+async function openaiMiniChat(messages, options = {}) {
+  if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY no configurado');
+  const model = process.env.VIZTA_FALLBACK_MODEL || 'gpt-4o-mini';
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -12,21 +69,19 @@ async function gptChat(messages, options = {}) {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: process.env.VIZTA_REASONING_MODEL || 'gpt-3.5-turbo',
+      model,
       messages,
-      temperature: options.temperature || 0.2,
-      max_tokens: options.maxTokens || 800,
-      top_p: options.topP || 0.95
+      temperature: options.temperature ?? 0.2,
+      max_tokens: options.maxTokens ?? 800,
+      top_p: options.topP ?? 0.95
     })
   });
-
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
   }
-
   const data = await response.json();
-  return data.choices[0].message.content;
+  return data.choices?.[0]?.message?.content || '';
 }
 
 class ReasoningLayer {
@@ -50,10 +105,10 @@ class ReasoningLayer {
       }
 
       const systemPrompt = [
-        'Eres Vizta, analista político enfocado en Guatemala.',
-        'Usa el contexto de PulsePolitics provisto para responder de forma concisa, útil y accionable.',
-        'Si algo no está respaldado por el contexto, dilo explícitamente. No inventes.',
-        'Incluye un bloque final breve de "Razonamiento" explicando por qué tu respuesta es válida para el usuario.'
+        'Eres Vizta, analista político orientado a Guatemala y chatbot operativo.',
+        'Responde de forma concisa y accionable, y explica brevemente tu plan/razonamiento al final.',
+        'Indica explícitamente qué herramientas/llamadas planeas usar si es necesario (p.ej. OpenPipe toolcalling).',
+        'No inventes datos; si falta evidencia, dilo.'
       ].join(' ');
 
       const contextText = JSON.stringify(pulseResults).slice(0, 6000);
@@ -64,7 +119,14 @@ class ReasoningLayer {
       ];
 
       const startTime = Date.now();
-      const answer = await gptChat(messages, { temperature: 0.1, maxTokens: 700 });
+      let answer;
+      try {
+        // Prioridad: DeepSeek V3.1 (razonamiento)
+        answer = await deepseekChat(messages, { temperature: 0.1, maxTokens: 700 });
+      } catch (e) {
+        // Fallback: GPT‑4o Mini
+        answer = await openaiMiniChat(messages, { temperature: 0.1, maxTokens: 700 });
+      }
       const latency = Date.now() - startTime;
 
       return {

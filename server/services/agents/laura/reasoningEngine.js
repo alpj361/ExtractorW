@@ -78,32 +78,12 @@ class ReasoningEngine {
         console.log(`[LAURA] 🧠 Verbose Mode - Messages:`, messages);
       }
       
-      // INTENTO 1: Gemini 2.5 Flash (PRINCIPAL)
-      try {
-        console.log(`[LAURA] 🧠 Intentando con Gemini 2.5 Flash (principal)...`);
-        raw = await geminiChat(messages, {
-          temperature: this.config.temperature,
-          maxTokens: this.config.maxTokens
-        });
-        modelUsed = 'gemini-2.5-flash';
-        console.log(`[LAURA] ✅ Gemini 2.5 Flash exitoso`);
-      } catch (geminiError) {
-        console.error(`[LAURA] ❌ Gemini 2.5 Flash falló:`, geminiError.message);
-        
-        // INTENTO 2: GPT-3.5-turbo (FALLBACK)
-        try {
-          console.log(`[LAURA] 🔄 Fallback a GPT-3.5-turbo...`);
-          raw = await gptChat(messages, {
-            temperature: this.config.temperature,
-            maxTokens: 1024
-          });
-          modelUsed = 'gpt-3.5-turbo';
-          console.log(`[LAURA] ✅ GPT-3.5-turbo exitoso (fallback)`);
-        } catch (gptError) {
-          console.error(`[LAURA] ❌ GPT-3.5-turbo también falló:`, gptError.message);
-          throw new Error(`FALLO CRÍTICO: Ambos LLMs fallaron. GPT: ${gptError.message}, Gemini: ${geminiError.message}`);
-        }
-      }
+      // QUITAR GEMINI: usar OpenAI fallback directo
+      raw = await gptChat(messages, {
+        temperature: this.config.temperature,
+        maxTokens: 1024
+      });
+      modelUsed = 'gpt-3.5-turbo';
 
       latency = Date.now() - startTime;
 

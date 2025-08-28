@@ -22,7 +22,7 @@ class OpenPipeService {
    * Procesar consulta del usuario usando el modelo fine-tuneado de Vizta
    * Incluye function calling optimizado para herramientas específicas
    */
-  async processViztaQuery(userMessage, user, sessionId = null) {
+  async processViztaQuery(userMessage, user, sessionId = null, mode = 'agentic') {
     try {
       console.log(`[OPENPIPE] 🤖 Procesando consulta Vizta: "${userMessage}"`);
       
@@ -40,7 +40,7 @@ class OpenPipeService {
       ];
 
       // Herramientas disponibles para function calling
-      const tools = this.getViztaTools();
+      const tools = this.getViztaTools(mode);
 
       // Inyectar SIEMPRE contexto de memoria (Zep) antes del bucle de tools
       try {
@@ -240,8 +240,8 @@ AÑO_ACTUAL = ${currentYear}
   /**
    * Definir herramientas disponibles para function calling
    */
-  getViztaTools() {
-    return [
+  getViztaTools(mode = 'agentic') {
+    const all = [
       {
         type: "function",
         function: {
@@ -470,6 +470,12 @@ AÑO_ACTUAL = ${currentYear}
         }
       }
     ];
+    if (mode === 'chat') {
+      // Limitar a herramientas ligeras: memoria, perplexity, proyectos/codex, tendencias
+      const allowed = new Set(['perplexity_search','search_political_context','user_projects','user_codex','project_findings','project_coverages','latest_trends']);
+      return all.filter(t => allowed.has(t.function?.name));
+    }
+    return all;
   }
 
   /**

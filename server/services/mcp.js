@@ -591,6 +591,21 @@ const AVAILABLE_TOOLS = {
       'Base de conocimiento que crece automáticamente'
     ]
   }
+  ,
+  latest_trends: {
+    name: 'latest_trends',
+    description: 'Obtiene el snapshot más reciente de tendencias (about + statistics) desde Supabase',
+    parameters: {},
+    service_endpoint: 'internal',
+    service_url: 'internal',
+    category: 'trends',
+    usage_credits: 0,
+    features: [
+      'Lectura de tabla trends',
+      'Incluye about y statistics',
+      'Retorna el registro más reciente'
+    ]
+  }
 };
 
 /**
@@ -723,6 +738,17 @@ async function executeTool(toolName, parameters = {}, user = null) {
           parameters.sector || '',
           user
         );
+      case 'latest_trends': {
+        const { getLatestTrends } = require('./supabaseData');
+        const latest = await getLatestTrends();
+        return {
+          success: true,
+          timestamp: latest?.timestamp || null,
+          about: latest?.about || null,
+          statistics: latest?.statistics || latest?.category_data || null,
+          raw: latest || null
+        };
+      }
       default:
         throw new Error(`Ejecutor no implementado para herramienta: ${toolName}`);
     }

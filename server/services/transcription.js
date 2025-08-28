@@ -1,4 +1,3 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
@@ -7,8 +6,9 @@ const supabase = require('../utils/supabase');
 
 const execAsync = promisify(exec);
 
-// Configurar Gemini
-const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_TRANSCRIBE_MODEL = (process.env.TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe').trim();
+const OPENAI_VISION_MODEL = (process.env.IMAGE_TRANSCRIBE_MODEL || 'gpt-4o-mini').trim();
 
 const TEMP_DIR = '/tmp/audio_transcriptions';
 const SUPPORTED_AUDIO_FORMATS = ['.mp3', '.wav', '.aac', '.ogg', '.flac', '.m4a'];
@@ -20,174 +20,73 @@ if (!fs.existsSync(TEMP_DIR)) {
   fs.mkdirSync(TEMP_DIR, { recursive: true });
 }
 
-/**
- * Detecta si el archivo es de audio o video
- * @param {string} filePath - Ruta del archivo
- * @returns {string} - 'audio', 'video', o 'unsupported'
- */
 function detectFileType(filePath) {
   const ext = path.extname(filePath).toLowerCase();
-  
-  if (SUPPORTED_AUDIO_FORMATS.includes(ext)) {
-    return 'audio';
-  } else if (SUPPORTED_VIDEO_FORMATS.includes(ext)) {
-    return 'video';
-  }
-  
+  if (SUPPORTED_AUDIO_FORMATS.includes(ext)) { return 'audio'; }
+  if (SUPPORTED_VIDEO_FORMATS.includes(ext)) { return 'video'; }
   return 'unsupported';
 }
 
-/**
- * Extrae audio de un archivo de video usando ffmpeg
- * @param {string} videoPath - Ruta del archivo de video
- * @returns {Promise<string>} - Ruta del archivo de audio extraído
- */
 async function extractAudioFromVideo(videoPath) {
   const videoName = path.basename(videoPath, path.extname(videoPath));
   const audioPath = path.join(TEMP_DIR, `${videoName}_${Date.now()}.wav`);
-  
   console.log(`🎵 Extrayendo audio de video: ${videoPath}`);
-  
-  // Comando ffmpeg para extraer audio optimizado para transcripción
   const ffmpegCommand = `ffmpeg -i "${videoPath}" -vn -ac 1 -ar 16000 -y "${audioPath}"`;
-  
-  try {
-    await execAsync(ffmpegCommand);
-    console.log(`✅ Audio extraído exitosamente: ${audioPath}`);
-    return audioPath;
-  } catch (error) {
-    console.error('❌ Error extrayendo audio:', error);
-    throw new Error(`Error al extraer audio del video: ${error.message}`);
-  }
+  try { await execAsync(ffmpegCommand); console.log(`✅ Audio extraído: ${audioPath}`); return audioPath; }
+  catch (error) { console.error('❌ Error extrayendo audio:', error); throw new Error(`Error al extraer audio del video: ${error.message}`); }
 }
 
-/**
- * Prepara el archivo de audio para transcripción
- * @param {string} inputPath - Ruta del archivo original
- * @returns {Promise<{audioPath: string, isTemporary: boolean}>}
- */
 async function prepareAudioFile(inputPath) {
   const fileType = detectFileType(inputPath);
-  
   if (fileType === 'unsupported') {
     throw new Error(`Formato de archivo no soportado. Formatos soportados: ${[...SUPPORTED_AUDIO_FORMATS, ...SUPPORTED_VIDEO_FORMATS].join(', ')}`);
   }
-  
   if (fileType === 'video') {
-    // Extraer audio del video
     const audioPath = await extractAudioFromVideo(inputPath);
     return { audioPath, isTemporary: true };
   } else {
-    // Es un archivo de audio, usar directamente
     return { audioPath: inputPath, isTemporary: false };
   }
 }
 
-/**
- * Transcriben archivo de audio usando Gemini AI
- * @param {string} audioPath - Ruta del archivo de audio
- * @param {Object} options - Opciones de transcripción
- * @returns {Promise<Object>} - Resultado de la transcripción
- */
-async function transcribeWithGemini(audioPath, options = {}) {
+// Transcripción de audio usando OpenAI
+async function transcribeWithOpenAI(audioPath, options = {}) {
   try {
-    console.log(`🧠 Iniciando transcripción con Gemini: ${audioPath}`);
-    
-    // Verificar que el archivo existe
-    if (!fs.existsSync(audioPath)) {
-      throw new Error(`Archivo de audio no encontrado: ${audioPath}`);
-    }
-    
-    // Leer archivo de audio
-    const audioData = fs.readFileSync(audioPath);
-    const audioSize = (audioData.length / 1024 / 1024).toFixed(2); // MB
-    console.log(`📁 Tamaño del archivo: ${audioSize} MB`);
-    
-    // Configurar modelo Gemini
-    let modelName = options.model || 'gemini-2.5-flash'; // nuevo default multimodal
-    let model;
-    try {
-      model = genai.getGenerativeModel({ model: modelName });
-    } catch (e) {
-      console.warn('⚠️ Modelo', modelName, 'no disponible, usando gemini-1.5-flash');
-      modelName = 'gemini-1.5-flash';
-      model = genai.getGenerativeModel({ model: modelName });
-    }
-    
-    // Preparar prompt personalizado
-    const prompt = options.prompt || `
-    Genera una transcripción detallada y precisa de este audio en español.
-    
-    Instrucciones:
-    - Incluye puntuación apropiada
-    - Separa en párrafos lógicos
-    - Indica [PAUSA] para silencios largos
-    - Indica [INAUDIBLE] si no se entiende algo
-    - Mantén el tono y estilo del hablante
-    - Si hay múltiples hablantes, diferéncialos como "Hablante 1:", "Hablante 2:", etc.
-    
-    Devuelve solo la transcripción, sin comentarios adicionales.
-    `;
-    
-    // Determinar tipo MIME del audio
-    const audioExt = path.extname(audioPath).toLowerCase();
-    let mimeType = 'audio/wav'; // Por defecto
-    
-    switch (audioExt) {
-      case '.mp3': mimeType = 'audio/mp3'; break;
-      case '.wav': mimeType = 'audio/wav'; break;
-      case '.aac': mimeType = 'audio/aac'; break;
-      case '.ogg': mimeType = 'audio/ogg'; break;
-      case '.flac': mimeType = 'audio/flac'; break;
-      case '.m4a': mimeType = 'audio/m4a'; break;
-    }
-    
-    console.log(`🎯 Enviando a Gemini (${mimeType}, ${audioSize} MB)...`);
-    
-    // Llamar a Gemini
-    const result = await model.generateContent([
-      prompt,
-      {
-        inlineData: {
-          mimeType: mimeType,
-          data: audioData.toString('base64')
-        }
-      }
-    ]);
-    
-    const transcription = result.response.text();
-    
-    console.log(`✅ Transcripción completada: ${transcription.length} caracteres`);
-    
+    if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY no configurada');
+    if (!fs.existsSync(audioPath)) throw new Error(`Archivo de audio no encontrado: ${audioPath}`);
+    const fileStream = fs.createReadStream(audioPath);
+
+    const form = new (require('form-data'))();
+    form.append('model', OPENAI_TRANSCRIBE_MODEL);
+    form.append('file', fileStream, path.basename(audioPath));
+    if (options.language) form.append('language', options.language);
+    if (options.prompt) form.append('prompt', options.prompt);
+
+    const resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` },
+      body: form
+    });
+    if (!resp.ok) { const t = await resp.text(); throw new Error(`OpenAI transcribe error: ${resp.status} ${resp.statusText} - ${t}`); }
+    const data = await resp.json();
+    const transcription = data.text || '';
+
     return {
-      transcription: transcription,
+      transcription,
       metadata: {
         originalFile: path.basename(audioPath),
-        fileSize: audioSize,
-        mimeType: mimeType,
-        model: modelName,
+        model: OPENAI_TRANSCRIBE_MODEL,
         timestamp: new Date().toISOString(),
         charactersCount: transcription.length,
         wordsCount: transcription.split(' ').length
       }
     };
-    
   } catch (error) {
-    console.error('❌ Error en transcripción con Gemini:', error);
-    throw new Error(`Error al transcribir con Gemini: ${error.message}`);
+    console.error('❌ Error en transcripción OpenAI:', error);
+    throw new Error(`Error al transcribir con OpenAI: ${error.message}`);
   }
 }
 
-/**
- * Guarda la transcripción en Supabase Storage y crea registro en codex_items
- * @param {Object} transcriptionResult - Resultado de la transcripción
- * @param {string} originalFilePath - Ruta del archivo original
- * @param {string} userId - ID del usuario
- * @param {Object} metadata - Metadatos adicionales
- * @param {Object} supabaseClient - Cliente de Supabase autenticado
- * @param {string} updateItemId - ID del item existente para UPDATE (opcional)
- * @returns {Promise<Object>} - Datos del item guardado
- */
 async function saveTranscriptionToCodex(
   transcriptionResult,
   originalFilePath,
@@ -198,49 +97,30 @@ async function saveTranscriptionToCodex(
 ) {
   try {
     console.log(`💾 Guardando transcripción en Codex para usuario: ${userId}`);
-    
     const originalFileName = path.basename(originalFilePath);
     const originalFileType = detectFileType(originalFilePath);
-    
-    // Datos comunes para INSERT o UPDATE
     const codexItemData = {
       user_id: userId,
-      // Usamos el mismo tipo del archivo original para cumplir con RLS (audio|video)
       tipo: originalFileType,
       titulo: metadata.titulo || `Transcripción: ${originalFileName}`,
-      descripcion: metadata.descripcion || `Transcripción automática de ${originalFileType === 'video' ? 'video' : 'audio'} generada con Gemini AI. ${transcriptionResult.metadata.wordsCount} palabras, ${transcriptionResult.metadata.charactersCount} caracteres.`,
+      descripcion: metadata.descripcion || `Transcripción automática de ${originalFileType === 'video' ? 'video' : 'audio'} generada con OpenAI (${OPENAI_TRANSCRIBE_MODEL}). ${transcriptionResult.metadata.wordsCount} palabras, ${transcriptionResult.metadata.charactersCount} caracteres.`,
       etiquetas: metadata.noAutoTags ? (metadata.etiquetas || []) : [
-        'transcripcion',
-        'audio',
-        originalFileType,
-        'gemini-ai',
-        ...(metadata.etiquetas || [])
+        'transcripcion', 'audio', originalFileType, 'openai-gpt', ...(metadata.etiquetas || [])
       ],
       proyecto: metadata.proyecto || 'Transcripciones Automáticas',
       project_id: metadata.project_id || null,
-      storage_path: null, // No necesitamos storage para transcripciones
+      storage_path: null,
       url: null,
       nombre_archivo: `${originalFileName}.transcripcion.txt`,
       tamano: transcriptionResult.transcription.length,
       fecha: new Date().toISOString().split('T')[0],
-      // CLAVE: Guardar la transcripción en la columna específica
       audio_transcription: transcriptionResult.transcription
     };
-    
     let codexData, codexError;
     if (updateItemId) {
       console.log(`📝 Actualizando item existente ${updateItemId} con transcripción...`);
-      const updateData = {
-        audio_transcription: codexItemData.audio_transcription,
-        descripcion: codexItemData.descripcion,
-        nombre_archivo: codexItemData.nombre_archivo
-      };
-      
-      // Solo actualizar etiquetas si no está deshabilitado
-      if (!metadata.noAutoTags) {
-        updateData.etiquetas = codexItemData.etiquetas;
-      }
-      
+      const updateData = { audio_transcription: codexItemData.audio_transcription, descripcion: codexItemData.descripcion, nombre_archivo: codexItemData.nombre_archivo };
+      if (!metadata.noAutoTags) { updateData.etiquetas = codexItemData.etiquetas; }
       ({ data: codexData, error: codexError } = await supabaseClient
         .from('codex_items')
         .update(updateData)
@@ -255,197 +135,70 @@ async function saveTranscriptionToCodex(
         .select()
         .single());
     }
-    
-    if (codexError) {
-      console.error('❌ Error insertando en codex_items:', codexError);
-      throw codexError;
-    }
-    
+    if (codexError) { console.error('❌ Error insertando en codex_items:', codexError); throw codexError; }
     console.log(`✅ Transcripción guardada en codex_items id: ${codexData.id}`);
-    
-    return {
-      codexItem: codexData,
-      transcriptionResult: transcriptionResult,
-      storagePath: null // No se usa storage
-    };
-    
+    return { codexItem: codexData, transcriptionResult: transcriptionResult, storagePath: null };
   } catch (error) {
     console.error('❌ Error guardando transcripción en Codex:', error);
     throw new Error(`Error al guardar transcripción: ${error.message}`);
   }
 }
 
-/**
- * Limpia archivos temporales
- * @param {string[]} tempFiles - Array de rutas de archivos temporales
- */
 function cleanupTempFiles(tempFiles) {
-  tempFiles.forEach(filePath => {
-    try {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-        console.log(`🗑️ Archivo temporal eliminado: ${filePath}`);
-      }
-    } catch (error) {
-      console.warn(`⚠️ No se pudo eliminar archivo temporal ${filePath}:`, error.message);
-    }
-  });
+  tempFiles.forEach(filePath => { try { if (fs.existsSync(filePath)) { fs.unlinkSync(filePath); console.log(`🗑️ Archivo temporal eliminado: ${filePath}`); } } catch (e) { console.warn(`⚠️ No se pudo eliminar archivo temporal ${filePath}:`, e.message); } });
 }
 
-/**
- * Función principal para transcribir audio/video
- * @param {string} filePath - Ruta del archivo a transcribir
- * @param {string} userId - ID del usuario
- * @param {Object} options - Opciones de transcripción
- * @returns {Promise<Object>} - Resultado completo de la transcripción
- */
 async function transcribeFile(filePath, userId, options = {}) {
-  // Permitimos pasar un cliente de Supabase autenticado a través de options.supabaseClient
   const spClient = options.supabaseClient || supabase;
   const updateItemId = options.updateItemId || null;
   const tempFiles = [];
-  
   try {
     console.log(`🎬 Iniciando proceso de transcripción: ${filePath}`);
-    
-    // Preparar archivo de audio
     const { audioPath, isTemporary } = await prepareAudioFile(filePath);
-    
-    if (isTemporary) {
-      tempFiles.push(audioPath);
-    }
-    
-    // Transcribir con Gemini
-    const transcriptionResult = await transcribeWithGemini(audioPath, options);
-    
-    // Guardar en Codex
-    const saveResult = await saveTranscriptionToCodex(
-      transcriptionResult,
-      filePath,
-      userId,
-      options,
-      spClient,
-      updateItemId
-    );
-    
-    return {
-      success: true,
-      transcription: transcriptionResult.transcription,
-      metadata: transcriptionResult.metadata,
-      codexItem: saveResult.codexItem,
-      message: `Transcripción completada exitosamente. ${transcriptionResult.metadata.wordsCount} palabras procesadas.`
-    };
-    
+    if (isTemporary) { tempFiles.push(audioPath); }
+    const transcriptionResult = await transcribeWithOpenAI(audioPath, options);
+    const saveResult = await saveTranscriptionToCodex(transcriptionResult, filePath, userId, options, spClient, updateItemId);
+    return { success: true, transcription: transcriptionResult.transcription, metadata: transcriptionResult.metadata, codexItem: saveResult.codexItem, message: `Transcripción completada. ${transcriptionResult.metadata.wordsCount} palabras.` };
   } catch (error) {
     console.error('❌ Error en proceso de transcripción:', error);
-    return {
-      success: false,
-      error: error.message,
-      message: 'Error durante el proceso de transcripción'
-    };
-  } finally {
-    // Limpiar archivos temporales
-    if (tempFiles.length > 0) {
-      cleanupTempFiles(tempFiles);
-    }
-  }
+    return { success: false, error: error.message, message: 'Error durante el proceso de transcripción' };
+  } finally { if (tempFiles.length > 0) { cleanupTempFiles(tempFiles); } }
 }
 
-/**
- * Transcribe or describe an image using Gemini Vision
- * @param {string} imagePath - Absolute path to the local image file
- * @param {Object} options - Extra options (prompt, model)
- * @returns {Promise<{transcription: string, metadata: Object}>}
- */
+// Imagen → descripción/transcripción con OpenAI vision
 async function transcribeImageWithGemini(imagePath, options = {}) {
   try {
-    if (!fs.existsSync(imagePath)) {
-      throw new Error(`Archivo de imagen no encontrado: ${imagePath}`);
-    }
-
+    if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY no configurada');
+    if (!fs.existsSync(imagePath)) throw new Error(`Archivo de imagen no encontrado: ${imagePath}`);
     let imageExt = path.extname(imagePath).toLowerCase();
-    // Si contiene parámetros codificados (? o %), limpiarlos
-    if (imageExt.includes('%') || imageExt.includes('?')) {
-      const clean = imagePath.split('?')[0];
-      imageExt = path.extname(decodeURIComponent(clean)).toLowerCase();
-    }
+    if (imageExt.includes('%') || imageExt.includes('?')) { const clean = imagePath.split('?')[0]; imageExt = path.extname(decodeURIComponent(clean)).toLowerCase(); }
+    if (!SUPPORTED_IMAGE_FORMATS.includes(imageExt)) { throw new Error(`Formato de imagen no soportado para transcripción: ${imageExt}`); }
+    const imageData = fs.readFileSync(imagePath).toString('base64');
 
-    if (!SUPPORTED_IMAGE_FORMATS.includes(imageExt)) {
-      throw new Error(`Formato de imagen no soportado para transcripción: ${imageExt}`);
-    }
-
-    const imageData = fs.readFileSync(imagePath);
-    const imageSize = (imageData.length / 1024 / 1024).toFixed(2); // MB
-
-    let modelName = options.model || 'gemini-2.5-flash'; // nuevo default multimodal
-    let model;
-    try {
-      model = genai.getGenerativeModel({ model: modelName });
-    } catch (e) {
-      console.warn('⚠️ Modelo', modelName, 'no disponible, usando gemini-1.5-flash');
-      modelName = 'gemini-1.5-flash';
-      model = genai.getGenerativeModel({ model: modelName });
-    }
-
-    const prompt = options.prompt || `Describe detalladamente el contenido de esta imagen en español. Si contiene texto incrustado, transcribe el texto exactamente como aparece. Devuelve solo la descripción/transcripción, sin formato adicional.`;
-
-    console.log(`🖼️ Enviando imagen a Gemini Vision (${modelName}, ${imageSize} MB)...`);
-    const result = await model.generateContent([
-      prompt,
-      {
-        inlineData: {
-          mimeType: (() => {
-            switch (imageExt) {
-              case '.jpg':
-              case '.jpeg':
-                return 'image/jpeg';
-              case '.png':
-                return 'image/png';
-              case '.gif':
-                return 'image/gif';
-              case '.webp':
-                return 'image/webp';
-              default:
-                return `image/${imageExt.replace('.', '')}`;
-            }
-          })(),
-          data: imageData.toString('base64')
-        }
-      }
-    ]);
-
-    const transcription = result.response.text();
-    console.log(`✅ Transcripción de imagen completada: ${transcription.substring(0, 80)}...`);
-
-    return {
-      transcription,
-      metadata: {
-        originalFile: path.basename(imagePath),
-        fileSize: imageSize,
-        mimeType: (() => {
-          switch (imageExt) {
-            case '.jpg':
-            case '.jpeg':
-              return 'image/jpeg';
-            case '.png':
-              return 'image/png';
-            case '.gif':
-              return 'image/gif';
-            case '.webp':
-              return 'image/webp';
-            default:
-              return `image/${imageExt.replace('.', '')}`;
-          }
-        })(),
-        model: modelName,
-        timestamp: new Date().toISOString(),
-        charactersCount: transcription.length,
-        wordsCount: transcription.split(' ').length
-      }
-    };
+    const prompt = options.prompt || `Describe detalladamente el contenido de esta imagen en español. Si hay texto, transcríbelo exactamente. Devuelve solo el texto.`;
+    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: OPENAI_VISION_MODEL,
+        messages: [
+          { role: 'system', content: 'Eres un asistente de visión. Responde solo texto.' },
+          { role: 'user', content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: `data:image/${imageExt.replace('.','')};base64,${imageData}` } }
+          ] }
+        ],
+        max_tokens: 500,
+        temperature: 0.2
+      })
+    });
+    if (!resp.ok) { const t = await resp.text(); throw new Error(`OpenAI vision error: ${resp.status} ${resp.statusText} - ${t}`); }
+    const data = await resp.json();
+    const transcription = (data.choices?.[0]?.message?.content || '').trim();
+    return { transcription, metadata: { originalFile: path.basename(imagePath), model: OPENAI_VISION_MODEL, timestamp: new Date().toISOString(), charactersCount: transcription.length, wordsCount: transcription.split(' ').length } };
   } catch (error) {
-    console.error('❌ Error en transcripción de imagen con Gemini:', error);
-    throw new Error(`Error al transcribir imagen con Gemini: ${error.message}`);
+    console.error('❌ Error en transcripción de imagen con OpenAI:', error);
+    throw new Error(`Error al transcribir imagen con OpenAI: ${error.message}`);
   }
 }
 

@@ -21,216 +21,123 @@ function getExtractorTUrl() {
 }
 
 const EXTRACTOR_T_URL = getExtractorTUrl();
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_SENTIMENT_MODEL = (process.env.NITTER_SENTIMENT_MODEL || 'gpt-5').trim();
 
 // Log de configuración
 console.log(`🔗 ExtractorT URL configurada: ${EXTRACTOR_T_URL}`);
 
-// Función para análisis de sentimiento individual con Gemini 1.5 Flash
+// Función para análisis de sentimiento con OpenAI (GPT‑5 preferido; fallback configurado)
 async function analyzeTweetSentiment(tweet, categoria) {
-  if (!GEMINI_API_KEY) {
-    console.warn('GEMINI_API_KEY no configurada, usando datos por defecto');
+  const configuredModel = OPENAI_SENTIMENT_MODEL || 'gpt-5';
+  const fallbackModel = 'gpt-4o-mini';
+  if (!OPENAI_API_KEY) {
+    console.warn('OPENAI_API_KEY no configurada, usando datos por defecto');
     return getDefaultSentimentData('API no configurada');
   }
 
-  try {
-    console.log(`🧠 Analizando sentimiento: @${tweet.usuario} - ${tweet.texto.substring(0, 50)}...`);
-    
-    const prompt = `Analiza COMPLETAMENTE este tweet guatemalteco de la categoría "${categoria}":
+  async function callOpenAI(model) {
+    const system = 'Eres un analista de comunicación política en Guatemala. Responde solo JSON válido.';
+    const user = [
+      `Categoría: ${categoria}`,
+      `Usuario: @${tweet.usuario}`,
+      `Fecha: ${tweet.fecha}`,
+      `Likes: ${tweet.likes || 0}, Retweets: ${tweet.retweets || 0}, Replies: ${tweet.replies || 0}`,
+      `Tweet: "${tweet.texto}"`,
+      '',
+      'Devuelve un JSON válido con:',
+      '{',
+      '  "sentimiento": "positivo|negativo|neutral",',
+      '  "score": 0.0,',
+      '  "confianza": 0.0,',
+      '  "emociones": [],',
+      '  "intencion_comunicativa": "informativo|opinativo|humoristico|alarmista|critico|promocional|conversacional|protesta",',
+      '  "entidades_mencionadas": [{"nombre":"","tipo":"","contexto":""}],',
+      '  "contexto_local": "",',
+      '  "intensidad": "alta|media|baja"',
+      '}'
+    ].join('\n');
 
-Tweet: "${tweet.texto}"
-
-Contexto:
-- Usuario: @${tweet.usuario}
-- Categoría: ${categoria}
-- Ubicación: Guatemala
-- Fecha: ${tweet.fecha}
-- Likes: ${tweet.likes || 0}, Retweets: ${tweet.retweets || 0}, Replies: ${tweet.replies || 0}
-
-Instrucciones de Análisis:
-1. SENTIMIENTO: Considera contexto guatemalteco, lenguaje chapín, sarcasmo, ironía
-2. INTENCIÓN: Identifica el propósito comunicativo del tweet
-3. ENTIDADES: Extrae personas, organizaciones, lugares, eventos mencionados
-
-Responde ÚNICAMENTE con un JSON válido:
-{
-  "sentimiento": "positivo|negativo|neutral",
-  "score": 0.75,
-  "confianza": 0.85,
-  "emociones": ["alegría", "esperanza"],
-  "intencion_comunicativa": "informativo|opinativo|humoristico|alarmista|critico|promocional|conversacional|protesta",
-  "entidades_mencionadas": [
-    {
-      "nombre": "Bernardo Arévalo",
-      "tipo": "persona",
-      "contexto": "presidente de Guatemala"
-    },
-    {
-      "nombre": "Congreso",
-      "tipo": "organizacion",
-      "contexto": "institución política"
-    }
-  ],
-  "contexto_local": "breve explicación del contexto guatemalteco detectado",
-  "intensidad": "alta|media|baja"
-}
-
-TIPOS DE INTENCIÓN:
-- informativo: Comparte datos/hechos objetivos
-- opinativo: Expresa opinión personal o juicio
-- humoristico: Busca entretener o hacer reír
-- alarmista: Busca alertar o generar preocupación
-- critico: Critica personas/instituciones/situaciones
-- promocional: Promociona algo (evento, producto, idea)
-- conversacional: Busca interacción/diálogo
-- protesta: Expresión de descontento o resistencia
-
-TIPOS DE ENTIDADES:
-- persona: Individuos específicos (políticos, celebridades, etc.)
-- organizacion: Instituciones, empresas, partidos, etc.
-- lugar: Ubicaciones geográficas específicas
-- evento: Acontecimientos, celebraciones, crisis, etc.`;
-
-    const startTime = Date.now();
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`, {
+    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: `Eres un experto en análisis de sentimientos especializado en el contexto guatemalteco. Entiendes el lenguaje coloquial, sarcasmo, y las referencias culturales y políticas de Guatemala. Responde siempre con JSON válido.
-
-${prompt}`
-              }
-            ]
-          }
+        model,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user }
         ],
-        generationConfig: {
-          temperature: 0.3,
-          topK: 1,
-          topP: 1,
-          maxOutputTokens: 300,
-          stopSequences: []
-        },
-        safetySettings: [
-          {
-            category: "HARM_CATEGORY_HARASSMENT",
-            threshold: "BLOCK_MEDIUM_AND_ABOVE"
-          }
-        ]
+        temperature: 0.2,
+        max_tokens: 350
       })
     });
+    return resp;
+  }
 
-    const apiResponseTime = Date.now() - startTime;
+  try {
+    console.log(`🧠 Analizando sentimiento (OpenAI:${configuredModel}→${fallbackModel} fallback): @${tweet.usuario} - ${String(tweet.texto).substring(0, 50)}...`);
 
-    if (!response.ok) {
-      const errorMsg = `Gemini API error: ${response.status} ${response.statusText}`;
-      console.error(errorMsg);
-      throw new Error(errorMsg);
-    }
-
-    const data = await response.json();
-    const tokensUsed = data.usageMetadata?.totalTokenCount || 0;
-    
-    const aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    
-    if (!aiResponse) {
-      throw new Error('No response from Gemini');
-    }
-
-    // Limpiar respuesta y parsear JSON
-    let cleanResponse = aiResponse
-      .replace(/```json|```/g, '')
-      .replace(/^\s*[\r\n]+|[\r\n]+\s*$/g, '')
-      .trim();
-    
-    let analysis;
-    try {
-      analysis = JSON.parse(cleanResponse);
-    } catch (firstError) {
-      try {
-        // Intentar arreglar JSON común
-        cleanResponse = cleanResponse
-          .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
-          .replace(/\n/g, '\\n')
-          .replace(/\r/g, '\\r')
-          .replace(/\t/g, '\\t')
-          .replace(/'/g, "\\'");
-        
-        analysis = JSON.parse(cleanResponse);
-      } catch (secondError) {
-        console.warn(`JSON malformado de Gemini, extrayendo manualmente: ${secondError.message}`);
-        
-        // Extraer información básica usando regex
-        const sentimientoMatch = cleanResponse.match(/"?sentimiento"?\s*:\s*"?(\w+)"?/i);
-        const scoreMatch = cleanResponse.match(/"?score"?\s*:\s*(\d*\.?\d+)/i);
-        const confianzaMatch = cleanResponse.match(/"?confianza"?\s*:\s*(\d*\.?\d+)/i);
-        const intencionMatch = cleanResponse.match(/"?intencion_comunicativa"?\s*:\s*"?(\w+)"?/i);
-        
-        analysis = {
-          sentimiento: sentimientoMatch ? sentimientoMatch[1] : 'neutral',
-          score: scoreMatch ? parseFloat(scoreMatch[1]) : 0.0,
-          confianza: confianzaMatch ? parseFloat(confianzaMatch[1]) : 0.5,
-          emociones: [],
-          intencion_comunicativa: intencionMatch ? intencionMatch[1] : 'informativo',
-          entidades_mencionadas: [],
-          contexto_local: 'Análisis básico por error de parsing',
-          intensidad: 'media'
-        };
+    let resp = await callOpenAI(configuredModel);
+    if (!resp.ok) {
+      const firstText = await resp.text();
+      console.warn(`OpenAI(${configuredModel}) fallo: ${resp.status} ${resp.statusText} - ${firstText}. Probando fallback ${fallbackModel}...`);
+      resp = await callOpenAI(fallbackModel);
+      if (!resp.ok) {
+        const secondText = await resp.text();
+        throw new Error(`OpenAI fallback error (${fallbackModel}): ${resp.status} ${resp.statusText} - ${secondText}`);
       }
     }
-    
-    // Validar y normalizar datos
-    const sentimiento = ['positivo', 'negativo', 'neutral'].includes(analysis.sentimiento) 
-      ? analysis.sentimiento 
-      : 'neutral';
-    
-    const score = typeof analysis.score === 'number' && analysis.score >= -1 && analysis.score <= 1 
-      ? analysis.score 
-      : 0.0;
-    
-    const confianza = typeof analysis.confianza === 'number' && analysis.confianza >= 0 && analysis.confianza <= 1 
-      ? analysis.confianza 
-      : 0.5;
 
-    // Validar intención comunicativa
+    const data = await resp.json();
+    const raw = data.choices?.[0]?.message?.content || '';
+
+    let clean = raw.replace(/```json|```/g, '').trim();
+    let analysis;
+    try {
+      analysis = JSON.parse(clean);
+    } catch (e) {
+      const sentimientoMatch = clean.match(/"?sentimiento"?\s*:\s*"?(\w+)"?/i);
+      const scoreMatch = clean.match(/"?score"?\s*:\s*(-?\d*\.?\d+)/i);
+      const confMatch = clean.match(/"?confianza"?\s*:\s*(\d*\.?\d+)/i);
+      const intencionMatch = clean.match(/"?intencion_comunicativa"?\s*:\s*"?([\w|]+)"?/i);
+      analysis = {
+        sentimiento: sentimientoMatch ? sentimientoMatch[1] : 'neutral',
+        score: scoreMatch ? parseFloat(scoreMatch[1]) : 0.0,
+        confianza: confMatch ? parseFloat(confMatch[1]) : 0.5,
+        emociones: [],
+        intencion_comunicativa: intencionMatch ? intencionMatch[1] : 'informativo',
+        entidades_mencionadas: [],
+        contexto_local: '',
+        intensidad: 'media'
+      };
+    }
+
+    const sentimiento = ['positivo', 'negativo', 'neutral'].includes(analysis.sentimiento) ? analysis.sentimiento : 'neutral';
+    const score = typeof analysis.score === 'number' ? Math.max(-1, Math.min(1, analysis.score)) : 0.0;
+    const confianza = typeof analysis.confianza === 'number' ? Math.max(0, Math.min(1, analysis.confianza)) : 0.5;
     const intencionesValidas = ['informativo', 'opinativo', 'humoristico', 'alarmista', 'critico', 'promocional', 'conversacional', 'protesta'];
-    const intencion = intencionesValidas.includes(analysis.intencion_comunicativa) 
-      ? analysis.intencion_comunicativa 
-      : 'informativo';
+    const intencion = intencionesValidas.includes(analysis.intencion_comunicativa) ? analysis.intencion_comunicativa : 'informativo';
+    const entidades = Array.isArray(analysis.entidades_mencionadas) ? analysis.entidades_mencionadas.filter(e => e && e.nombre && e.tipo) : [];
 
-    // Validar y normalizar entidades
-    const entidades = Array.isArray(analysis.entidades_mencionadas) 
-      ? analysis.entidades_mencionadas.filter(ent => 
-          ent && typeof ent === 'object' && ent.nombre && ent.tipo
-        )
-      : [];
+    console.log(`✅ Análisis (OpenAI): ${sentimiento} (${score}) | ${intencion} | ${entidades.length} entidades`);
 
-    console.log(`✅ Análisis completo: ${sentimiento} (${score}) | ${intencion} | ${entidades.length} entidades`);
-    
     return {
-      sentimiento: sentimiento,
+      sentimiento,
       score_sentimiento: score,
       confianza_sentimiento: confianza,
       emociones_detectadas: Array.isArray(analysis.emociones) ? analysis.emociones : [],
       intencion_comunicativa: intencion,
       entidades_mencionadas: entidades,
       analisis_ai_metadata: {
-        modelo: 'gemini-1.5-flash',
+        modelo: configuredModel,
+        fallback_model: fallbackModel,
         timestamp: new Date().toISOString(),
-        contexto_local: analysis.contexto_local || '',
-        intensidad: analysis.intensidad || 'media',
-        categoria: categoria,
-        tokens_usados: tokensUsed,
-        costo_estimado: tokensUsed * 0.000075 / 1000,
-        api_response_time_ms: apiResponseTime
+        categoria
       }
     };
-
   } catch (error) {
     console.error(`Error analizando sentimiento: ${error.message}`);
     return getDefaultSentimentData(error.message);

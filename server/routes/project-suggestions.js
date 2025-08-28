@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const fetch = require('node-fetch');
 const { verifyUserAccess } = require('../middlewares/auth');
 const { logUsage } = require('../services/logs');
 const supabase = require('../utils/supabase');
@@ -8,12 +8,68 @@ const supabase = require('../utils/supabase');
 // Costo fijo para generación de sugerencias de proyecto
 const SUGGESTIONS_COST = 5;
 
-// Inicializar Gemini
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// OpenAI GPT-5 config (reemplaza Grok 3 mini)
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const GPT5_MODEL = (process.env.PROJECT_SUGGESTIONS_MODEL || 'gpt-5').trim();
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+
+async function suggestWithGPT5(prompt) {
+  // Preferir API directa de OpenAI
+  if (OPENAI_API_KEY) {
+    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: GPT5_MODEL,
+        messages: [
+          { role: 'system', content: 'Eres un consultor de auditoría municipal en Guatemala. Responde SOLO JSON válido.' },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.2,
+        max_tokens: 1000
+      })
+    });
+    if (!resp.ok) {
+      const t = await resp.text();
+      throw new Error(`OpenAI error: ${resp.status} ${resp.statusText} - ${t}`);
+    }
+    const data = await resp.json();
+    return data.choices?.[0]?.message?.content || '';
+  }
+  // Fallback via OpenRouter
+  if (OPENROUTER_API_KEY) {
+    const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: GPT5_MODEL,
+        messages: [
+          { role: 'system', content: 'Eres un consultor de auditoría municipal en Guatemala. Responde SOLO JSON válido.' },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.2,
+        max_tokens: 1000
+      })
+    });
+    if (!resp.ok) {
+      const t = await resp.text();
+      throw new Error(`OpenRouter error: ${resp.status} ${resp.statusText} - ${t}`);
+    }
+    const data = await resp.json();
+    return data.choices?.[0]?.message?.content || '';
+  }
+  throw new Error('No hay OPENAI_API_KEY ni OPENROUTER_API_KEY configurado para GPT‑5');
+}
 
 /**
  * POST /api/project-suggestions
- * Genera sugerencias inteligentes para un proyecto usando Gemini 1.5 Flash
+ * Genera sugerencias inteligentes para un proyecto usando GPT‑5
  */
 router.post('/', verifyUserAccess, async (req, res) => {
   const startTime = Date.now();
@@ -24,11 +80,6 @@ router.post('/', verifyUserAccess, async (req, res) => {
     
     if (!project) {
       return res.status(400).json({ error: 'Datos del proyecto requeridos' });
-    }
-
-    // Validar que tenemos la API key de Gemini
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(500).json({ error: 'Gemini API key not configured' });
     }
 
     console.log(`💡 Usuario ${user.profile.email} solicitando sugerencias para proyecto: "${project.title}"`);
@@ -71,7 +122,7 @@ router.post('/', verifyUserAccess, async (req, res) => {
       return "progreso parcial";
     })();
 
-    // Preparar el prompt especializado para auditoría
+    // Preparar el prompt especializado para auditoría (reforzado con lectura completa de proyecto)
     const prompt = `
 Eres un experto consultor en auditoría municipal de Guatemala con 15+ años de experiencia. 
 Analiza este proyecto específico de auditoría y proporciona sugerencias muy específicas basadas en el contexto actual.
@@ -89,61 +140,42 @@ Fase del proyecto: ${projectProgress}
 Decisiones tomadas hasta ahora:
 ${decisionsContext}
 
-=== CONTEXTO DE TRABAJO ===
-El auditor está trabajando en una plataforma que incluye:
-- **Sondeos**: Para análizar temas específicos con múltiples fuentes de información
-- **Tendencias**: Para monitorear menciones en redes sociales y medios
-- **Noticias**: Para revisar cobertura mediática relevante
-- **Codex**: Para gestionar documentos, evidencias y referencias
-- **Decisiones por Capas**: Para estructurar el proceso (enfoque → alcance → configuración)
-
-=== INSTITUCIONES Y MARCO LEGAL GUATEMALA ===
-- Contraloría General de Cuentas (CGC) - ente rector de auditoría
-- Ministerio Público (MP) - para casos penales
-- SAT - para aspectos tributarios
-- INFODIGTO - para transparencia y acceso a información
-- Ley de Acceso a la Información Pública
-- Ley de Probidad y Responsabilidades
-
 === INSTRUCCIONES ESPECÍFICAS ===
-Basándote en el proyecto específico descrito, sus decisiones actuales y su fase de progreso:
-
-1. Identifica las lagunas o próximos pasos lógicos específicos para ESTE proyecto
-2. Considera qué decisiones faltan por tomar según la metodología de capas
+1. Identifica lagunas o próximos pasos lógicos específicos para ESTE proyecto
+2. Considera qué decisiones faltan por tomar según metodología de capas
 3. Sugiere acciones concretas que aprovechen las herramientas disponibles
-4. Incluye referencias específicas a instituciones guatemaltecas cuando sea relevante
-5. Proporciona 3-5 sugerencias priorizadas y específicas para el contexto actual
+4. Incluye referencias a instituciones guatemaltecas cuando sea relevante
+5. Proporciona 3-5 sugerencias priorizadas y específicas
 
-IMPORTANTE: Las sugerencias deben ser específicas para este proyecto, no genéricas. Usa los datos del proyecto para contextualizar cada recomendación.
+Reglas de calidad:
+- Lee TODO el contexto anterior y no asumas datos faltantes
+- Considera secuencia metodológica: enfoque → alcance → configuración → implementación
+- Relaciona decisiones ya tomadas y su impacto
+- Usa terminología institucional guatemalteca pertinente
 
-Responde en formato JSON válido:
+Responde en JSON válido con estructura:
 {
-  "analysis": "Análisis específico del estado actual de ESTE proyecto considerando las decisiones ya tomadas y lo que falta por hacer",
+  "analysis": "...",
   "suggestions": [
     {
       "id": "suggestion_1",
-      "title": "Título específico relacionado con el proyecto actual",
-      "description": "Descripción que mencione aspectos específicos del proyecto y su contexto actual",
+      "title": "...",
+      "description": "...",
       "category": "analysis|research|platform|external|documentation",
       "priority": "high|medium|low",
-      "action": "Acción muy específica que considere el estado actual del proyecto",
-      "estimatedTime": "Tiempo realista para esta actividad específica",
-      "tools": ["herramientas específicas a usar para este proyecto"]
+      "action": "...",
+      "estimatedTime": "...",
+      "tools": ["..."]
     }
   ]
-}
-`;
+}`;
 
-    // Llamar a Gemini 1.5 Flash
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+    // Llamar a GPT‑5
+    const text = await suggestWithGPT5(prompt);
 
     // Parsear la respuesta JSON
     let suggestionsData;
     try {
-      // Limpiar la respuesta para extraer solo el JSON
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         suggestionsData = JSON.parse(jsonMatch[0]);
@@ -151,7 +183,7 @@ Responde en formato JSON válido:
         throw new Error('No se encontró JSON válido en la respuesta');
       }
     } catch (parseError) {
-      console.error('Error parsing Gemini response:', parseError);
+      console.error('Error parsing Grok response:', parseError);
       console.error('Raw response:', text);
       
       // Fallback con sugerencias específicas al proyecto
@@ -170,42 +202,12 @@ Responde en formato JSON válido:
           {
             id: "suggestion_1",
             title: `Crear sondeo sobre "${projectKeywords}"`,
-            description: `Utiliza la herramienta de sondeos para analizar específicamente el tema de ${project.title}, obteniendo contexto actual y tendencias relacionadas con ${projectKeywords}.`,
+            description: `Utiliza la herramienta de sondeos para analizar específicamente el tema de ${project.title}.`,
             category: "platform",
             priority: project.priority === 'high' ? "high" : "medium",
             action: `Crear un sondeo con las palabras clave: ${projectKeywords}`,
             estimatedTime: "30 minutos",
             tools: ["Sondeos", "Tendencias"]
-          },
-          {
-            id: "suggestion_2", 
-            title: `Definir decisión de ${nextDecisionType} para el proyecto`,
-            description: `El proyecto necesita una decisión de tipo "${nextDecisionType}" para continuar con la metodología de auditoría por capas.`,
-            category: "platform",
-            priority: "high",
-            action: `Usar el sistema de Decisiones por Capas para crear una decisión de ${nextDecisionType}`,
-            estimatedTime: "20 minutos",
-            tools: ["Decisiones por Capas"]
-          },
-          {
-            id: "suggestion_3",
-            title: `Revisar cobertura mediática de "${project.category || 'auditoría municipal'}"`,
-            description: `Buscar noticias y menciones relacionadas con ${project.title} para identificar contexto público y posibles riesgos reputacionales.`,
-            category: "research",
-            priority: "medium",
-            action: `Buscar en noticias con términos: ${projectKeywords}`,
-            estimatedTime: "45 minutos",
-            tools: ["Noticias", "Tendencias"]
-          },
-          {
-            id: "suggestion_4",
-            title: "Preparar documentación de evidencias",
-            description: `Crear estructura de carpetas en Codex específica para ${project.title} y sus hallazgos de auditoría.`,
-            category: "documentation", 
-            priority: "medium",
-            action: `Organizar Codex con categorías específicas para este proyecto de ${project.category || 'auditoría'}`,
-            estimatedTime: "30 minutos",
-            tools: ["Codex"]
           }
         ]
       };
@@ -342,7 +344,7 @@ router.get('/cost', verifyUserAccess, async (req, res) => {
     const costInfo = {
       operation: 'project-suggestions',
       cost_credits: SUGGESTIONS_COST,
-      cost_description: 'Generación de sugerencias inteligentes para proyecto usando Gemini AI',
+      cost_description: 'Generación de sugerencias inteligentes para proyecto usando Grok 3 mini',
       user_credits: user.profile.role === 'admin' ? 'ilimitado' : (user.profile.credits || 0),
       can_afford: user.profile.role === 'admin' || (user.profile.credits >= SUGGESTIONS_COST),
       admin_access: user.profile.role === 'admin'

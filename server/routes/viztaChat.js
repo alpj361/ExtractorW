@@ -201,7 +201,8 @@ router.post('/query', verifyUserAccess, async (req, res) => {
       }
     }
 
-    const { message, sessionId } = req.body;
+    const { message, sessionId, mode: reqMode } = req.body;
+    const mode = (reqMode === 'chat' || reqMode === 'agentic') ? reqMode : 'chat';
     const userId = req.user.id;
     
     if (!message) {
@@ -243,7 +244,50 @@ router.post('/query', verifyUserAccess, async (req, res) => {
 
     let result;
     
-    if (intentClassification.intent === 'casual_chat') {
+    if (mode === 'chat') {
+      // MODO CHAT: respuestas rápidas con razonamiento y herramientas ligeras
+      // 1) Intento directo con Reasoning (DeepSeek/GPT-4o-mini) si hay memoria Pulse
+      try {
+        const { ReasoningLayer } = require('../services/agents/vizta/reasoningLayer');
+        const dummyVizta = { name: 'Vizta' };
+        const rl = new ReasoningLayer(dummyVizta);
+        const direct = await rl.tryDirectPulseAnswer(message, req.user, chatSessionId);
+        if (direct && direct.success) {
+          result = { success: true, response: { agent: 'Vizta', message: direct.message, type: 'chat_response', timestamp: new Date().toISOString() }, conversationId: chatSessionId, metadata: { conversationType: 'chat', processingTime: Date.now() - startTime, mode } };
+        }
+      } catch {}
+      if (!result) {
+        // 2) OpenPipe restringido a herramientas de chat (sin nitter_*)
+        const openPipeResult = await openPipeService.processViztaQuery(message, req.user, chatSessionId, 'chat');
+        if (openPipeResult.success && openPipeResult.type === 'conversational') {
+          result = { success: true, response: { agent: 'Vizta', message: openPipeResult.message, type: 'conversational_ai', timestamp: new Date().toISOString() }, conversationId: chatSessionId, metadata: { conversationType: 'ai_conversational', processingTime: Date.now() - startTime, openPipeUsage: openPipeResult.usage, mode } };
+        } else if (openPipeResult.success && openPipeResult.type === 'function_call') {
+          // Ejecutar sólo herramientas permitidas en modo chat
+          const calls = Array.isArray(openPipeResult.allFunctionCalls) && openPipeResult.allFunctionCalls.length > 0 ? openPipeResult.allFunctionCalls : [openPipeResult.functionCall];
+          const allowed = new Set(['perplexity_search','search_political_context','user_projects','user_codex','project_findings','project_coverages','latest_trends']);
+          const filtered = calls.filter(c => allowed.has((c.function?.name) || c.name));
+          let lastExec = null; let lastName = null;
+          for (const call of filtered) {
+            const normalized = call.function ? { name: call.function.name, arguments: call.function.arguments } : call;
+            const argsObj = typeof normalized.arguments === 'string' ? JSON.parse(normalized.arguments || '{}') : (normalized.arguments || {});
+            lastExec = await openPipeService.executeFunctionCall({ name: normalized.name, arguments: argsObj }, req.user, chatSessionId);
+            lastName = normalized.name;
+          }
+          if (lastExec) {
+            result = { success: !!lastExec.success, response: { agent: lastExec.agent || 'Vizta', message: await formatFunctionResult(lastExec, message), type: 'function_response', timestamp: new Date().toISOString(), functionUsed: lastName, data: lastExec.data }, conversationId: chatSessionId, metadata: { conversationType: 'function_call', mode, processingTime: Date.now() - startTime } };
+          }
+        }
+      }
+      // Si sigue sin result, caer a casual
+      if (!result) {
+        result = {
+          success: true,
+          response: { agent: 'Vizta', message: await generateCasualResponse(message), type: 'casual_conversation', timestamp: new Date().toISOString() },
+          conversationId: chatSessionId,
+          metadata: { conversationType: 'casual', processingTime: Date.now() - startTime, mode }
+        };
+      }
+    } else if (intentClassification.intent === 'casual_chat') {
       // Manejar conversación casual directamente
       result = {
         success: true,
@@ -363,7 +407,7 @@ ${preview}
         /(hoy|mañana|pasado|esta semana|este mes|\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b)/.test(msgLowerPre)
       );
       let openPipeResult;
-      if (isLocalTemporalQuery) {
+      if (isLocalTemporalQuery && mode === 'agentic') {
         console.log('🧭 Gemini-first pipeline enabled for local/temporal query');
         try {
           // 0) Memoria política previa para contexto (consulta original)
@@ -424,10 +468,19 @@ Entrada:
           console.warn('⚠️ Gemini-first pipeline failed, falling back to OpenPipe default:', e.message);
           openPipeResult = await openPipeService.processViztaQuery(message, req.user, chatSessionId);
         }
-      } else {
+      } else if (mode === 'agentic') {
         // Ruta estándar
         console.log('🎯 Usando OpenPipe para function calling optimizado...');
-        openPipeResult = await openPipeService.processViztaQuery(message, req.user, chatSessionId);
+        openPipeResult = await openPipeService.processViztaQuery(message, req.user, chatSessionId, 'agentic');
+      } else {
+        // Modo chat ya manejado arriba; como seguridad, procesar conversacional restringido
+        const openPipeResultChat = await openPipeService.processViztaQuery(message, req.user, chatSessionId, 'chat');
+        result = {
+          success: true,
+          response: { agent: 'Vizta', message: openPipeResultChat.message || '¿En qué puedo ayudarte?', type: 'conversational_ai', timestamp: new Date().toISOString() },
+          conversationId: chatSessionId,
+          metadata: { conversationType: 'ai_conversational', processingTime: Date.now() - startTime, mode: 'chat' }
+        };
       }
       
       if (openPipeResult.success && openPipeResult.type === 'function_call') {

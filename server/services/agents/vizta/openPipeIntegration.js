@@ -16,7 +16,7 @@ class ViztaOpenPipeIntegration {
   /**
    * Procesar consulta usando OpenPipe con integración completa de agentes
    */
-  async processWithOpenPipe(userMessage, user, conversationId) {
+  async processWithOpenPipe(userMessage, user, conversationId, mode = 'agentic') {
     if (!this.enabled) {
       console.log(`[VIZTA_OPENPIPE] ⚠️ OpenPipe deshabilitado, delegando a sistema tradicional`);
       return await this.vizta.executeAgenticFallback(userMessage, user, conversationId);
@@ -28,7 +28,7 @@ class ViztaOpenPipeIntegration {
       const startTime = Date.now();
       
       // PASO 1: Obtener decisión del modelo fine-tuneado
-      const openPipeResult = await openPipeService.processViztaQuery(userMessage, user, conversationId);
+      const openPipeResult = await openPipeService.processViztaQuery(userMessage, user, conversationId, mode);
       
       if (!openPipeResult.success) {
         console.log(`[VIZTA_OPENPIPE] ❌ Error en OpenPipe, usando fallback`);

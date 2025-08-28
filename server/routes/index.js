@@ -14,6 +14,7 @@ const nitterCommentProxyRoutes = require('./nitterComment');
 const tweetCommentsRoutes = require('./tweetComments');
 const aiRoutes = require('./ai');
 const mapsRoutes = require('./maps');
+const webAgentRoutes = require('./webAgent');
 const path = require('path');
 const capturadosRoutes = require('./capturados');
 const coveragesRoutes = require('./coverages');
@@ -100,6 +101,9 @@ function setupRoutes(app) {
   // Configurar rutas de IA (Gemini)
   app.use('/api/ai', aiRoutes);
 
+  // Configurar rutas de WebAgent Proxy
+  app.use('/api/webagent', webAgentRoutes);
+
   // Nueva ruta para agrupación de Codex
   require('./codexGroups')(app);
 
@@ -134,7 +138,8 @@ function setupRoutes(app) {
         '/api/capturados',
         '/api/sondeos',
         '/api/project-suggestions',
-        '/api/codex-groups'
+        '/api/codex-groups',
+        '/api/webagent'
       ]
     });
   });
