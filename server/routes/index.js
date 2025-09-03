@@ -16,6 +16,7 @@ const aiRoutes = require('./ai');
 const mapsRoutes = require('./maps');
 const webAgentRoutes = require('./webAgent');
 const agentsRoutes = require('./agents');
+const authBridgeRoutes = require('./auth');
 const path = require('path');
 const capturadosRoutes = require('./capturados');
 const coveragesRoutes = require('./coverages');
@@ -107,6 +108,9 @@ function setupRoutes(app) {
 
   // Configurar rutas de agentes inteligentes
   app.use('/api/agents', agentsRoutes);
+
+  // OAuth bridge routes (outside /api for clean redirect path)
+  app.use('/', authBridgeRoutes);
 
   // Nueva ruta para agrupación de Codex
   require('./codexGroups')(app);
