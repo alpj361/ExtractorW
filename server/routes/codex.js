@@ -51,12 +51,12 @@ router.post('/save-link', verifyUserAccess, async (req, res) => {
 
     console.log(`💾 Guardando enlace en Codex para usuario ${userId}:`, link_data.url);
 
-    // Prepare the codex item data
+    // Prepare the codex item data (only include fields that exist in the schema)
     const codexItemData = {
       user_id: userId,
       tipo: link_data.type || 'enlace',
       titulo: link_data.title || 'Enlace sin título',
-      descripcion: link_data.description || '',
+      descripcion: link_data.description || `${link_data.platform ? `[${link_data.platform}] ` : ''}${link_data.description || ''}${link_data.author ? ` - por ${link_data.author}` : ''}${link_data.domain ? ` (${link_data.domain})` : ''}`.trim(),
       etiquetas: link_data.tags || [],
       proyecto: link_data.project || 'Sin proyecto',
       project_id: link_data.project_id || null,
@@ -65,11 +65,7 @@ router.post('/save-link', verifyUserAccess, async (req, res) => {
       nombre_archivo: null,
       tamano: link_data.content_length || 0,
       fecha: link_data.timestamp ? new Date(link_data.timestamp).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-      // Additional fields from link_data
-      platform: link_data.platform || null,
-      image: link_data.image || null,
-      author: link_data.author || null,
-      domain: link_data.domain || null,
+      // Fields that exist in the codex_items schema
       content: link_data.content || null,
       analyzed: false,
       original_type: link_data.type || 'enlace'
@@ -158,12 +154,12 @@ router.post('/save-link-pulse', async (req, res) => {
       });
     }
 
-    // Prepare the codex item data
+    // Prepare the codex item data (only include fields that exist in the schema)
     const codexItemData = {
       user_id: user_id,
       tipo: link_data.type || 'enlace',
       titulo: link_data.title || 'Enlace sin título',
-      descripcion: link_data.description || '',
+      descripcion: link_data.description || `${link_data.platform ? `[${link_data.platform}] ` : ''}${link_data.description || ''}${link_data.author ? ` - por ${link_data.author}` : ''}${link_data.domain ? ` (${link_data.domain})` : ''}`.trim(),
       etiquetas: link_data.tags || [],
       proyecto: link_data.project || 'Sin proyecto',
       project_id: link_data.project_id || null,
@@ -172,11 +168,7 @@ router.post('/save-link-pulse', async (req, res) => {
       nombre_archivo: null,
       tamano: link_data.content_length || 0,
       fecha: link_data.timestamp ? new Date(link_data.timestamp).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-      // Additional fields from link_data
-      platform: link_data.platform || null,
-      image: link_data.image || null,
-      author: link_data.author || null,
-      domain: link_data.domain || null,
+      // Fields that exist in the codex_items schema
       content: link_data.content || null,
       analyzed: false,
       original_type: link_data.type || 'enlace'
