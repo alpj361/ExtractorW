@@ -115,6 +115,9 @@ function setupRoutes(app) {
   // Nueva ruta para agrupación de Codex
   require('./codexGroups')(app);
 
+  // Configurar rutas generales de Codex
+  require('./codex')(app);
+
   // Healthcheck route
   app.get('/api/health', (req, res) => {
     res.json({
@@ -147,6 +150,7 @@ function setupRoutes(app) {
         '/api/sondeos',
         '/api/project-suggestions',
         '/api/codex-groups',
+        '/api/codex',
         '/api/webagent',
         '/api/agents/generate-agent-code'
       ]
