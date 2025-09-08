@@ -117,6 +117,113 @@ router.post('/save-link', verifyUserAccess, async (req, res) => {
 });
 
 /**
+ * POST /api/codex/save-link-pulse
+ * Save a link/item to the Codex using Pulse user authentication
+ * This is an alternative endpoint that doesn't require Supabase session
+ */
+router.post('/save-link-pulse', async (req, res) => {
+  const { user_id, link_data, pulse_user_email } = req.body || {};
+
+  // Validate required fields
+  if (!user_id || !link_data || !pulse_user_email) {
+    return res.status(400).json({
+      error: 'Parámetros faltantes',
+      message: 'Se requieren user_id, link_data y pulse_user_email'
+    });
+  }
+
+  if (!link_data.url) {
+    return res.status(400).json({
+      error: 'Datos de enlace incompletos',
+      message: 'Se requiere url en link_data'
+    });
+  }
+
+  try {
+    console.log(`💾 Guardando enlace en Codex para usuario Pulse ${user_id}:`, link_data.url);
+
+    // Verify that the Pulse user exists in the database
+    const { data: pulseUser, error: userError } = await supabase
+      .from('profiles')
+      .select('id, email')
+      .eq('id', user_id)
+      .eq('email', pulse_user_email)
+      .single();
+
+    if (userError || !pulseUser) {
+      console.error('❌ Pulse user verification failed:', userError);
+      return res.status(403).json({
+        error: 'Usuario no válido',
+        message: 'No se pudo verificar el usuario de Pulse Journal'
+      });
+    }
+
+    // Prepare the codex item data
+    const codexItemData = {
+      user_id: user_id,
+      tipo: link_data.type || 'enlace',
+      titulo: link_data.title || 'Enlace sin título',
+      descripcion: link_data.description || '',
+      etiquetas: link_data.tags || [],
+      proyecto: link_data.project || 'Sin proyecto',
+      project_id: link_data.project_id || null,
+      storage_path: null,
+      url: link_data.url,
+      nombre_archivo: null,
+      tamano: link_data.content_length || 0,
+      fecha: link_data.timestamp ? new Date(link_data.timestamp).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+      // Additional fields from link_data
+      platform: link_data.platform || null,
+      image: link_data.image || null,
+      author: link_data.author || null,
+      domain: link_data.domain || null,
+      content: link_data.content || null,
+      analyzed: false,
+      original_type: link_data.type || 'enlace'
+    };
+
+    // Insert the item into codex_items
+    const { data: insertedItem, error: insertError } = await supabase
+      .from('codex_items')
+      .insert([codexItemData])
+      .select('*')
+      .single();
+
+    if (insertError) {
+      console.error('❌ Error insertando item en Codex:', insertError);
+      return res.status(500).json({
+        error: 'Error guardando en Codex',
+        message: insertError.message
+      });
+    }
+
+    console.log(`✅ Enlace guardado exitosamente en Codex: ${insertedItem.id}`);
+
+    // Log usage
+    await logUsage('/api/codex/save-link-pulse', user_id, {
+      item_id: insertedItem.id,
+      url: link_data.url,
+      type: link_data.type || 'enlace'
+    });
+
+    return res.json({
+      success: true,
+      id: insertedItem.id,
+      item: insertedItem,
+      message: 'Enlace guardado exitosamente en Codex'
+    });
+
+  } catch (error) {
+    console.error('❌ Error en /api/codex/save-link-pulse:', error);
+    await logError('/api/codex/save-link-pulse', error, { id: user_id }, req);
+    return res.status(500).json({
+      error: 'Error interno',
+      message: error.message || 'Error procesando guardado en Codex'
+    });
+  }
+});
+
+/**
  * GET /api/codex/items
  * Get user's codex items with optional filtering
  */
