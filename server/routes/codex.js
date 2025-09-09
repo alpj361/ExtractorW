@@ -360,6 +360,111 @@ router.delete('/items/:id', verifyUserAccess, async (req, res) => {
   }
 });
 
+/**
+ * POST /api/codex/check-link
+ * Check if a single link exists in the user's codex
+ */
+router.post('/check-link', async (req, res) => {
+  const { user_id, pulse_user_email, url } = req.body || {};
+
+  if (!user_id || !url) {
+    return res.status(400).json({
+      error: 'Parámetros faltantes',
+      message: 'Se requieren user_id y url'
+    });
+  }
+
+  try {
+    // Check if link exists in codex_items
+    const { data: existingItem, error } = await supabase
+      .from('codex_items')
+      .select('id')
+      .eq('user_id', user_id)
+      .eq('url', url)
+      .single();
+
+    if (error && error.code !== 'PGRST116') { // PGRST116 = no rows found
+      console.error('Error checking link existence:', error);
+      return res.status(500).json({
+        error: 'Error del servidor',
+        message: 'No se pudo verificar si el enlace existe'
+      });
+    }
+
+    const exists = !!existingItem;
+    
+    res.json({
+      success: true,
+      exists: exists,
+      id: existingItem?.id || null
+    });
+
+  } catch (error) {
+    console.error('Error in check-link endpoint:', error);
+    res.status(500).json({
+      error: 'Error del servidor',
+      message: 'Error interno del servidor'
+    });
+  }
+});
+
+/**
+ * POST /api/codex/check-multiple-links
+ * Check if multiple links exist in the user's codex
+ */
+router.post('/check-multiple-links', async (req, res) => {
+  const { user_id, pulse_user_email, urls } = req.body || {};
+
+  if (!user_id || !urls || !Array.isArray(urls)) {
+    return res.status(400).json({
+      error: 'Parámetros faltantes',
+      message: 'Se requieren user_id y urls (array)'
+    });
+  }
+
+  try {
+    // Check if links exist in codex_items
+    const { data: existingItems, error } = await supabase
+      .from('codex_items')
+      .select('id, url')
+      .eq('user_id', user_id)
+      .in('url', urls);
+
+    if (error) {
+      console.error('Error checking multiple links existence:', error);
+      return res.status(500).json({
+        error: 'Error del servidor',
+        message: 'No se pudo verificar si los enlaces existen'
+      });
+    }
+
+    // Create a map of URL -> { exists: boolean, id?: string }
+    const linkStatus = {};
+    
+    // Initialize all URLs as not existing
+    urls.forEach(url => {
+      linkStatus[url] = { exists: false };
+    });
+    
+    // Update with existing items
+    existingItems.forEach(item => {
+      linkStatus[item.url] = { exists: true, id: item.id };
+    });
+    
+    res.json({
+      success: true,
+      linkStatus: linkStatus
+    });
+
+  } catch (error) {
+    console.error('Error in check-multiple-links endpoint:', error);
+    res.status(500).json({
+      error: 'Error del servidor',
+      message: 'Error interno del servidor'
+    });
+  }
+});
+
 function setupCodexRoutes(app) {
   app.use('/api/codex', router);
 }
