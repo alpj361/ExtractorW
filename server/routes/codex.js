@@ -465,6 +465,151 @@ router.post('/check-multiple-links', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/codex/save-recording
+ * Save an audio recording to the Codex
+ */
+router.post('/save-recording', verifyUserAccess, async (req, res) => {
+  const { user_id, recording_data } = req.body || {};
+
+  if (!user_id || !recording_data) {
+    return res.status(400).json({
+      error: 'Parámetros faltantes',
+      message: 'Se requieren user_id y recording_data'
+    });
+  }
+
+  if (!recording_data.title || !recording_data.audio_uri) {
+    return res.status(400).json({
+      error: 'Datos de grabación incompletos',
+      message: 'Se requiere title y audio_uri en recording_data'
+    });
+  }
+
+  try {
+    const userId = req.user.id;
+    
+    // Verify that the user_id matches the authenticated user
+    if (userId !== user_id) {
+      return res.status(403).json({
+        error: 'Acceso denegado',
+        message: 'No tienes permisos para guardar grabaciones para este usuario'
+      });
+    }
+
+    // Create codex item for audio recording
+    const { data: codexItem, error } = await supabase
+      .from('codex_items')
+      .insert({
+        user_id: userId,
+        tipo: 'audio',
+        titulo: recording_data.title,
+        descripcion: recording_data.transcription || 'Grabación de audio',
+        url: recording_data.audio_uri,
+        fecha: new Date(recording_data.timestamp).toISOString().split('T')[0],
+        storage_path: recording_data.audio_uri,
+        tamano: 0, // Will be updated when file is processed
+        is_drive: false,
+        original_type: 'audio_recording',
+        content: recording_data.transcription || '',
+        audio_transcription: recording_data.transcription || '',
+        analyzed: !!recording_data.transcription,
+      })
+      .select('id')
+      .single();
+
+    if (error) {
+      console.error('Error saving recording to codex:', error);
+      return res.status(500).json({
+        error: 'Error del servidor',
+        message: 'No se pudo guardar la grabación en el Codex'
+      });
+    }
+
+    await logUsage('/api/codex/save-recording', req.user, req);
+    
+    res.json({
+      success: true,
+      id: codexItem.id,
+      message: 'Grabación guardada en Codex exitosamente'
+    });
+
+  } catch (error) {
+    console.error('Error in save-recording endpoint:', error);
+    await logError('/api/codex/save-recording', error, req.user, req);
+    res.status(500).json({
+      error: 'Error del servidor',
+      message: 'Error interno del servidor'
+    });
+  }
+});
+
+/**
+ * POST /api/codex/save-recording-pulse
+ * Save an audio recording to the Codex using Pulse authentication
+ */
+router.post('/save-recording-pulse', async (req, res) => {
+  const { user_id, pulse_user_email, recording_data } = req.body || {};
+
+  if (!user_id || !recording_data) {
+    return res.status(400).json({
+      error: 'Parámetros faltantes',
+      message: 'Se requieren user_id y recording_data'
+    });
+  }
+
+  if (!recording_data.title || !recording_data.audio_uri) {
+    return res.status(400).json({
+      error: 'Datos de grabación incompletos',
+      message: 'Se requiere title y audio_uri en recording_data'
+    });
+  }
+
+  try {
+    // Create codex item for audio recording
+    const { data: codexItem, error } = await supabase
+      .from('codex_items')
+      .insert({
+        user_id: user_id,
+        tipo: 'audio',
+        titulo: recording_data.title,
+        descripcion: recording_data.transcription || 'Grabación de audio',
+        url: recording_data.audio_uri,
+        fecha: new Date(recording_data.timestamp).toISOString().split('T')[0],
+        storage_path: recording_data.audio_uri,
+        tamano: 0, // Will be updated when file is processed
+        is_drive: false,
+        original_type: 'audio_recording',
+        content: recording_data.transcription || '',
+        audio_transcription: recording_data.transcription || '',
+        analyzed: !!recording_data.transcription,
+      })
+      .select('id')
+      .single();
+
+    if (error) {
+      console.error('Error saving recording to codex:', error);
+      return res.status(500).json({
+        error: 'Error del servidor',
+        message: 'No se pudo guardar la grabación en el Codex'
+      });
+    }
+
+    res.json({
+      success: true,
+      id: codexItem.id,
+      message: 'Grabación guardada en Codex exitosamente'
+    });
+
+  } catch (error) {
+    console.error('Error in save-recording-pulse endpoint:', error);
+    res.status(500).json({
+      error: 'Error del servidor',
+      message: 'Error interno del servidor'
+    });
+  }
+});
+
 function setupCodexRoutes(app) {
   app.use('/api/codex', router);
 }
