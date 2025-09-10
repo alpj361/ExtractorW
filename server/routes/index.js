@@ -20,6 +20,7 @@ const capturadosRoutes = require('./capturados');
 const coveragesRoutes = require('./coverages');
 const express = require('express');
 const { verifyUserAccess } = require('../middlewares/auth');
+const codexRoutes = require('./codex');
 
 /**
  * Configura todas las rutas de la aplicación
@@ -107,6 +108,9 @@ function setupRoutes(app) {
   // Nueva ruta para agrupación de Codex
   require('./codexGroups')(app);
 
+  // Rutas de Codex (guardar enlaces, grabaciones, listados)
+  codexRoutes(app);
+
   // Healthcheck route
   app.get('/api/health', (req, res) => {
     res.json({
@@ -139,6 +143,7 @@ function setupRoutes(app) {
         '/api/sondeos',
         '/api/project-suggestions',
         '/api/codex-groups',
+        '/api/codex',
         '/api/webagent'
       ]
     });
