@@ -15,8 +15,6 @@ const tweetCommentsRoutes = require('./tweetComments');
 const aiRoutes = require('./ai');
 const mapsRoutes = require('./maps');
 const webAgentRoutes = require('./webAgent');
-const agentsRoutes = require('./agents');
-const authBridgeRoutes = require('./auth');
 const path = require('path');
 const capturadosRoutes = require('./capturados');
 const coveragesRoutes = require('./coverages');
@@ -106,17 +104,8 @@ function setupRoutes(app) {
   // Configurar rutas de WebAgent Proxy
   app.use('/api/webagent', webAgentRoutes);
 
-  // Configurar rutas de agentes inteligentes
-  app.use('/api/agents', agentsRoutes);
-
-  // OAuth bridge routes (outside /api for clean redirect path)
-  app.use('/', authBridgeRoutes);
-
   // Nueva ruta para agrupación de Codex
   require('./codexGroups')(app);
-
-  // Configurar rutas generales de Codex
-  require('./codex')(app);
 
   // Healthcheck route
   app.get('/api/health', (req, res) => {
@@ -150,9 +139,7 @@ function setupRoutes(app) {
         '/api/sondeos',
         '/api/project-suggestions',
         '/api/codex-groups',
-        '/api/codex',
-        '/api/webagent',
-        '/api/agents/generate-agent-code'
+        '/api/webagent'
       ]
     });
   });

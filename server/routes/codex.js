@@ -68,7 +68,12 @@ router.post('/save-link', verifyUserAccess, async (req, res) => {
       // Fields that exist in the codex_items schema
       content: link_data.content || null,
       analyzed: false,
-      original_type: link_data.type || 'enlace'
+      original_type: link_data.type || 'enlace',
+      // Engagement metrics for social media posts
+      likes: link_data.engagement?.likes || 0,
+      comments: link_data.engagement?.comments || 0,
+      shares: link_data.engagement?.shares || 0,
+      views: link_data.engagement?.views || 0
     };
 
     // Insert the item into codex_items
@@ -171,7 +176,12 @@ router.post('/save-link-pulse', async (req, res) => {
       // Fields that exist in the codex_items schema
       content: link_data.content || null,
       analyzed: false,
-      original_type: link_data.type || 'enlace'
+      original_type: link_data.type || 'enlace',
+      // Engagement metrics for social media posts
+      likes: link_data.engagement?.likes || 0,
+      comments: link_data.engagement?.comments || 0,
+      shares: link_data.engagement?.shares || 0,
+      views: link_data.engagement?.views || 0
     };
 
     // Insert the item into codex_items
