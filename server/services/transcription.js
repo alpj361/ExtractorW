@@ -7,7 +7,7 @@ const supabase = require('../utils/supabase');
 const execAsync = promisify(exec);
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_TRANSCRIBE_MODEL = (process.env.TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe').trim();
+const OPENAI_TRANSCRIBE_MODEL = 'whisper-1';
 const OPENAI_VISION_MODEL = (process.env.IMAGE_TRANSCRIBE_MODEL || 'gpt-4o-mini').trim();
 
 const TEMP_DIR = '/tmp/audio_transcriptions';
@@ -54,21 +54,27 @@ async function transcribeWithOpenAI(audioPath, options = {}) {
   try {
     if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY no configurada');
     if (!fs.existsSync(audioPath)) throw new Error(`Archivo de audio no encontrado: ${audioPath}`);
-    const fileStream = fs.createReadStream(audioPath);
 
+    // Leer el archivo como buffer
+    const fileBuffer = fs.readFileSync(audioPath);
+    
     const form = new (require('form-data'))();
     form.append('model', OPENAI_TRANSCRIBE_MODEL);
-    form.append('file', fileStream, path.basename(audioPath));
+    form.append('file', fileBuffer, {
+      filename: path.basename(audioPath),
+      contentType: 'audio/wav'
+    });
     if (options.language) form.append('language', options.language);
     if (options.prompt) form.append('prompt', options.prompt);
 
-    const resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` },
-      body: form
+    const axios = require('axios');
+    const resp = await axios.post('https://api.openai.com/v1/audio/transcriptions', form, {
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        ...form.getHeaders()
+      }
     });
-    if (!resp.ok) { const t = await resp.text(); throw new Error(`OpenAI transcribe error: ${resp.status} ${resp.statusText} - ${t}`); }
-    const data = await resp.json();
+    const data = resp.data;
     const transcription = data.text || '';
 
     return {

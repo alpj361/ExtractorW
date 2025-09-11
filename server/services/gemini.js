@@ -3,7 +3,7 @@ require('dotenv').config();
 
 /**
  * Servicio para interactuar con la API Generative Language de Google (Gemini).
- * Actualmente usa el modelo "gemini-1.5-flash-latest" (Gemini Flash).
+ * Actualmente usa el modelo "gemini-2.5-flash" (Gemini 2.5 Flash).
  * Si necesitas razonamiento más profundo, puedes usar "deepseek-llm" en el futuro.
  */
 class GeminiService {
@@ -13,7 +13,7 @@ class GeminiService {
       console.warn('⚠️  GEMINI_API_KEY no definido en variables de entorno.');
     }
     this.baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models';
-    this.model = 'gemini-1.5-flash-latest';
+    this.model = 'gemini-2.5-flash';
   }
 
   /**
