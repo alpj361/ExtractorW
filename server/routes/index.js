@@ -21,6 +21,7 @@ const coveragesRoutes = require('./coverages');
 const express = require('express');
 const { verifyUserAccess } = require('../middlewares/auth');
 const codexRoutes = require('./codex');
+const instagramRoutes = require('./instagram');
 
 /**
  * Configura todas las rutas de la aplicación
@@ -111,6 +112,9 @@ function setupRoutes(app) {
   // Rutas de Codex (guardar enlaces, grabaciones, listados)
   codexRoutes(app);
 
+  // Configurar rutas de Instagram (comentarios y análisis)
+  app.use('/api/instagram', instagramRoutes);
+
   // Healthcheck route
   app.get('/api/health', (req, res) => {
     res.json({
@@ -144,7 +148,8 @@ function setupRoutes(app) {
         '/api/project-suggestions',
         '/api/codex-groups',
         '/api/codex',
-        '/api/webagent'
+        '/api/webagent',
+        '/api/instagram'
       ]
     });
   });
