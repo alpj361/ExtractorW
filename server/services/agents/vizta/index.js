@@ -23,6 +23,11 @@ class ViztaAgent {
       enabled: (process.env.LAURA_MEMORY_ENABLED || 'true').toLowerCase() === 'true'
     });
 
+    this.openaiConfigured = Boolean(process.env.OPENAI_API_KEY);
+    if (!this.openaiConfigured) {
+      console.warn('[VIZTA] ⚠️ OPENAI_API_KEY not configured, using conversational fallbacks.');
+    }
+
     // Available tools
     this.availableTools = [
       'nitter_context',
@@ -163,6 +168,11 @@ Respond in JSON format:
    * Generate conversational response using AI
    */
   async generateConversationalResponse(userMessage, intentAnalysis) {
+    const start = Date.now();
+    if (!this.openaiConfigured) {
+      return this.buildConversationalFallback(userMessage, intentAnalysis, 'missing_api_key');
+    }
+
     try {
       const prompt = `Generate a natural, friendly response to this conversational message:
 
@@ -186,29 +196,48 @@ Respond in Spanish naturally:`;
         temperature: 0.7,
         max_tokens: 150
       });
+      const messageContent = response?.choices?.[0]?.message?.content;
+      const normalizedResponse = Array.isArray(messageContent)
+        ? messageContent.map(part => (typeof part === 'string' ? part : part?.text || '')).join('').trim()
+        : (messageContent || '').trim();
 
-      return response.choices[0].message.content.trim();
+      if (!normalizedResponse) {
+        throw new Error('Empty response from OpenAI conversational call');
+      }
+
+      console.log(`[VIZTA] 🤖 OpenAI conversational reply generated in ${Date.now() - start}ms`);
+      return normalizedResponse;
 
     } catch (error) {
-      console.log(`[VIZTA] ⚠️ AI conversation generation failed:`, error.message);
-
-      // Fallback responses
-      const lowerMessage = userMessage.toLowerCase();
-
-      if (/hola|hi|hello/.test(lowerMessage)) {
-        return "¡Hola! Soy Vizta, tu asistente de análisis político y social. ¿En qué puedo ayudarte?";
-      }
-
-      if (/gracias|thank/.test(lowerMessage)) {
-        return "¡De nada! Estoy aquí para ayudarte con lo que necesites.";
-      }
-
-      if (/cómo estás|como estas|how are you/.test(lowerMessage)) {
-        return "¡Muy bien! ¿En qué puedo ayudarte hoy?";
-      }
-
-      return "¡Hola! Soy Vizta, tu asistente. ¿En qué puedo ayudarte?";
+      const errorInfo = error?.response?.data?.error?.message || error?.message || 'unknown error';
+      console.error(`[VIZTA] ⚠️ AI conversation generation failed: ${errorInfo}`);
+      return this.buildConversationalFallback(userMessage, intentAnalysis, 'openai_error');
     }
+  }
+
+  buildConversationalFallback(userMessage, intentAnalysis = {}, reason = 'fallback') {
+    const lowerMessage = (userMessage || '').toLowerCase();
+    const element = intentAnalysis?.conversationalElement;
+
+    console.log(`[VIZTA] 🔁 Using conversational fallback (${reason}) for element=${element || 'unknown'}`);
+
+    if (element === 'greeting' || /hola|hi|hello/.test(lowerMessage)) {
+      return "¡Hola! Soy Vizta, tu asistente de análisis político y social. Estoy lista para ayudarte con información o análisis cuando quieras.";
+    }
+
+    if (element === 'thanks' || /gracias|thank/.test(lowerMessage)) {
+      return "¡Con gusto! Si necesitas más información o algún análisis, aquí estoy para apoyarte.";
+    }
+
+    if (/cómo estás|como estas|how are you/.test(lowerMessage)) {
+      return "¡Todo bien por aquí! ¿Sobre qué tema político o social te gustaría que trabajemos?";
+    }
+
+    if (element === 'question' || /funciones|qué puedes hacer|que puedes hacer|ayuda|puedes ayudar/.test(lowerMessage)) {
+      return "Soy Vizta y puedo ayudarte a investigar temas, buscar tendencias en redes, revisar tus proyectos y consultar tu Codex personal. ¿Con qué te gustaría empezar?";
+    }
+
+    return "Soy Vizta, tu asistente de análisis. Cuéntame qué necesitas y preparo la información para ti.";
   }
 
   /**
@@ -276,9 +305,15 @@ Respond in Spanish naturally:`;
    * Fallback handler
    */
   async handleFallback(userMessage, user) {
+    const cleanedMessage = typeof userMessage === 'string' ? userMessage.trim() : '';
+    if (!cleanedMessage) {
+      console.log('[VIZTA] ⚠️ handleFallback invoked without a valid message.');
+      return "No pude procesar tu consulta en este momento. ¿Podrías intentar de nuevo?";
+    }
+
     try {
       const result = await mcpService.executeTool('perplexity_search', {
-        q: userMessage,
+        query: cleanedMessage,
         location: 'Guatemala',
         focus: 'general'
       }, user);
@@ -297,43 +332,63 @@ Respond in Spanish naturally:`;
    * Execute specific tool with smart parameters
    */
   async executeSpecificTool(toolName, userMessage, user) {
-    const baseParams = { q: userMessage };
+    const cleanedMessage = typeof userMessage === 'string' ? userMessage.trim() : '';
+
+    if (!cleanedMessage) {
+      throw new Error(`Mensaje del usuario inválido para ejecutar ${toolName}`);
+    }
+
+    const baseParams = { q: cleanedMessage };
+    const queryParams = { query: cleanedMessage };
+    const previewMessage = cleanedMessage.length > 120 ? `${cleanedMessage.slice(0, 117)}...` : cleanedMessage;
+
+    console.log(`[VIZTA] 🔍 Preparing tool '${toolName}' with message="${previewMessage}"`);
+
+    const logAndExecute = async (name, params) => {
+      const serialized = JSON.stringify(params);
+      const preview = serialized.length > 160 ? `${serialized.slice(0, 157)}...` : serialized;
+      console.log(`[VIZTA] 🔧 Executing ${name} with params: ${preview}`);
+      return await mcpService.executeTool(name, params, user);
+    };
 
     switch (toolName) {
       case 'nitter_context':
-        return await mcpService.executeTool('nitter_context', {
+        return await logAndExecute('nitter_context', {
           ...baseParams,
           location: 'guatemala',
           limit: 15
-        }, user);
+        });
 
       case 'perplexity_search':
-        return await mcpService.executeTool('perplexity_search', {
-          ...baseParams,
+        return await logAndExecute('perplexity_search', {
+          ...queryParams,
           location: 'Guatemala',
           focus: this.detectFocus(userMessage)
-        }, user);
+        });
 
       case 'latest_trends':
-        return await mcpService.executeTool('latest_trends', {
-          ...baseParams,
+        return await logAndExecute('latest_trends', {
           location: 'guatemala',
           limit: 10
-        }, user);
+        });
 
       case 'user_projects':
-        return await mcpService.executeTool('user_projects', {}, user);
+        return await logAndExecute('user_projects', {});
 
       case 'user_codex':
-        return await mcpService.executeTool('user_codex', {
-          searchQuery: userMessage
-        }, user);
+        return await logAndExecute('user_codex', {
+          query: cleanedMessage
+        });
 
       case 'nitter_profile':
-        return await mcpService.executeTool('nitter_profile', baseParams, user);
+        return await logAndExecute('nitter_profile', {
+          username: cleanedMessage
+        });
 
       case 'resolve_twitter_handle':
-        return await mcpService.executeTool('resolve_twitter_handle', baseParams, user);
+        return await logAndExecute('resolve_twitter_handle', {
+          name: cleanedMessage
+        });
 
       default:
         throw new Error(`Unknown tool: ${toolName}`);

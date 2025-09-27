@@ -1257,8 +1257,10 @@ Enfócate EXCLUSIVAMENTE en información actual, relevante y verificable de ${cu
 
     console.log(`📡 Realizando búsqueda web con Perplexity Search API...`);
 
-    // First use the new Search API to get current web results
-    const searchResponse = await fetch('https://api.perplexity.ai/search', {
+    const searchTimeoutMs = Number(process.env.PERPLEXITY_SEARCH_TIMEOUT_MS || 4000);
+    const searchController = new AbortController();
+    const searchStart = Date.now();
+    const searchPromise = fetch('https://api.perplexity.ai/search', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
@@ -1266,16 +1268,45 @@ Enfócate EXCLUSIVAMENTE en información actual, relevante y verificable de ${cu
       },
       body: JSON.stringify({
         query: optimizedQuery,
-        max_results: 15,
-        country: 'GT', // Guatemala
-        max_tokens_per_page: 2048
-      })
+        max_results: 10,
+        country: 'GT',
+        max_tokens_per_page: 1024
+      }),
+      signal: searchController.signal
+    }).then(async response => {
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        throw new Error(`Error en API de Perplexity Search: ${response.status} ${response.statusText} ${errorText}`.trim());
+      }
+      return response.json();
+    }).catch(error => {
+      if (error.name === 'AbortError') {
+        return { aborted: true };
+      }
+      throw error;
     });
 
     let searchData = null;
-    if (searchResponse.ok) {
-      searchData = await searchResponse.json();
-      console.log(`   📊 Obtained ${searchData.results?.length || 0} search results from Perplexity Search API`);
+    let searchDurationMs = null;
+    try {
+      const searchOutcome = await Promise.race([
+        searchPromise,
+        new Promise(resolve => setTimeout(() => resolve({ timeout: true }), searchTimeoutMs))
+      ]);
+
+      if (searchOutcome?.timeout) {
+        searchController.abort();
+        console.log(`[VIZTA] ⏱️ Perplexity Search API excedió ${searchTimeoutMs}ms, continuando sin contexto enriquecido.`);
+      } else if (searchOutcome?.aborted) {
+        console.log(`[VIZTA] ⚠️ Perplexity Search abortada por timeout externo.`);
+      } else if (searchOutcome) {
+        searchData = searchOutcome;
+        searchDurationMs = Date.now() - searchStart;
+        console.log(`   📊 Obtained ${searchData.results?.length || 0} search results from Perplexity Search API in ${searchDurationMs}ms`);
+      }
+    } catch (searchError) {
+      searchController.abort();
+      console.log(`[VIZTA] ⚠️ Perplexity Search API failed: ${searchError.message}`);
     }
 
     // Now use Chat Completions for analysis with search context
@@ -1291,20 +1322,85 @@ Enfócate EXCLUSIVAMENTE en información actual, relevante y verificable de ${cu
       payload.messages[0].content += `\n\nCONTEXTO DE BÚSQUEDA WEB ACTUAL:\n${searchContext}\n\nUsa esta información actualizada para tu análisis.`;
     }
 
-    const response = await fetch('https://api.perplexity.ai/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
+    const chatTimeoutMs = Number(process.env.PERPLEXITY_CHAT_TIMEOUT_MS || 6000);
+    const chatController = new AbortController();
+    const chatStart = Date.now();
+    let response;
+
+    try {
+      response = await Promise.race([
+        fetch('https://api.perplexity.ai/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload),
+          signal: chatController.signal
+        }),
+        new Promise((_, reject) => setTimeout(() => {
+          chatController.abort();
+          reject(new Error(`Perplexity chat timeout after ${chatTimeoutMs}ms`));
+        }, chatTimeoutMs))
+      ]);
+    } catch (chatError) {
+      console.log(`[VIZTA] ⚠️ Perplexity chat completion failed: ${chatError.message}`);
+
+      if (searchData?.results?.length) {
+        const quickSummary = searchData.results.slice(0, 5).map((result, index) => {
+          const dateLabel = result.date ? ` (${result.date})` : '';
+          return `${index + 1}. ${result.title || 'Resultado'}${dateLabel}\n   ${result.snippet || ''}\n   Fuente: ${result.url}`;
+        }).join('\n\n');
+
+        const fallbackResponse = `BÚSQUEDA WEB COMPLETADA PARA: "${query}"
+
+Resumen rápido basado en los resultados recientes:
+${quickSummary}
+
+(Generado directamente desde Perplexity Search; el análisis avanzado no estuvo disponible a tiempo.)`;
+
+        return {
+          success: true,
+          query_original: query,
+          query_optimized: optimizedQuery,
+          location,
+          focus,
+          web_search_result: { raw_response: fallbackResponse },
+          search_results: searchData?.results || [],
+          nitter_optimization: null,
+          formatted_response: fallbackResponse,
+          analysis_result: fallbackResponse,
+          metadata: {
+            search_performed: true,
+            perplexity_model: 'sonar',
+            search_api_used: true,
+            search_results_count: searchData?.results?.length || 0,
+            response_length: fallbackResponse.length,
+            json_parsed: false,
+            nitter_optimization_included: false,
+            timestamp: new Date().toISOString(),
+            fallback_mode: 'search_summary',
+            search_duration_ms: searchDurationMs,
+            chat_duration_ms: Date.now() - chatStart,
+            timeout_thresholds_ms: {
+              search: searchTimeoutMs,
+              chat: chatTimeoutMs
+            }
+          }
+        };
+      }
+
+      throw chatError;
+    }
 
     if (!response.ok) {
-      throw new Error(`Error en API de Perplexity: ${response.status} ${response.statusText}`);
+      const errorText = await response.text().catch(() => '');
+      throw new Error(`Error en API de Perplexity: ${response.status} ${response.statusText} ${errorText}`.trim());
     }
 
     const data = await response.json();
+    const chatDurationMs = Date.now() - chatStart;
+    console.log(`[VIZTA] 🤖 Perplexity chat completions completed in ${chatDurationMs}ms`);
     
     if (!data.choices || !data.choices[0] || !data.choices[0].message) {
       throw new Error('Respuesta inválida de Perplexity API');
@@ -1391,7 +1487,13 @@ Contexto: ${location}`;
         response_length: rawResponse.length,
         json_parsed: parsedResult !== null,
         nitter_optimization_included: nitterOptimization !== null,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        search_duration_ms: searchDurationMs,
+        chat_duration_ms: chatDurationMs,
+        timeout_thresholds_ms: {
+          search: searchTimeoutMs,
+          chat: chatTimeoutMs
+        }
       }
     };
 
@@ -2329,4 +2431,4 @@ module.exports = {
   expandSearchTerms,
   enhanceSearchTermsWithPerplexity,
   AVAILABLE_TOOLS
-}; 
+};
