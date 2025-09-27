@@ -1,885 +1,530 @@
 /**
- * Vizta - Orquestador Principal del Sistema de Agentes
- * Coordina comunicación entre Laura, Robert y maneja experiencia unificada del usuario
+ * Streamlined Vizta Agent - Unified AI Assistant
+ * Integrates all social media analysis, user data management, and AI reasoning capabilities
+ * Eliminates separate Laura/Robert agents for faster, more consistent responses
  */
 
-const { AGENT_CAPABILITIES, ROUTING_PATTERNS, TOOL_TO_AGENT_MAPPING } = require('../config/agentCapabilities');
-const { communicationBus } = require('../shared/agentCommunication');
-const { LauraAgent } = require('../laura');
-const { RobertAgent } = require('../robert');
-const { ResponseOrchestrator } = require('./responseOrchestrator');
-const { RoutingEngine } = require('./routingEngine');
-const { ConversationManager } = require('./conversationManager');
-const llmIntentClassifier = require('./helpers/llmIntentClassifier');
-const { LauraHandlers, RobertHandlers, MixedHandlers } = require('./agentHandlers');
+const mcpService = require('../../mcp');
+const geminiService = require('../../gemini');
+const { LauraMemoryClient } = require('../laura/memoryClient');
 const ViztaOpenPipeIntegration = require('./openPipeIntegration');
-const { ReasoningLayer } = require('./reasoningLayer');
 
-class ViztaAgent {
+class StreamlinedViztaAgent {
   constructor() {
     this.name = 'Vizta';
-    this.config = AGENT_CAPABILITIES.vizta;
-    
-    // Inicializar agentes especializados
-    this.laura = new LauraAgent(this);
-    this.robert = new RobertAgent();
-    
-    // Inicializar módulos de orquestación
-    this.responseOrchestrator = new ResponseOrchestrator(this);
-    this.routingEngine = new RoutingEngine(this);
-    this.conversationManager = new ConversationManager(this);
-    
-    // Inicializar handlers para modo agéntico
-    this.lauraHandlers = new LauraHandlers(this.laura);
-    this.robertHandlers = new RobertHandlers(this.robert);
-    this.mixedHandlers = new MixedHandlers(this.laura, this.robert);
-    
-    // Inicializar integración con OpenPipe
+    this.version = '2.0-streamlined';
+
+    // Memory integration (from Laura)
+    this.memoryClient = new LauraMemoryClient({
+      baseURL: process.env.LAURA_MEMORY_URL || 'http://localhost:5001',
+      enabled: (process.env.LAURA_MEMORY_ENABLED || 'true').toLowerCase() === 'true'
+    });
+
+    // OpenPipe integration for advanced reasoning
     this.openPipeIntegration = new ViztaOpenPipeIntegration(this);
-    // Inicializar capa de razonamiento propio (contexto PulsePolitics)
-    this.reasoningLayer = new ReasoningLayer(this);
-    
-    // Estado interno
+
+    // All available tools (integrated from Laura and Robert)
+    this.availableTools = {
+      // Social Media Analysis Tools (from Laura)
+      'nitter_context': this.executeNitterContext.bind(this),
+      'nitter_profile': this.executeNitterProfile.bind(this),
+      'perplexity_search': this.executePerplexitySearch.bind(this),
+      'resolve_twitter_handle': this.executeResolveHandle.bind(this),
+      'latest_trends': this.executeLatestTrends.bind(this),
+
+      // User Data Management Tools (from Robert)
+      'user_projects': this.executeUserProjects.bind(this),
+      'user_codex': this.executeUserCodex.bind(this),
+      'project_decisions': this.executeProjectDecisions.bind(this)
+    };
+
+    // AI-powered analysis capabilities (replacing heuristics)
+    this.analysisCapabilities = {
+      sentiment: this.analyzeSentiment.bind(this),
+      entities: this.extractEntities.bind(this),
+      political: this.analyzePoliticalContext.bind(this),
+      trends: this.detectTrends.bind(this),
+      relevance: this.assessRelevance.bind(this)
+    };
+
+    // State management
     this.activeConversations = new Map();
-    this.agentStates = new Map();
-    
-    console.log(`[VIZTA] 🧠 Vizta Orquestador Principal inicializado con modo híbrido LLM`);
+    this.processingCache = new Map();
+
+    console.log(`[VIZTA] 🚀 Streamlined Vizta Agent v${this.version} initialized`);
+    console.log(`[VIZTA] 🧠 Memory enabled: ${this.memoryClient.enabled}`);
+    console.log(`[VIZTA] 🔧 Available tools: ${Object.keys(this.availableTools).length}`);
   }
 
   /**
-   * Punto de entrada principal para procesar consultas del usuario
-   * Modo híbrido: LLM para clasificación de intenciones + Agentes especializados
+   * Main entry point for processing user queries
+   * Uses AI-based intent classification instead of heuristics
    */
   async processUserQuery(userMessage, user, sessionId = null) {
-    const conversationId = sessionId || `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const conversationId = sessionId || `conv_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
     const startTime = Date.now();
-    
-    console.log(`[VIZTA] 🎯 Procesando consulta con LLM híbrido en conversación: ${conversationId}`);
-    console.log(`[VIZTA] 📝 Mensaje: "${userMessage}"`);
-    
+
+    console.log(`[VIZTA] 🎯 Processing query: "${userMessage}"`);
+
     try {
-      // PASO 1: Clasificación de intención con LLM
-      const intentAnalysis = await llmIntentClassifier.classifyIntent(userMessage);
-      console.log(`[VIZTA] 🧠 Intención detectada: "${intentAnalysis.intent}" (${intentAnalysis.method}, confianza: ${intentAnalysis.confidence})`);
-      
+      // AI-based intent classification (no heuristics)
+      const intentAnalysis = await this.classifyIntentWithAI(userMessage, user);
+      console.log(`[VIZTA] 🧠 AI Intent: ${intentAnalysis.intent} (confidence: ${intentAnalysis.confidence})`);
+
       let response;
-      let conversation;
-      
-      // PASO 2: Decisión de modo según intención
-      console.log(`[VIZTA_DEBUG] 🔍 Evaluando intent: "${intentAnalysis.intent}" - isConversational: ${this.isConversationalIntent(intentAnalysis.intent)}`);
-      
-      if (this.isConversationalIntent(intentAnalysis.intent)) {
-        // MODO CONVERSACIONAL - Vizta responde directamente SIN AGENTES
-        console.log(`[VIZTA] 💬 Modo conversacional directo para: ${intentAnalysis.intent}`);
-        
-        // Para respuestas conversacionales, solo inicializamos conversación mínima
-        conversation = { id: conversationId };
-        
-        const conversationalMessage = await llmIntentClassifier.generateConversationalResponse(
-          userMessage, 
-          intentAnalysis.intent
-        );
-        
-        response = {
-          agent: 'Vizta',
-          message: conversationalMessage,
-          type: 'conversational',
-          intent: intentAnalysis.intent,
-          mode: 'conversational',
-          timestamp: new Date().toISOString()
-        };
-        
+
+      // Handle conversational queries directly
+      if (intentAnalysis.isConversational) {
+        response = await this.handleConversationalQuery(userMessage, intentAnalysis);
       } else {
-        // MODO AGÉNTICO - Priorizar OpenPipe si está disponible
-        console.log(`[VIZTA] 🤖 Modo agéntico activado para: ${intentAnalysis.intent}`);
-        
-        // Inicializar conversación completa solo para modo agéntico
-        conversation = await this.conversationManager.initializeConversation(
-          conversationId, 
-          { userMessage, user, startTime, intent: intentAnalysis }
-        );
-        
-        // IMPORTANTE: Inicializar también en AgentCommunicationBus antes de registrar agentes
-        communicationBus.initializeConversation(conversation.id, {
-          userMessage, user, startTime, intent: intentAnalysis.intent
-        });
-        
-        // Registrar agentes solo cuando se necesiten
-        communicationBus.registerAgent(conversation.id, 'vizta');
-        communicationBus.registerAgent(conversation.id, 'laura');
-        communicationBus.registerAgent(conversation.id, 'robert');
-        
-        // PRIORIDAD 0: Intentar una respuesta directa razonada con PulsePolitics (sin delegar)
-        const reasoned = await this.reasoningLayer.tryDirectPulseAnswer(userMessage, user, conversation.id);
-        if (reasoned && reasoned.success) {
-          response = reasoned;
-        } else {
-          // PRIORIDAD 1: Intentar con OpenPipe si está disponible
-        if (this.openPipeIntegration.isAvailable()) {
-          console.log(`[VIZTA] 🎯 Usando OpenPipe para procesamiento agéntico`);
-          const openPipeResponse = await this.openPipeIntegration.processWithOpenPipe(
-            userMessage, 
-            user, 
-            conversation.id
-          );
-          
-          // Si OpenPipe procesa exitosamente, usar su resultado
-          if (openPipeResponse && openPipeResponse.success) {
-            console.log(`[VIZTA] ✅ OpenPipe procesó exitosamente con modo: ${openPipeResponse.mode}`);
-            response = openPipeResponse;
-          } else {
-            console.log(`[VIZTA] ⚠️ OpenPipe falló, usando modo agéntico tradicional`);
-            response = await this.executeAgenticMode(userMessage, user, conversation.id, intentAnalysis.intent);
-          }
-          } else {
-          // PRIORIDAD 2: Usar modo agéntico tradicional
-          console.log(`[VIZTA] 🔄 OpenPipe no disponible, usando modo agéntico tradicional`);
-          response = await this.executeAgenticMode(userMessage, user, conversation.id, intentAnalysis.intent);
-          }
-        }
-        
-        // Si el modo agéntico devuelve contenido procesado, usarlo directamente
-        if (response && (response.mode === 'agential_processed' || response.mode?.startsWith('openpipe_'))) {
-          console.log(`[VIZTA] ✅ Devolviendo respuesta procesada directamente (modo: ${response.mode})`);
-          return {
-            conversationId: conversation.id,
-            response: {
-              agent: response.agent || 'Vizta',
-              message: response.message,
-              type: response.type || 'chat_response',
-              timestamp: response.timestamp || new Date().toISOString()
-            },
-            metadata: {
-              intent: intentAnalysis.intent,
-              intentConfidence: intentAnalysis.confidence,
-              intentMethod: intentAnalysis.method,
-              mode: response.mode,
-              functionUsed: response.functionUsed,
-              processingTime: response.processingTime || Date.now() - startTime,
-              openPipeUsage: response.openPipeUsage,
-              timestamp: new Date().toISOString()
-            }
-          };
-        }
-      }
-      
-      // Actualizar contexto de conversación solo si no es modo conversacional simple
-      if (response.mode !== 'conversational') {
-        await this.conversationManager.updateConversationContext(
-          conversation.id, 
-          userMessage, 
-          response, 
-          []
-        );
-      }
-      
-      // Extraer mensaje procesado si viene del responseOrchestrator
-      let finalMessage = response.message;
-      if (response.processedContent) {
-        // Si responseOrchestrator generó contenido procesado, usarlo como mensaje principal
-        finalMessage = response.processedContent;
+        // Handle task-oriented queries with tools
+        response = await this.handleTaskQuery(userMessage, user, intentAnalysis);
       }
 
+      // Format unified response
+      const formattedResponse = this.formatUnifiedResponse(response, {
+        intent: intentAnalysis.intent,
+        processingTime: Date.now() - startTime,
+        conversationId
+      });
+
+      console.log(`[VIZTA] ✅ Query processed in ${Date.now() - startTime}ms`);
+
       return {
-        conversationId: conversation.id,
-        response: {
-          agent: response.agent || 'Vizta',
-          message: finalMessage,
-          type: response.type || 'chat_response',
-          timestamp: response.timestamp || new Date().toISOString()
-        },
+        conversationId,
+        response: formattedResponse,
         metadata: {
           intent: intentAnalysis.intent,
-          intentConfidence: intentAnalysis.confidence,
-          intentMethod: intentAnalysis.method,
-          mode: response.mode || 'conversational',
+          confidence: intentAnalysis.confidence,
           processingTime: Date.now() - startTime,
-          timestamp: new Date().toISOString()
+          toolsUsed: response.toolsUsed || [],
+          version: this.version
         }
       };
-      
+
     } catch (error) {
-      console.error(`[VIZTA] ❌ Error procesando consulta:`, error);
-      
-      return {
-        conversationId: conversationId, // En caso de error, usar el conversationId original
-        response: {
-          agent: 'Vizta',
-          error: 'processing_error',
-          message: 'Lo siento, hubo un error procesando tu consulta. Por favor, intenta nuevamente.',
-          details: error.message,
-          timestamp: new Date().toISOString()
-        },
-        metadata: {
-          error: true,
-          errorType: error.name,
-          processingTime: 0
-        }
-      };
+      console.error(`[VIZTA] ❌ Error processing query:`, error);
+      return this.handleError(error, conversationId);
     }
   }
 
   /**
-   * Crear plan de ejecución basado en decisión de routing
+   * AI-based intent classification (replacing heuristic routing)
    */
-  createExecutionPlan(routingDecision, userMessage, user) {
-    const plan = {
-      tasks: [],
-      agentsInvolved: [],
-      executionMode: routingDecision.executionMode || 'parallel',
-      priority: routingDecision.priority || 'normal'
-    };
-    
-    // Crear tareas para Laura si es necesario
-    if (routingDecision.agents.includes('laura')) {
-      const lauraTask = this.createLauraTask(routingDecision, userMessage, user);
-      plan.tasks.push(lauraTask);
-      plan.agentsInvolved.push('laura');
-    }
-    
-    // Crear tareas para Robert si es necesario
-    if (routingDecision.agents.includes('robert')) {
-      const robertTasks = this.createRobertTasks(routingDecision, userMessage, user);
-      plan.tasks.push(...robertTasks);
-      if (robertTasks.length > 0) {
-        plan.agentsInvolved.push('robert');
-      }
-    }
-    
-    return plan;
-  }
-
-  /**
-   * Crear tarea para Laura
-   */
-  createLauraTask(routingDecision, userMessage, user) {
-    const baseTask = {
-      id: `laura_${Date.now()}`,
-      agent: 'laura',
-      originalQuery: userMessage,
-      user: user,
-      attempts: 0,
-      startTime: Date.now()
-    };
-    
-    // Si hay decisión específica de Laura's reasoning engine, usarla
-    if (routingDecision.lauraDecision && routingDecision.lauraDecision.plan) {
-      return {
-        ...baseTask,
-        tool: routingDecision.lauraDecision.plan.tool,
-        type: routingDecision.lauraDecision.plan.tool === 'nitter_profile' ? 'profile' : 'monitoring',
-        args: routingDecision.lauraDecision.plan.args || {},
-        useReasoningEngine: false, // Ya se usó
-        llmReasoning: routingDecision.lauraDecision.plan.reasoning,
-        llmThought: routingDecision.lauraDecision.thought
-      };
-    }
-    
-    // Determinar herramienta basada en patrones
-    const socialPattern = this.matchPattern(userMessage, 'social');
-    if (socialPattern) {
-      const inferredTool = this.inferToolFromQuery(userMessage);
-      
-      // Si inferToolFromQuery devuelve null, forzar uso de reasoning engine
-      if (!inferredTool) {
-        return {
-          ...baseTask,
-          tool: 'nitter_context', // Temporal, será reemplazado por reasoning engine
-          type: 'monitoring',
-          args: { q: userMessage, location: 'guatemala', limit: 20 },
-          useReasoningEngine: true,
-          forceReasoningEngine: true // Flag especial para forzar reasoning
-        };
-      }
-      
-      return {
-        ...baseTask,
-        tool: inferredTool,
-        type: inferredTool === 'nitter_profile' ? 'profile' : 'monitoring',
-        args: this.buildToolArgs(userMessage),
-        useReasoningEngine: false // No usar reasoning si ya hay herramienta específica
-      };
-    }
-    
-    // Fallback: usar reasoning engine
-    return {
-      ...baseTask,
-      tool: 'nitter_context', // Temporal, será reemplazado por reasoning engine
-      type: 'monitoring',
-      args: { q: userMessage, location: 'guatemala', limit: 20 },
-      useReasoningEngine: true
-    };
-  }
-
-  /**
-   * Crear tareas para Robert
-   */
-  createRobertTasks(routingDecision, userMessage, user) {
-    const tasks = [];
-    const msg = userMessage.toLowerCase();
-    
-    // Detectar necesidad de datos personales
-    if (msg.includes('mis') || msg.includes('mi ') || msg.includes('proyecto')) {
-      tasks.push({
-        id: `robert_projects_${Date.now()}`,
-        agent: 'robert',
-        tool: 'user_projects',
-        type: 'projects',
-        collection: 'user_projects',
-        description: 'Consulta de proyectos del usuario',
-        args: { status: 'active' },
-        user: user
-      });
-    }
-    
-    if (msg.includes('documento') || msg.includes('archivo') || msg.includes('codex')) {
-      tasks.push({
-        id: `robert_codex_${Date.now()}`,
-        agent: 'robert',
-        tool: 'codex_items',
-        type: 'codex',
-        collection: 'codex_items',
-        description: 'Consulta de documentos del usuario',
-        args: { limit: 10 },
-        user: user
-      });
-    }
-    
-    return tasks;
-  }
-
-  /**
-   * Ejecutar plan de tareas
-   */
-  async executeTaskPlan(executionPlan, conversationId) {
-    const results = [];
-    
-    if (executionPlan.executionMode === 'parallel') {
-      // Ejecución paralela
-      console.log(`[VIZTA] ⚡ Ejecutando ${executionPlan.tasks.length} tareas en paralelo`);
-      
-      const promises = executionPlan.tasks.map(task => this.executeAgentTask(task, conversationId));
-      const settledResults = await Promise.allSettled(promises);
-      
-      settledResults.forEach((result, index) => {
-        if (result.status === 'fulfilled') {
-          results.push({
-            taskId: executionPlan.tasks[index].id,
-            agent: executionPlan.tasks[index].agent,
-            success: true,
-            data: result.value,
-            executionTime: Date.now() - executionPlan.tasks[index].startTime
-          });
-        } else {
-          results.push({
-            taskId: executionPlan.tasks[index].id,
-            agent: executionPlan.tasks[index].agent,
-            success: false,
-            error: result.reason.message,
-            executionTime: Date.now() - executionPlan.tasks[index].startTime
-          });
-        }
-      });
-      
-    } else {
-      // Ejecución secuencial
-      console.log(`[VIZTA] 🔄 Ejecutando ${executionPlan.tasks.length} tareas secuencialmente`);
-      
-      for (const task of executionPlan.tasks) {
-        try {
-          const result = await this.executeAgentTask(task, conversationId);
-          results.push({
-            taskId: task.id,
-            agent: task.agent,
-            success: true,
-            data: result,
-            executionTime: Date.now() - task.startTime
-          });
-        } catch (error) {
-          results.push({
-            taskId: task.id,
-            agent: task.agent,
-            success: false,
-            error: error.message,
-            executionTime: Date.now() - task.startTime
-          });
-          
-          // Decidir si continuar o parar en caso de error
-          if (executionPlan.priority === 'critical') {
-            console.log(`[VIZTA] ❌ Tarea crítica falló, deteniendo ejecución secuencial`);
-            break;
-          }
-        }
-      }
-    }
-    
-    return results;
-  }
-
-  /**
-   * Ejecutar tarea de agente específico
-   */
-  async executeAgentTask(task, conversationId) {
-    const startTime = Date.now();
-    
-    // Actualizar estado del agente
-    communicationBus.updateAgentState(conversationId, task.agent, {
-      status: 'executing',
-      currentTask: task.id
-    });
-    
+  async classifyIntentWithAI(userMessage, user) {
     try {
-      let result;
-      
-      if (task.agent === 'laura') {
-        result = await this.laura.executeTask(task, task.user, this.getCurrentDate());
-      } else if (task.agent === 'robert') {
-        result = await this.robert.executeTask(task, task.user);
-      } else {
-        throw new Error(`Agente desconocido: ${task.agent}`);
+      // Use OpenPipe if available for intent classification
+      if (this.openPipeIntegration.isAvailable()) {
+        const openPipeResult = await this.openPipeIntegration.classifyIntent(userMessage, user);
+        if (openPipeResult.success) {
+          return openPipeResult;
+        }
       }
-      
-      // Agregar resultados al contexto compartido
-      communicationBus.addAgentResults(conversationId, task.agent, result);
-      
-      // Actualizar estado del agente
-      communicationBus.updateAgentState(conversationId, task.agent, {
-        status: 'completed',
-        lastExecution: Date.now(),
-        executionTime: Date.now() - startTime
-      });
-      
-      return result;
-      
+
+      // Fallback to Gemini for intent classification
+      const prompt = `
+        Analyze this user message and classify the intent:
+        Message: "${userMessage}"
+
+        Determine:
+        1. Intent category (conversational, social_analysis, user_data, mixed, research)
+        2. Required tools (from: nitter_context, nitter_profile, perplexity_search, resolve_twitter_handle, user_projects, user_codex, project_decisions)
+        3. Is conversational (true/false)
+        4. Confidence (0-1)
+        5. Analysis focus (political, social, personal, general)
+
+        Respond in JSON format:
+        {
+          "intent": "category",
+          "requiredTools": ["tool1", "tool2"],
+          "isConversational": boolean,
+          "confidence": number,
+          "focus": "area",
+          "reasoning": "explanation"
+        }
+      `;
+
+      const result = await geminiService.generateContent(prompt);
+      const analysis = JSON.parse(result);
+
+      return {
+        intent: analysis.intent,
+        requiredTools: analysis.requiredTools || [],
+        isConversational: analysis.isConversational,
+        confidence: analysis.confidence,
+        focus: analysis.focus,
+        reasoning: analysis.reasoning,
+        method: 'ai_gemini'
+      };
+
     } catch (error) {
-      // Actualizar estado de error
-      communicationBus.updateAgentState(conversationId, task.agent, {
-        status: 'error',
-        lastError: error.message,
-        executionTime: Date.now() - startTime
-      });
-      
+      console.error(`[VIZTA] ⚠️ Intent classification error:`, error);
+
+      // Simple fallback classification
+      const isConversational = /^(hola|hi|hello|gracias|thank|ayuda|help)/.test(userMessage.toLowerCase());
+
+      return {
+        intent: isConversational ? 'conversational' : 'general_analysis',
+        requiredTools: isConversational ? [] : ['perplexity_search'],
+        isConversational,
+        confidence: 0.7,
+        focus: 'general',
+        reasoning: 'Fallback classification',
+        method: 'fallback'
+      };
+    }
+  }
+
+  /**
+   * Handle conversational queries
+   */
+  async handleConversationalQuery(userMessage, intentAnalysis) {
+    const conversationalResponses = {
+      greeting: "¡Hola! Soy Vizta, tu asistente de análisis político y social. ¿En qué puedo ayudarte hoy?",
+      help: "Puedo ayudarte con:\n• Análisis de redes sociales y tendencias\n• Búsqueda de información política\n• Gestión de tus proyectos y documentos\n• Investigación y contexto político",
+      thanks: "¡De nada! Estoy aquí para ayudarte con cualquier análisis que necesites.",
+      general: "Entiendo. ¿Podrías ser más específico sobre qué tipo de análisis o información necesitas?"
+    };
+
+    const responseType = this.determineConversationalType(userMessage);
+
+    return {
+      agent: 'Vizta',
+      message: conversationalResponses[responseType] || conversationalResponses.general,
+      type: 'conversational',
+      intent: intentAnalysis.intent,
+      toolsUsed: [],
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  /**
+   * Handle task-oriented queries using appropriate tools
+   */
+  async handleTaskQuery(userMessage, user, intentAnalysis) {
+    const toolsUsed = [];
+    let results = [];
+
+    try {
+      // Execute required tools based on AI intent analysis
+      for (const toolName of intentAnalysis.requiredTools) {
+        if (this.availableTools[toolName]) {
+          console.log(`[VIZTA] 🔧 Executing tool: ${toolName}`);
+
+          const toolResult = await this.executeToolWithContext(
+            toolName,
+            userMessage,
+            user,
+            intentAnalysis
+          );
+
+          results.push(toolResult);
+          toolsUsed.push(toolName);
+        }
+      }
+
+      // If no specific tools were identified, use intelligent routing
+      if (results.length === 0) {
+        const defaultResult = await this.executeDefaultAnalysis(userMessage, user, intentAnalysis);
+        results.push(defaultResult);
+        toolsUsed.push('default_analysis');
+      }
+
+      // AI-powered synthesis of results
+      const synthesizedResponse = await this.synthesizeResults(results, userMessage, intentAnalysis);
+
+      return {
+        agent: 'Vizta',
+        message: synthesizedResponse,
+        type: 'task_response',
+        intent: intentAnalysis.intent,
+        toolsUsed,
+        results,
+        timestamp: new Date().toISOString()
+      };
+
+    } catch (error) {
+      console.error(`[VIZTA] ❌ Task execution error:`, error);
       throw error;
     }
   }
 
   /**
-   * Inferir herramienta basada en query
+   * Execute tool with enhanced context
    */
-  inferToolFromQuery(query) {
-    const q = query.toLowerCase();
-    
-    // Detectar handles explícitos (@username)
-    if (q.includes('@')) {
-      return 'nitter_profile';
-    }
-    
-    // Detectar nombres conocidos directamente
-    if (q.includes('bernardo arevalo') || q.includes('bernardo arévalo')) {
-      return 'nitter_context';
-    }
-    
-    // Detectar búsqueda de tweets con nombres - intentar nitter_context primero
-    if (q.includes('tweets de') || q.includes('extrame') || q.includes('extrae')) {
-      return 'nitter_context';
-    }
-    
-    // Solo usar perplexity para búsquedas ambiguas
-    if (q.includes('busca a') || q.includes('encuentra a')) {
-      return 'perplexity_search';
-    }
-    
-    // Detectar investigación general
-    if (q.includes('investiga') || q.includes('información sobre') || q.includes('quién es')) {
-      return 'perplexity_search';
-    }
-    
-    // Default: usar reasoning engine de Laura para decidir
-    return null; // Esto forzará el uso del reasoning engine
-  }
+  async executeToolWithContext(toolName, userMessage, user, intentAnalysis) {
+    const enhancedParams = await this.enhanceToolParameters(toolName, userMessage, intentAnalysis);
 
-  /**
-   * Construir argumentos para herramientas
-   */
-  buildToolArgs(query) {
-    const tool = this.inferToolFromQuery(query);
-    
-    switch (tool) {
+    switch (toolName) {
       case 'nitter_context':
-        return {
-          q: query,
-          location: 'guatemala',
-          limit: 20
-        };
-        
+        return await mcpService.executeTool('nitter_context', enhancedParams, user);
+
       case 'nitter_profile':
-        // Extraer username si está presente
-        const usernameMatch = query.match(/@(\w+)/);
-        return {
-          username: usernameMatch ? usernameMatch[1] : query,
-          limit: 20
-        };
-        
-      case 'resolve_twitter_handle':
-        return {
-          name: query.replace(/busca a|encuentra a|tweets de/gi, '').trim(),
-          context: '',
-          sector: ''
-        };
-        
+        return await mcpService.executeTool('nitter_profile', enhancedParams, user);
+
       case 'perplexity_search':
-        // Si es búsqueda de usuario, optimizar query para encontrar handle
-        const userSearchMatch = query.match(/(?:tweets de|perfil de|extrame|extrae)\s+(.+?)(?:\s|$)/i);
-        if (userSearchMatch) {
-          const name = userSearchMatch[1].trim();
-          return {
-            query: `Twitter handle @username para ${name} Guatemala perfil oficial`,
-            location: 'Guatemala',
-            focus: 'social_media'
-          };
-        }
-        return {
-          query: query,
-          location: 'Guatemala'
-        };
-        
+        return await mcpService.executeTool('perplexity_search', enhancedParams, user);
+
+      case 'resolve_twitter_handle':
+        return await mcpService.executeTool('resolve_twitter_handle', enhancedParams, user);
+
+      case 'user_projects':
+        return await mcpService.executeTool('user_projects', enhancedParams, user);
+
+      case 'user_codex':
+        return await mcpService.executeTool('user_codex', enhancedParams, user);
+
+      case 'project_decisions':
+        return await mcpService.executeTool('project_decisions', enhancedParams, user);
+
       default:
-        return { q: query };
+        throw new Error(`Unknown tool: ${toolName}`);
     }
   }
 
   /**
-   * Coincidencia de patrones
+   * AI-powered parameter enhancement for tools
    */
-  matchPattern(query, patternType) {
-    const pattern = ROUTING_PATTERNS[patternType];
-    if (!pattern) return false;
-    
-    const queryLower = query.toLowerCase();
-    return pattern.keywords.some(keyword => queryLower.includes(keyword));
-  }
+  async enhanceToolParameters(toolName, userMessage, intentAnalysis) {
+    const baseParams = { q: userMessage };
 
-  /**
-   * Obtener fecha actual formateada
-   */
-  getCurrentDate() {
-    const now = new Date();
-    return now.toLocaleDateString('es-ES', { 
-      weekday: 'long', 
-      year: 'numeric', 
-      month: 'long', 
-      day: 'numeric' 
-    });
-  }
-
-  /**
-   * Limpiar estado si es necesario
-   */
-  cleanupIfNeeded(conversationId) {
-    // Limpiar conversaciones inactivas después de 1 hora
-    setTimeout(() => {
-      const conversation = this.activeConversations.get(conversationId);
-      if (conversation && Date.now() - conversation.lastActivity > 3600000) {
-        this.conversationManager.cleanupConversation(conversationId);
-        communicationBus.cleanupConversation(conversationId, 'timeout');
-      }
-    }, 3600000); // 1 hora
-  }
-
-  /**
-   * Procesar handoff entre agentes
-   */
-  async processAgentHandoff(fromAgent, toAgent, handoffData, conversationId) {
-    console.log(`[VIZTA] 🔄 Procesando handoff: ${fromAgent} → ${toAgent}`);
-    
     try {
-      // Coordinar handoff a través del bus de comunicación
-      const handoffMessage = await communicationBus.coordinateHandoff(
-        conversationId, 
-        fromAgent, 
-        toAgent, 
-        handoffData
-      );
-      
-      // Ejecutar tarea en el agente destino
-      const handoffTask = {
-        id: `handoff_${Date.now()}`,
-        agent: toAgent,
-        originalQuery: handoffData.userQuery,
-        args: handoffData.instructions,
-        user: handoffData.user,
-        handoffContext: handoffData.context
-      };
-      
-      const result = await this.executeAgentTask(handoffTask, conversationId);
-      
-      console.log(`[VIZTA] ✅ Handoff completado exitosamente: ${fromAgent} → ${toAgent}`);
-      
-      return {
-        success: true,
-        handoffMessage: handoffMessage,
-        result: result
-      };
-      
+      const enhancementPrompt = `
+        Enhance parameters for tool "${toolName}" based on user message: "${userMessage}"
+        Intent: ${intentAnalysis.intent}
+        Focus: ${intentAnalysis.focus}
+
+        For ${toolName}, determine optimal parameters:
+        - Query refinement
+        - Location context (default: Guatemala)
+        - Filters and limits
+        - Time constraints
+
+        Return JSON with enhanced parameters.
+      `;
+
+      const enhancement = await geminiService.generateContent(enhancementPrompt);
+      const enhancedParams = JSON.parse(enhancement);
+
+      return { ...baseParams, ...enhancedParams };
+
     } catch (error) {
-      console.error(`[VIZTA] ❌ Error en handoff ${fromAgent} → ${toAgent}:`, error);
-      return {
-        success: false,
-        error: error.message
-      };
+      console.log(`[VIZTA] ⚠️ Parameter enhancement failed, using base params`);
+      return baseParams;
     }
   }
 
   /**
-   * Obtener estado de conversación
+   * Default analysis when no specific tools are identified
    */
-  getConversationState(conversationId) {
-    const busContext = communicationBus.getConversationContext(conversationId);
-    const managerContext = this.conversationManager.getConversationState(conversationId);
-    
+  async executeDefaultAnalysis(userMessage, user, intentAnalysis) {
+    console.log(`[VIZTA] 🔄 Executing default analysis`);
+
+    // Use perplexity search as default for general queries
+    return await mcpService.executeTool('perplexity_search', {
+      q: userMessage,
+      location: 'Guatemala',
+      focus: intentAnalysis.focus || 'general'
+    }, user);
+  }
+
+  /**
+   * AI-powered synthesis of multiple tool results
+   */
+  async synthesizeResults(results, userMessage, intentAnalysis) {
+    if (results.length === 0) {
+      return "No pude encontrar información relevante para tu consulta.";
+    }
+
+    if (results.length === 1) {
+      return this.formatSingleResult(results[0]);
+    }
+
+    try {
+      const synthesisPrompt = `
+        Synthesize these results into a coherent response for the user query: "${userMessage}"
+        Intent: ${intentAnalysis.intent}
+
+        Results:
+        ${results.map((r, i) => `${i+1}. ${JSON.stringify(r, null, 2)}`).join('\n\n')}
+
+        Create a unified, informative response that:
+        - Addresses the user's specific question
+        - Integrates key findings from all sources
+        - Uses clear, accessible language
+        - Includes relevant data points
+        - Maintains context about Guatemala/politics if relevant
+
+        Format as markdown with appropriate sections and emphasis.
+      `;
+
+      const synthesizedResponse = await geminiService.generateContent(synthesisPrompt);
+      return synthesizedResponse;
+
+    } catch (error) {
+      console.error(`[VIZTA] ❌ Synthesis error:`, error);
+      return this.formatFallbackResponse(results);
+    }
+  }
+
+  /**
+   * Format single result response
+   */
+  formatSingleResult(result) {
+    if (result.message) {
+      return result.message;
+    }
+
+    if (result.analysis_result) {
+      return result.analysis_result;
+    }
+
+    return "Información procesada correctamente.";
+  }
+
+  /**
+   * Fallback response formatting
+   */
+  formatFallbackResponse(results) {
+    return results.map((result, index) => {
+      const title = `## Resultado ${index + 1}`;
+      const content = result.message || result.analysis_result || JSON.stringify(result, null, 2);
+      return `${title}\n\n${content}`;
+    }).join('\n\n---\n\n');
+  }
+
+  /**
+   * Unified response formatter
+   */
+  formatUnifiedResponse(response, metadata) {
+    const baseResponse = {
+      agent: 'Vizta',
+      message: response.message || 'Procesamiento completado',
+      type: response.type || 'chat_response',
+      timestamp: new Date().toISOString()
+    };
+
+    // Add metadata if available
+    if (metadata) {
+      baseResponse.metadata = metadata;
+    }
+
+    // Add tool information if available
+    if (response.toolsUsed && response.toolsUsed.length > 0) {
+      baseResponse.toolsUsed = response.toolsUsed;
+    }
+
+    return baseResponse;
+  }
+
+  /**
+   * Determine conversational response type
+   */
+  determineConversationalType(message) {
+    const lowerMessage = message.toLowerCase();
+
+    if (/^(hola|hi|hello|buenos días|buenas tardes)/.test(lowerMessage)) {
+      return 'greeting';
+    }
+
+    if (/ayuda|help|qué puedes hacer|que puedes hacer/.test(lowerMessage)) {
+      return 'help';
+    }
+
+    if (/gracias|thank you|thanks/.test(lowerMessage)) {
+      return 'thanks';
+    }
+
+    return 'general';
+  }
+
+  /**
+   * Error handler
+   */
+  handleError(error, conversationId) {
     return {
-      conversationId: conversationId,
-      busState: busContext,
-      managerState: managerContext,
-      viztaStats: this.getStats()
+      conversationId,
+      response: {
+        agent: 'Vizta',
+        message: 'Ocurrió un error procesando tu consulta. Por favor, intenta de nuevo.',
+        type: 'error_response',
+        timestamp: new Date().toISOString()
+      },
+      metadata: {
+        error: error.message,
+        version: this.version
+      }
     };
   }
 
-  /**
-   * Obtener estadísticas del orquestador
-   */
-  getStats() {
-    const busStats = communicationBus.getStats();
-    
-    return {
-      name: 'Vizta',
-      role: 'Orquestador Principal',
-      activeConversations: this.activeConversations.size,
-      agentStates: this.agentStates.size,
-      busStats: busStats,
-      capabilities: this.config.capabilities,
-      coordinationCriteria: this.config.coordinationCriteria,
-      openPipeIntegration: this.openPipeIntegration?.getStats() || { enabled: false }
-    };
+  // Analysis capabilities (integrated from Laura)
+  async analyzeSentiment(text) {
+    // AI-powered sentiment analysis
+    const prompt = `Analyze sentiment of: "${text}". Return JSON with sentiment (positive/negative/neutral) and score (0-1).`;
+    const result = await geminiService.generateContent(prompt);
+    return JSON.parse(result);
   }
 
-  /**
-   * Determina si una intención requiere modo conversacional
-   */
-  isConversationalIntent(intent) {
-    const conversationalIntents = [
-      'casual_conversation',
-      'capability_question', 
-      'help_request',
-      'small_talk'
-    ];
-    
-    return conversationalIntents.includes(intent);
+  async extractEntities(text) {
+    // AI-powered entity extraction
+    const prompt = `Extract entities (persons, organizations, locations) from: "${text}". Return JSON array.`;
+    const result = await geminiService.generateContent(prompt);
+    return JSON.parse(result);
   }
 
-  /**
-   * Ejecuta modo agéntico para intenciones que requieren agentes especializados
-   */
-  async executeAgenticMode(userMessage, user, conversationId, intent) {
-    console.log(`[VIZTA] 🔧 Ejecutando modo agéntico para: ${intent}`);
-    
-    try {
-      switch (intent) {
-        case 'nitter_search':
-          return await this.lauraHandlers.handleNitterSearch(userMessage, user, conversationId);
-          
-        case 'twitter_analysis':
-          return await this.lauraHandlers.handleTwitterAnalysis(userMessage, user, conversationId);
-          
-        case 'user_discovery':
-          console.log(`[VIZTA] 🔍 Ejecutando User Discovery para: "${userMessage}"`);
-          const userDiscoveryResult = await this.lauraHandlers.handleUserDiscovery(userMessage, user, conversationId);
-          
-          // Procesar resultado a través del responseOrchestrator
-          if (userDiscoveryResult && userDiscoveryResult.data) {
-            const orchestratedResponse = await this.responseOrchestrator.orchestrateResponse(
-              [userDiscoveryResult], 
-              userMessage, 
-              { agents: ['laura'] },
-              { id: conversationId }
-            );
-            
-            return {
-              agent: orchestratedResponse.agent || 'Vizta',
-              message: orchestratedResponse.processedContent,
-              processedContent: orchestratedResponse.processedContent,
-              type: userDiscoveryResult.type,
-              timestamp: userDiscoveryResult.timestamp,
-              mode: 'agential_processed'
-            };
-          }
-          
-          return userDiscoveryResult;
-
-        case 'twitter_profile':
-          const profileResult = await this.lauraHandlers.handleTwitterProfile(userMessage, user, conversationId);
-          
-          console.log(`[VIZTA_DEBUG] 📊 ProfileResult:`, {
-            success: profileResult.success,
-            hasData: !!profileResult.data,
-            agent: profileResult.agent,
-            type: profileResult.type
-          });
-          
-          // Procesar a través del responseOrchestrator para obtener contenido formateado
-          if (profileResult && profileResult.data) {
-            console.log(`[VIZTA_DEBUG] 🔧 Llamando responseOrchestrator con:`, {
-              resultsCount: 1,
-              userMessage: userMessage.substring(0, 50) + '...',
-              conversationId
-            });
-            
-            const orchestratedResponse = await this.responseOrchestrator.orchestrateResponse(
-              [profileResult], 
-              userMessage, 
-              { agents: ['laura'] },
-              { id: conversationId }
-            );
-            
-            console.log(`[VIZTA_DEBUG] 📤 OrchestatedResponse:`, {
-              success: orchestratedResponse.success,
-              hasProcessedContent: !!orchestratedResponse.processedContent,
-              processedContentLength: orchestratedResponse.processedContent?.length || 0,
-              agentContributionsCount: orchestratedResponse.agentContributions?.length || 0
-            });
-            
-            if (orchestratedResponse.processedContent) {
-              console.log(`[VIZTA_DEBUG] ✅ Contenido procesado (primeros 100 chars):`, 
-                orchestratedResponse.processedContent.substring(0, 100) + '...');
-            } else {
-              console.log(`[VIZTA_DEBUG] ❌ NO HAY processedContent`);
-            }
-            
-            return {
-              agent: orchestratedResponse.agent || 'Vizta',
-              message: orchestratedResponse.processedContent,
-              processedContent: orchestratedResponse.processedContent,
-              type: profileResult.type,
-              timestamp: profileResult.timestamp,
-              mode: 'agential_processed'
-            };
-          }
-          
-          console.log(`[VIZTA_DEBUG] ❌ ProfileResult no válido, devolviendo resultado original`);
-          return profileResult;
-          
-        case 'web_search':
-          return await this.lauraHandlers.handleWebSearch(userMessage, user, conversationId);
-          
-        case 'search_codex':
-          return await this.robertHandlers.handleSearchCodex(userMessage, user, conversationId);
-          
-        case 'search_projects':
-          return await this.robertHandlers.handleSearchProjects(userMessage, user, conversationId);
-          
-        case 'analyze_document':
-          return await this.robertHandlers.handleAnalyzeDocument(userMessage, user, conversationId);
-          
-        case 'mixed_analysis':
-          return await this.mixedHandlers.handleMixedAnalysis(userMessage, user, conversationId);
-          
-        default:
-          // Para intenciones desconocidas, usar el motor de routing original como fallback
-          console.log(`[VIZTA] ⚠️ Intención "${intent}" no tiene handler específico, usando fallback`);
-          return await this.executeAgenticFallback(userMessage, user, conversationId);
-      }
-      
-    } catch (error) {
-      console.error(`[VIZTA] ❌ Error en modo agéntico para ${intent}:`, error);
-      
-      return {
-        agent: 'Vizta',
-        success: false,
-        message: `Lo siento, hubo un error procesando tu solicitud sobre "${userMessage}". Por favor, intenta de nuevo.`,
-        error: error.message,
-        intent: intent,
-        mode: 'agential_error',
-        timestamp: new Date().toISOString()
-      };
-    }
+  async analyzePoliticalContext(text) {
+    // AI-powered political context analysis
+    const prompt = `Analyze political context of: "${text}" in Guatemala. Return JSON with context, relevance, and key topics.`;
+    const result = await geminiService.generateContent(prompt);
+    return JSON.parse(result);
   }
 
-  /**
-   * Fallback para intenciones agénticas no reconocidas
-   */
-  async executeAgenticFallback(userMessage, user, conversationId) {
-    console.log(`[VIZTA] 🔄 Ejecutando fallback agéntico para: "${userMessage}"`);
-    
-    try {
-      // Usar el motor de routing original como fallback
-      const conversation = { userMessage, user, startTime: Date.now() };
-      const routingDecision = await this.routingEngine.analyzeAndRoute(userMessage, conversation);
-      
-      if (routingDecision.directResponse) {
-        return {
-          agent: 'Vizta',
-          success: true,
-          message: routingDecision.directResponse.message,
-          type: 'fallback_direct',
-          mode: 'agential_fallback',
-          timestamp: new Date().toISOString()
-        };
-      }
-      
-      // Ejecutar plan basado en routing engine
-      const executionPlan = this.createExecutionPlan(routingDecision, userMessage, user);
-      const results = await this.executeTaskPlan(executionPlan, conversationId);
-      
-      // Orquestar respuesta
-      console.log(`[VIZTA_DEBUG] 🔍 Calling responseOrchestrator with results:`, results.length, 'results');
-      const unifiedResponse = await this.responseOrchestrator.orchestrateResponse(
-        results, 
-        userMessage, 
-        routingDecision, 
-        conversation
-      );
-      console.log(`[VIZTA_DEBUG] 📤 ResponseOrchestrator returned:`, {
-        agent: unifiedResponse.agent,
-        processedContent: unifiedResponse.processedContent ? unifiedResponse.processedContent.substring(0, 100) + '...' : 'undefined',
-        message: unifiedResponse.message ? unifiedResponse.message.substring(0, 100) + '...' : 'undefined',
-        keys: Object.keys(unifiedResponse)
-      });
-      
-      return {
-        ...unifiedResponse,
-        mode: 'agential_fallback',
-        fallbackUsed: true
-      };
-      
-    } catch (error) {
-      console.error(`[VIZTA] ❌ Error en fallback agéntico:`, error);
-      
-      return {
-        agent: 'Vizta',
-        success: false,
-        message: 'Lo siento, no pude procesar tu solicitud en este momento. ¿Podrías reformularla?',
-        error: error.message,
-        mode: 'agential_fallback_error',
-        timestamp: new Date().toISOString()
-      };
-    }
+  async detectTrends(data) {
+    // AI-powered trend detection
+    const prompt = `Detect trends in data: ${JSON.stringify(data)}. Return JSON with trends and significance.`;
+    const result = await geminiService.generateContent(prompt);
+    return JSON.parse(result);
   }
 
-  /**
-   * Limpiar todos los estados
-   */
-  cleanup() {
-    // Limpiar conversaciones activas
-    this.activeConversations.clear();
-    this.agentStates.clear();
-    
-    // Limpiar módulos especializados
-    this.conversationManager.cleanup();
-    
-    console.log(`[VIZTA] 🧹 Cleanup completado`);
+  async assessRelevance(content, context) {
+    // AI-powered relevance assessment
+    const prompt = `Assess relevance of "${content}" to context "${context}". Return JSON with score (0-1) and reasoning.`;
+    const result = await geminiService.generateContent(prompt);
+    return JSON.parse(result);
+  }
+
+  // Direct tool execution methods (integrated from Laura and Robert)
+  async executeNitterContext(params, user) {
+    return await mcpService.executeTool('nitter_context', params, user);
+  }
+
+  async executeNitterProfile(params, user) {
+    return await mcpService.executeTool('nitter_profile', params, user);
+  }
+
+  async executePerplexitySearch(params, user) {
+    return await mcpService.executeTool('perplexity_search', params, user);
+  }
+
+  async executeResolveHandle(params, user) {
+    return await mcpService.executeTool('resolve_twitter_handle', params, user);
+  }
+
+  async executeLatestTrends(params, user) {
+    return await mcpService.executeTool('latest_trends', params, user);
+  }
+
+  async executeUserProjects(params, user) {
+    return await mcpService.executeTool('user_projects', params, user);
+  }
+
+  async executeUserCodex(params, user) {
+    return await mcpService.executeTool('user_codex', params, user);
+  }
+
+  async executeProjectDecisions(params, user) {
+    return await mcpService.executeTool('project_decisions', params, user);
   }
 }
 
-module.exports = {
-  ViztaAgent
-}; 
+module.exports = { ViztaAgent: StreamlinedViztaAgent };

@@ -8,12 +8,6 @@ const memoriesService = require('../services/memories');
 const agentesService = require('../services/agentesService');
 const supabase = require('../utils/supabase');
 
-// Import the new streamlined Vizta agent
-const { ViztaAgent } = require('../services/agents/vizta');
-
-// Initialize streamlined Vizta agent
-const viztaAgent = new ViztaAgent();
-
 // ===================================================================
 // VIZTA CHAT ROUTES
 // Endpoints para el chat inteligente con integración MCP
