@@ -1,284 +1,339 @@
 /**
- * Streamlined Vizta Agent - Unified AI Assistant
- * Integrates all social media analysis, user data management, and AI reasoning capabilities
- * Eliminates separate Laura/Robert agents for faster, more consistent responses
+ * AI-Powered Vizta Chatbot
+ * Uses AI reasoning to intelligently decide when to chat vs when to use tools
  */
 
 const mcpService = require('../../mcp');
-const geminiService = require('../../gemini');
 const { LauraMemoryClient } = require('../laura/memoryClient');
-const ViztaOpenPipeIntegration = require('./openPipeIntegration');
 
-class StreamlinedViztaAgent {
+// Simple OpenAI client for intent classification
+const OpenAI = require('openai');
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+class ViztaAgent {
   constructor() {
     this.name = 'Vizta';
-    this.version = '2.0-streamlined';
+    this.version = '3.0-ai-powered';
 
-    // Memory integration (from Laura)
+    // Memory integration
     this.memoryClient = new LauraMemoryClient({
       baseURL: process.env.LAURA_MEMORY_URL || 'http://localhost:5001',
       enabled: (process.env.LAURA_MEMORY_ENABLED || 'true').toLowerCase() === 'true'
     });
 
-    // OpenPipe integration for advanced reasoning
-    this.openPipeIntegration = new ViztaOpenPipeIntegration(this);
+    // Available tools
+    this.availableTools = [
+      'nitter_context',
+      'nitter_profile',
+      'perplexity_search',
+      'resolve_twitter_handle',
+      'latest_trends',
+      'user_projects',
+      'user_codex',
+      'project_decisions'
+    ];
 
-    // All available tools (integrated from Laura and Robert)
-    this.availableTools = {
-      // Social Media Analysis Tools (from Laura)
-      'nitter_context': this.executeNitterContext.bind(this),
-      'nitter_profile': this.executeNitterProfile.bind(this),
-      'perplexity_search': this.executePerplexitySearch.bind(this),
-      'resolve_twitter_handle': this.executeResolveHandle.bind(this),
-      'latest_trends': this.executeLatestTrends.bind(this),
-
-      // User Data Management Tools (from Robert)
-      'user_projects': this.executeUserProjects.bind(this),
-      'user_codex': this.executeUserCodex.bind(this),
-      'project_decisions': this.executeProjectDecisions.bind(this)
-    };
-
-    // AI-powered analysis capabilities (replacing heuristics)
-    this.analysisCapabilities = {
-      sentiment: this.analyzeSentiment.bind(this),
-      entities: this.extractEntities.bind(this),
-      political: this.analyzePoliticalContext.bind(this),
-      trends: this.detectTrends.bind(this),
-      relevance: this.assessRelevance.bind(this)
-    };
-
-    // State management
-    this.activeConversations = new Map();
-    this.processingCache = new Map();
-
-    console.log(`[VIZTA] 🚀 Streamlined Vizta Agent v${this.version} initialized`);
-    console.log(`[VIZTA] 🧠 Memory enabled: ${this.memoryClient.enabled}`);
-    console.log(`[VIZTA] 🔧 Available tools: ${Object.keys(this.availableTools).length}`);
+    console.log(`[VIZTA] 🧠 AI-Powered Chatbot v${this.version} initialized`);
+    console.log(`[VIZTA] 🔧 Available tools: ${this.availableTools.length}`);
   }
 
   /**
-   * Main entry point for processing user queries
-   * Uses AI-based intent classification instead of heuristics
+   * Main entry point - AI decides whether to chat or use tools
    */
   async processUserQuery(userMessage, user, sessionId = null) {
-    const conversationId = sessionId || `conv_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+    const conversationId = sessionId || `chat_${Date.now()}`;
     const startTime = Date.now();
 
-    console.log(`[VIZTA] 🎯 Processing query: "${userMessage}"`);
+    console.log(`[VIZTA] 🧠 Processing with AI: "${userMessage}"`);
 
     try {
-      // AI-based intent classification (no heuristics)
-      const intentAnalysis = await this.classifyIntentWithAI(userMessage, user);
-      console.log(`[VIZTA] 🧠 AI Intent: ${intentAnalysis.intent} (confidence: ${intentAnalysis.confidence})`);
+      // AI-powered intent classification
+      const intentAnalysis = await this.classifyIntentWithAI(userMessage);
+      console.log(`[VIZTA] 🎯 AI detected: ${intentAnalysis.intent} (${intentAnalysis.confidence})`);
 
       let response;
 
-      // Handle conversational queries directly
-      if (intentAnalysis.isConversational) {
-        response = await this.handleConversationalQuery(userMessage, intentAnalysis);
-      } else {
-        // Handle task-oriented queries with tools
-        response = await this.handleTaskQuery(userMessage, user, intentAnalysis);
+      switch (intentAnalysis.intent) {
+        case 'conversation':
+          response = await this.generateConversationalResponse(userMessage, intentAnalysis);
+          break;
+
+        case 'tool_needed':
+          response = await this.executeToolsAndRespond(userMessage, user, intentAnalysis);
+          break;
+
+        case 'hybrid':
+          response = await this.handleHybridResponse(userMessage, user, intentAnalysis);
+          break;
+
+        default:
+          response = await this.handleFallback(userMessage, user);
       }
 
-      // Format unified response
-      const formattedResponse = this.formatUnifiedResponse(response, {
-        intent: intentAnalysis.intent,
-        processingTime: Date.now() - startTime,
-        conversationId
-      });
-
-      console.log(`[VIZTA] ✅ Query processed in ${Date.now() - startTime}ms`);
-
-      return {
-        conversationId,
-        response: formattedResponse,
-        metadata: {
-          intent: intentAnalysis.intent,
-          confidence: intentAnalysis.confidence,
-          processingTime: Date.now() - startTime,
-          toolsUsed: response.toolsUsed || [],
-          version: this.version
-        }
-      };
+      return this.formatResponse(response, conversationId, startTime, intentAnalysis.intent);
 
     } catch (error) {
-      console.error(`[VIZTA] ❌ Error processing query:`, error);
-      return this.handleError(error, conversationId);
+      console.error(`[VIZTA] ❌ Error:`, error);
+      return this.formatResponse(
+        "Disculpa, tuve un problema procesando tu consulta. ¿Podrías intentar de nuevo?",
+        conversationId,
+        startTime,
+        'error'
+      );
     }
   }
 
   /**
-   * AI-based intent classification (replacing heuristic routing)
+   * AI-powered intent classification
    */
-  async classifyIntentWithAI(userMessage, user) {
+  async classifyIntentWithAI(userMessage) {
     try {
-      // Use OpenPipe if available for intent classification
-      if (this.openPipeIntegration.isAvailable()) {
-        const openPipeResult = await this.openPipeIntegration.classifyIntent(userMessage, user);
-        if (openPipeResult.success) {
-          return openPipeResult;
-        }
-      }
+      const prompt = `Analyze this user message and classify the intent:
 
-      // Fallback to Gemini for intent classification
-      const prompt = `
-        Analyze this user message and classify the intent:
-        Message: "${userMessage}"
+Message: "${userMessage}"
 
-        Determine:
-        1. Intent category (conversational, social_analysis, user_data, mixed, research)
-        2. Required tools (from: nitter_context, nitter_profile, perplexity_search, resolve_twitter_handle, user_projects, user_codex, project_decisions)
-        3. Is conversational (true/false)
-        4. Confidence (0-1)
-        5. Analysis focus (political, social, personal, general)
+Classify as one of:
+- "conversation": Pure social interaction (greetings, thanks, how are you, casual chat)
+- "tool_needed": Requires external data/tools (search, analysis, specific information)
+- "hybrid": Conversational + needs tools (e.g., "Hi, what's trending in Guatemala?")
 
-        Respond in JSON format:
-        {
-          "intent": "category",
-          "requiredTools": ["tool1", "tool2"],
-          "isConversational": boolean,
-          "confidence": number,
-          "focus": "area",
-          "reasoning": "explanation"
-        }
-      `;
+Consider these available tools:
+- nitter_context: Twitter/social media analysis
+- perplexity_search: Web search and research
+- user_projects: User's personal projects
+- user_codex: User's knowledge base
+- latest_trends: Current trending topics
 
-      const result = await geminiService.generateContent([{
-        role: 'user',
-        content: prompt
-      }]);
-      const analysis = JSON.parse(result);
+Respond in JSON format:
+{
+  "intent": "conversation|tool_needed|hybrid",
+  "confidence": 0.95,
+  "reasoning": "Brief explanation why",
+  "suggested_tools": ["tool1", "tool2"],
+  "conversational_element": "greeting|thanks|question" // if applicable
+}`;
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.1,
+        max_tokens: 200
+      });
+
+      const analysis = JSON.parse(response.choices[0].message.content);
 
       return {
         intent: analysis.intent,
-        requiredTools: analysis.requiredTools || [],
-        isConversational: analysis.isConversational,
-        confidence: analysis.confidence,
-        focus: analysis.focus,
+        confidence: analysis.confidence || 0.8,
         reasoning: analysis.reasoning,
-        method: 'ai_gemini'
+        suggestedTools: analysis.suggested_tools || [],
+        conversationalElement: analysis.conversational_element,
+        method: 'openai'
       };
 
     } catch (error) {
-      console.error(`[VIZTA] ⚠️ Intent classification error:`, error);
+      console.log(`[VIZTA] ⚠️ AI classification failed:`, error.message);
 
-      // Simple fallback classification
-      const isConversational = /^(hola|hi|hello|gracias|thank|ayuda|help)/.test(userMessage.toLowerCase());
+      // Simple fallback logic
+      const lowerMessage = userMessage.toLowerCase();
+
+      if (/^(hola|hi|hello|gracias|thank|cómo estás|como estas)/.test(lowerMessage)) {
+        return {
+          intent: 'conversation',
+          confidence: 0.7,
+          reasoning: 'Fallback pattern matching',
+          suggestedTools: [],
+          method: 'fallback'
+        };
+      }
 
       return {
-        intent: isConversational ? 'conversational' : 'general_analysis',
-        requiredTools: isConversational ? [] : ['perplexity_search'],
-        isConversational,
-        confidence: 0.7,
-        focus: 'general',
-        reasoning: 'Fallback classification',
+        intent: 'tool_needed',
+        confidence: 0.6,
+        reasoning: 'Fallback default to tools',
+        suggestedTools: ['perplexity_search'],
         method: 'fallback'
       };
     }
   }
 
   /**
-   * Handle conversational queries
+   * Generate conversational response using AI
    */
-  async handleConversationalQuery(userMessage, intentAnalysis) {
-    const conversationalResponses = {
-      greeting: "¡Hola! Soy Vizta, tu asistente de análisis político y social. ¿En qué puedo ayudarte hoy?",
-      help: "Puedo ayudarte con:\n• Análisis de redes sociales y tendencias\n• Búsqueda de información política\n• Gestión de tus proyectos y documentos\n• Investigación y contexto político",
-      thanks: "¡De nada! Estoy aquí para ayudarte con cualquier análisis que necesites.",
-      general: "Entiendo. ¿Podrías ser más específico sobre qué tipo de análisis o información necesitas?"
-    };
-
-    const responseType = this.determineConversationalType(userMessage);
-
-    return {
-      agent: 'Vizta',
-      message: conversationalResponses[responseType] || conversationalResponses.general,
-      type: 'conversational',
-      intent: intentAnalysis.intent,
-      toolsUsed: [],
-      timestamp: new Date().toISOString()
-    };
-  }
-
-  /**
-   * Handle task-oriented queries using appropriate tools
-   */
-  async handleTaskQuery(userMessage, user, intentAnalysis) {
-    const toolsUsed = [];
-    let results = [];
-
+  async generateConversationalResponse(userMessage, intentAnalysis) {
     try {
-      // Execute required tools based on AI intent analysis
-      for (const toolName of intentAnalysis.requiredTools) {
-        if (this.availableTools[toolName]) {
-          console.log(`[VIZTA] 🔧 Executing tool: ${toolName}`);
+      const prompt = `Generate a natural, friendly response to this conversational message:
 
-          const toolResult = await this.executeToolWithContext(
-            toolName,
-            userMessage,
-            user,
-            intentAnalysis
-          );
+User: "${userMessage}"
 
-          results.push(toolResult);
-          toolsUsed.push(toolName);
-        }
-      }
+Context: This is ${intentAnalysis.conversationalElement || 'general conversation'}.
 
-      // If no specific tools were identified, use intelligent routing
-      if (results.length === 0) {
-        const defaultResult = await this.executeDefaultAnalysis(userMessage, user, intentAnalysis);
-        results.push(defaultResult);
-        toolsUsed.push('default_analysis');
-      }
+Guidelines:
+- Be warm and helpful
+- Keep it concise (1-2 sentences)
+- Mention I'm Vizta, your political and social analysis assistant
+- If it's a greeting, offer to help
+- If it's thanks, acknowledge and offer continued assistance
+- If it's "how are you", be positive and redirect to how I can help
 
-      // AI-powered synthesis of results
-      const synthesizedResponse = await this.synthesizeResults(results, userMessage, intentAnalysis);
+Respond in Spanish naturally:`;
 
-      return {
-        agent: 'Vizta',
-        message: synthesizedResponse,
-        type: 'task_response',
-        intent: intentAnalysis.intent,
-        toolsUsed,
-        results,
-        timestamp: new Date().toISOString()
-      };
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.7,
+        max_tokens: 150
+      });
+
+      return response.choices[0].message.content.trim();
 
     } catch (error) {
-      console.error(`[VIZTA] ❌ Task execution error:`, error);
-      throw error;
+      console.log(`[VIZTA] ⚠️ AI conversation generation failed:`, error.message);
+
+      // Fallback responses
+      const lowerMessage = userMessage.toLowerCase();
+
+      if (/hola|hi|hello/.test(lowerMessage)) {
+        return "¡Hola! Soy Vizta, tu asistente de análisis político y social. ¿En qué puedo ayudarte?";
+      }
+
+      if (/gracias|thank/.test(lowerMessage)) {
+        return "¡De nada! Estoy aquí para ayudarte con lo que necesites.";
+      }
+
+      if (/cómo estás|como estas|how are you/.test(lowerMessage)) {
+        return "¡Muy bien! ¿En qué puedo ayudarte hoy?";
+      }
+
+      return "¡Hola! Soy Vizta, tu asistente. ¿En qué puedo ayudarte?";
     }
   }
 
   /**
-   * Execute tool with enhanced context
+   * Execute tools and generate intelligent response
    */
-  async executeToolWithContext(toolName, userMessage, user, intentAnalysis) {
-    const enhancedParams = await this.enhanceToolParameters(toolName, userMessage, intentAnalysis);
+  async executeToolsAndRespond(userMessage, user, intentAnalysis) {
+    const toolResults = [];
+
+    // Execute AI-suggested tools
+    for (const toolName of intentAnalysis.suggestedTools) {
+      if (this.availableTools.includes(toolName)) {
+        try {
+          console.log(`[VIZTA] 🔧 Executing AI-suggested tool: ${toolName}`);
+          const result = await this.executeSpecificTool(toolName, userMessage, user);
+          if (result && result.success) {
+            toolResults.push({ tool: toolName, result });
+          }
+        } catch (error) {
+          console.log(`[VIZTA] ⚠️ Tool ${toolName} failed:`, error.message);
+        }
+      }
+    }
+
+    // If AI didn't suggest specific tools, use smart selection
+    if (toolResults.length === 0) {
+      const fallbackTool = this.selectFallbackTool(userMessage);
+      try {
+        console.log(`[VIZTA] 🔧 Using fallback tool: ${fallbackTool}`);
+        const result = await this.executeSpecificTool(fallbackTool, userMessage, user);
+        if (result && result.success) {
+          toolResults.push({ tool: fallbackTool, result });
+        }
+      } catch (error) {
+        console.log(`[VIZTA] ⚠️ Fallback tool failed:`, error.message);
+      }
+    }
+
+    // Generate intelligent response from tool results
+    if (toolResults.length > 0) {
+      return await this.synthesizeToolResults(userMessage, toolResults);
+    }
+
+    return "No pude encontrar información específica sobre eso. ¿Podrías reformular tu pregunta?";
+  }
+
+  /**
+   * Handle hybrid requests (conversation + tools)
+   */
+  async handleHybridResponse(userMessage, user, intentAnalysis) {
+    // Generate conversational greeting first
+    const conversationalPart = await this.generateConversationalResponse(userMessage, intentAnalysis);
+
+    // Execute tools for the information part
+    const toolResponse = await this.executeToolsAndRespond(userMessage, user, intentAnalysis);
+
+    // Combine naturally
+    if (toolResponse && !toolResponse.includes("No pude encontrar")) {
+      return `${conversationalPart}\n\n${toolResponse}`;
+    }
+
+    return conversationalPart;
+  }
+
+  /**
+   * Fallback handler
+   */
+  async handleFallback(userMessage, user) {
+    try {
+      const result = await mcpService.executeTool('perplexity_search', {
+        q: userMessage,
+        location: 'Guatemala',
+        focus: 'general'
+      }, user);
+
+      if (result.success && result.analysis_result) {
+        return result.analysis_result;
+      }
+    } catch (error) {
+      console.log(`[VIZTA] ⚠️ Fallback search failed:`, error.message);
+    }
+
+    return "No pude procesar tu consulta en este momento. ¿Podrías intentar de nuevo?";
+  }
+
+  /**
+   * Execute specific tool with smart parameters
+   */
+  async executeSpecificTool(toolName, userMessage, user) {
+    const baseParams = { q: userMessage };
 
     switch (toolName) {
       case 'nitter_context':
-        return await mcpService.executeTool('nitter_context', enhancedParams, user);
-
-      case 'nitter_profile':
-        return await mcpService.executeTool('nitter_profile', enhancedParams, user);
+        return await mcpService.executeTool('nitter_context', {
+          ...baseParams,
+          location: 'guatemala',
+          limit: 15
+        }, user);
 
       case 'perplexity_search':
-        return await mcpService.executeTool('perplexity_search', enhancedParams, user);
+        return await mcpService.executeTool('perplexity_search', {
+          ...baseParams,
+          location: 'Guatemala',
+          focus: this.detectFocus(userMessage)
+        }, user);
 
-      case 'resolve_twitter_handle':
-        return await mcpService.executeTool('resolve_twitter_handle', enhancedParams, user);
+      case 'latest_trends':
+        return await mcpService.executeTool('latest_trends', {
+          ...baseParams,
+          location: 'guatemala',
+          limit: 10
+        }, user);
 
       case 'user_projects':
-        return await mcpService.executeTool('user_projects', enhancedParams, user);
+        return await mcpService.executeTool('user_projects', {}, user);
 
       case 'user_codex':
-        return await mcpService.executeTool('user_codex', enhancedParams, user);
+        return await mcpService.executeTool('user_codex', {
+          searchQuery: userMessage
+        }, user);
 
-      case 'project_decisions':
-        return await mcpService.executeTool('project_decisions', enhancedParams, user);
+      case 'nitter_profile':
+        return await mcpService.executeTool('nitter_profile', baseParams, user);
+
+      case 'resolve_twitter_handle':
+        return await mcpService.executeTool('resolve_twitter_handle', baseParams, user);
 
       default:
         throw new Error(`Unknown tool: ${toolName}`);
@@ -286,254 +341,98 @@ class StreamlinedViztaAgent {
   }
 
   /**
-   * AI-powered parameter enhancement for tools
+   * Select fallback tool based on message content
    */
-  async enhanceToolParameters(toolName, userMessage, intentAnalysis) {
-    const baseParams = { q: userMessage };
-
-    try {
-      const enhancementPrompt = `
-        Enhance parameters for tool "${toolName}" based on user message: "${userMessage}"
-        Intent: ${intentAnalysis.intent}
-        Focus: ${intentAnalysis.focus}
-
-        For ${toolName}, determine optimal parameters:
-        - Query refinement
-        - Location context (default: Guatemala)
-        - Filters and limits
-        - Time constraints
-
-        Return JSON with enhanced parameters.
-      `;
-
-      const enhancement = await geminiService.generateContent([{
-        role: 'user',
-        content: enhancementPrompt
-      }]);
-      const enhancedParams = JSON.parse(enhancement);
-
-      return { ...baseParams, ...enhancedParams };
-
-    } catch (error) {
-      console.log(`[VIZTA] ⚠️ Parameter enhancement failed, using base params`);
-      return baseParams;
-    }
-  }
-
-  /**
-   * Default analysis when no specific tools are identified
-   */
-  async executeDefaultAnalysis(userMessage, user, intentAnalysis) {
-    console.log(`[VIZTA] 🔄 Executing default analysis`);
-
-    // Use perplexity search as default for general queries
-    return await mcpService.executeTool('perplexity_search', {
-      q: userMessage,
-      location: 'Guatemala',
-      focus: intentAnalysis.focus || 'general'
-    }, user);
-  }
-
-  /**
-   * AI-powered synthesis of multiple tool results
-   */
-  async synthesizeResults(results, userMessage, intentAnalysis) {
-    if (results.length === 0) {
-      return "No pude encontrar información relevante para tu consulta.";
-    }
-
-    if (results.length === 1) {
-      return this.formatSingleResult(results[0]);
-    }
-
-    try {
-      const synthesisPrompt = `
-        Synthesize these results into a coherent response for the user query: "${userMessage}"
-        Intent: ${intentAnalysis.intent}
-
-        Results:
-        ${results.map((r, i) => `${i+1}. ${JSON.stringify(r, null, 2)}`).join('\n\n')}
-
-        Create a unified, informative response that:
-        - Addresses the user's specific question
-        - Integrates key findings from all sources
-        - Uses clear, accessible language
-        - Includes relevant data points
-        - Maintains context about Guatemala/politics if relevant
-
-        Format as markdown with appropriate sections and emphasis.
-      `;
-
-      const synthesizedResponse = await geminiService.generateContent([{
-        role: 'user',
-        content: synthesisPrompt
-      }]);
-      return synthesizedResponse;
-
-    } catch (error) {
-      console.error(`[VIZTA] ❌ Synthesis error:`, error);
-      return this.formatFallbackResponse(results);
-    }
-  }
-
-  /**
-   * Format single result response
-   */
-  formatSingleResult(result) {
-    if (result.message) {
-      return result.message;
-    }
-
-    if (result.analysis_result) {
-      return result.analysis_result;
-    }
-
-    return "Información procesada correctamente.";
-  }
-
-  /**
-   * Fallback response formatting
-   */
-  formatFallbackResponse(results) {
-    return results.map((result, index) => {
-      const title = `## Resultado ${index + 1}`;
-      const content = result.message || result.analysis_result || JSON.stringify(result, null, 2);
-      return `${title}\n\n${content}`;
-    }).join('\n\n---\n\n');
-  }
-
-  /**
-   * Unified response formatter
-   */
-  formatUnifiedResponse(response, metadata) {
-    const baseResponse = {
-      agent: 'Vizta',
-      message: response.message || 'Procesamiento completado',
-      type: response.type || 'chat_response',
-      timestamp: new Date().toISOString()
-    };
-
-    // Add metadata if available
-    if (metadata) {
-      baseResponse.metadata = metadata;
-    }
-
-    // Add tool information if available
-    if (response.toolsUsed && response.toolsUsed.length > 0) {
-      baseResponse.toolsUsed = response.toolsUsed;
-    }
-
-    return baseResponse;
-  }
-
-  /**
-   * Determine conversational response type
-   */
-  determineConversationalType(message) {
+  selectFallbackTool(message) {
     const lowerMessage = message.toLowerCase();
 
-    if (/^(hola|hi|hello|buenos días|buenas tardes)/.test(lowerMessage)) {
-      return 'greeting';
+    if (/twitter|tweet|social|tendencia|viral|hashtag/.test(lowerMessage)) {
+      return 'nitter_context';
     }
 
-    if (/ayuda|help|qué puedes hacer|que puedes hacer/.test(lowerMessage)) {
-      return 'help';
+    if (/proyecto|mis|codex/.test(lowerMessage)) {
+      return 'user_projects';
     }
 
-    if (/gracias|thank you|thanks/.test(lowerMessage)) {
-      return 'thanks';
+    return 'perplexity_search'; // Default fallback
+  }
+
+  /**
+   * AI-powered synthesis of tool results
+   */
+  async synthesizeToolResults(userMessage, toolResults) {
+    try {
+      const resultsText = toolResults.map(tr =>
+        `Tool: ${tr.tool}\nResult: ${tr.result.analysis_result || tr.result.message || JSON.stringify(tr.result.data)}`
+      ).join('\n\n');
+
+      const prompt = `Synthesize these tool results into a natural, helpful response for the user's query: "${userMessage}"
+
+Tool Results:
+${resultsText}
+
+Guidelines:
+- Create a cohesive, informative response in Spanish
+- Focus on the most relevant information
+- Be conversational and helpful
+- Include specific data points when useful
+- Keep it concise but comprehensive
+
+Response:`;
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.3,
+        max_tokens: 500
+      });
+
+      return response.choices[0].message.content.trim();
+
+    } catch (error) {
+      console.log(`[VIZTA] ⚠️ AI synthesis failed:`, error.message);
+
+      // Fallback: return the best result directly
+      const bestResult = toolResults[0];
+      return bestResult.result.analysis_result || bestResult.result.message || "Información procesada correctamente.";
+    }
+  }
+
+  detectFocus(message) {
+    const lowerMessage = message.toLowerCase();
+
+    if (/politic|gobierno|congreso|elecciones|diputado/.test(lowerMessage)) {
+      return 'politica';
+    }
+    if (/noticia|actualidad|eventos/.test(lowerMessage)) {
+      return 'noticias';
+    }
+    if (/economia|economico/.test(lowerMessage)) {
+      return 'economia';
     }
 
     return 'general';
   }
 
   /**
-   * Error handler
+   * Format unified response
    */
-  handleError(error, conversationId) {
+  formatResponse(message, conversationId, startTime, type) {
     return {
       conversationId,
       response: {
         agent: 'Vizta',
-        message: 'Ocurrió un error procesando tu consulta. Por favor, intenta de nuevo.',
-        type: 'error_response',
+        message: message,
+        type: 'chat_response',
         timestamp: new Date().toISOString()
       },
       metadata: {
-        error: error.message,
+        processingTime: Date.now() - startTime,
+        responseType: type,
         version: this.version
       }
     };
   }
-
-  // Analysis capabilities (integrated from Laura)
-  async analyzeSentiment(text) {
-    // AI-powered sentiment analysis
-    const prompt = `Analyze sentiment of: "${text}". Return JSON with sentiment (positive/negative/neutral) and score (0-1).`;
-    const result = await geminiService.generateContent([{ role: 'user', content: prompt }]);
-    return JSON.parse(result);
-  }
-
-  async extractEntities(text) {
-    // AI-powered entity extraction
-    const prompt = `Extract entities (persons, organizations, locations) from: "${text}". Return JSON array.`;
-    const result = await geminiService.generateContent([{ role: 'user', content: prompt }]);
-    return JSON.parse(result);
-  }
-
-  async analyzePoliticalContext(text) {
-    // AI-powered political context analysis
-    const prompt = `Analyze political context of: "${text}" in Guatemala. Return JSON with context, relevance, and key topics.`;
-    const result = await geminiService.generateContent([{ role: 'user', content: prompt }]);
-    return JSON.parse(result);
-  }
-
-  async detectTrends(data) {
-    // AI-powered trend detection
-    const prompt = `Detect trends in data: ${JSON.stringify(data)}. Return JSON with trends and significance.`;
-    const result = await geminiService.generateContent([{ role: 'user', content: prompt }]);
-    return JSON.parse(result);
-  }
-
-  async assessRelevance(content, context) {
-    // AI-powered relevance assessment
-    const prompt = `Assess relevance of "${content}" to context "${context}". Return JSON with score (0-1) and reasoning.`;
-    const result = await geminiService.generateContent([{ role: 'user', content: prompt }]);
-    return JSON.parse(result);
-  }
-
-  // Direct tool execution methods (integrated from Laura and Robert)
-  async executeNitterContext(params, user) {
-    return await mcpService.executeTool('nitter_context', params, user);
-  }
-
-  async executeNitterProfile(params, user) {
-    return await mcpService.executeTool('nitter_profile', params, user);
-  }
-
-  async executePerplexitySearch(params, user) {
-    return await mcpService.executeTool('perplexity_search', params, user);
-  }
-
-  async executeResolveHandle(params, user) {
-    return await mcpService.executeTool('resolve_twitter_handle', params, user);
-  }
-
-  async executeLatestTrends(params, user) {
-    return await mcpService.executeTool('latest_trends', params, user);
-  }
-
-  async executeUserProjects(params, user) {
-    return await mcpService.executeTool('user_projects', params, user);
-  }
-
-  async executeUserCodex(params, user) {
-    return await mcpService.executeTool('user_codex', params, user);
-  }
-
-  async executeProjectDecisions(params, user) {
-    return await mcpService.executeTool('project_decisions', params, user);
-  }
 }
 
-module.exports = { ViztaAgent: StreamlinedViztaAgent };
+module.exports = { ViztaAgent };

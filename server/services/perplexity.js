@@ -384,12 +384,34 @@ Responde en formato JSON:
   }
 }`;
 
+    // Use new Perplexity Search API instead of Chat Completions
+    const searchResults = await fetch('https://api.perplexity.ai/search', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        query: searchQuery,
+        max_results: 10,
+        country: 'GT', // Guatemala
+        max_tokens_per_page: 2048
+      })
+    });
+
+    let searchData = null;
+    if (searchResults.ok) {
+      searchData = await searchResults.json();
+      console.log(`   📊 Obtained ${searchData.results?.length || 0} search results`);
+    }
+
+    // Now use Chat Completions for analysis with search context
     const payload = {
       model: 'sonar',
       messages: [
-                  {
-            role: 'system',
-            content: `Eres un analista de tendencias especializado en identificar POR QUÉ algo es tendencia en redes sociales EN ESTE MOMENTO (${currentMonth} ${currentYear}). Tu expertise incluye:
+        {
+          role: 'system',
+          content: `Eres un analista de tendencias especializado en identificar POR QUÉ algo es tendencia en redes sociales EN ESTE MOMENTO (${currentMonth} ${currentYear}). Tu expertise incluye:
 
 - Detectar eventos actuales ESPECÍFICOS que generan tendencias (lanzamientos, controversias, partidos, noticias, anuncios)
 - Identificar APODOS y nombres reales de personas famosas (especialmente deportistas)
@@ -404,7 +426,7 @@ Responde en formato JSON:
 FECHA ACTUAL: ${currentDate}
 Enfócate en la ACTUALIDAD y en eventos ESPECÍFICOS Y EXACTOS que explican por qué algo es tendencia AHORA.
 
-IMPORTANTE: 
+IMPORTANTE:
 - Si "${trendName}" parece ser un apodo, busca tanto el apodo como el nombre real de la persona.
 - Si tienes contexto de tweets reales, úsalos para entender mejor la conversación actual y la razón específica de la tendencia.
 - La "razon_tendencia" DEBE ser específica con fechas, eventos concretos, anuncios exactos - NO generalidades.
@@ -412,18 +434,26 @@ IMPORTANTE:
 - RESPONDE SOLO CON JSON VÁLIDO, SIN EXPLICACIONES ADICIONALES.
 - Limita el campo "resumen" a **máximo 2 oraciones** y **≤280 caracteres**.
 - Limita las listas polarization_factors, opposing_sides y palabras_clave a **máximo 3 elementos** cada una.
-- NO uses "..." para cortar información; responde el JSON COMPLETO.`
+- NO uses "..." para cortar información; responde el JSON COMPLETO.
+
+${searchData ? `
+CONTEXTO DE BÚSQUEDA WEB ACTUAL:
+${searchData.results.slice(0, 5).map((result, i) =>
+  `${i+1}. ${result.title} (${result.date || 'Reciente'})
+     ${result.snippet}
+     Fuente: ${result.url}`
+).join('\n\n')}
+
+Usa esta información actualizada para tu análisis.
+` : ''}`
         },
         {
           role: 'user',
           content: prompt
         }
       ],
-      search_context: {
-        search_queries: [searchQuery, ...alternativeQueries]
-      },
       temperature: 0.3,
-      max_tokens: 1200 // Aumentar tokens para evitar cortes
+      max_tokens: 1200
     };
 
     console.log(`   📡 Realizando consulta a Perplexity...`);
@@ -667,6 +697,31 @@ Medio ambiente, Moda, Farándula, Otros
 
 Responde ÚNICAMENTE con el nombre de la categoría, sin explicación.`;
 
+    // First get search results
+    const searchResults = await fetch('https://api.perplexity.ai/search', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        query: `${trendName} categoría ${location}`,
+        max_results: 5,
+        country: 'GT',
+        max_tokens_per_page: 1024
+      })
+    });
+
+    let searchContext = '';
+    if (searchResults.ok) {
+      const searchData = await searchResults.json();
+      if (searchData.results && searchData.results.length > 0) {
+        searchContext = `\n\nCONTEXTO DE BÚSQUEDA:\n${searchData.results.slice(0, 3).map(r =>
+          `- ${r.title}: ${r.snippet}`
+        ).join('\n')}`;
+      }
+    }
+
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
       headers: {
@@ -678,7 +733,7 @@ Responde ÚNICAMENTE con el nombre de la categoría, sin explicación.`;
         messages: [
           {
             role: 'system',
-            content: `Eres un experto en categorización de tendencias para ${location}. Respondes solo con el nombre de la categoría más adecuada.`
+            content: `Eres un experto en categorización de tendencias para ${location}. Respondes solo con el nombre de la categoría más adecuada.${searchContext}`
           },
           {
             role: 'user',

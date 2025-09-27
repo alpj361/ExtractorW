@@ -1255,8 +1255,42 @@ Enfócate EXCLUSIVAMENTE en información actual, relevante y verificable de ${cu
       max_tokens: 800
     };
 
-    console.log(`📡 Realizando búsqueda web con Perplexity...`);
-    
+    console.log(`📡 Realizando búsqueda web con Perplexity Search API...`);
+
+    // First use the new Search API to get current web results
+    const searchResponse = await fetch('https://api.perplexity.ai/search', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        query: optimizedQuery,
+        max_results: 15,
+        country: 'GT', // Guatemala
+        max_tokens_per_page: 2048
+      })
+    });
+
+    let searchData = null;
+    if (searchResponse.ok) {
+      searchData = await searchResponse.json();
+      console.log(`   📊 Obtained ${searchData.results?.length || 0} search results from Perplexity Search API`);
+    }
+
+    // Now use Chat Completions for analysis with search context
+    if (searchData?.results?.length > 0) {
+      // Add search context to the prompt
+      const searchContext = searchData.results.slice(0, 8).map((result, i) =>
+        `${i+1}. ${result.title} (${result.date || 'Reciente'})
+           ${result.snippet}
+           Fuente: ${result.url}`
+      ).join('\n\n');
+
+      // Update the system message to include search results
+      payload.messages[0].content += `\n\nCONTEXTO DE BÚSQUEDA WEB ACTUAL:\n${searchContext}\n\nUsa esta información actualizada para tu análisis.`;
+    }
+
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
       headers: {
@@ -1345,11 +1379,15 @@ Contexto: ${location}`;
       location: location,
       focus: focus,
       web_search_result: parsedResult || { raw_response: rawResponse },
+      search_results: searchData?.results || [], // Include raw search results
       nitter_optimization: nitterOptimization,
       formatted_response: formattedResponse,
+      analysis_result: formattedResponse, // Add alias for compatibility
       metadata: {
         search_performed: true,
         perplexity_model: 'sonar',
+        search_api_used: true,
+        search_results_count: searchData?.results?.length || 0,
         response_length: rawResponse.length,
         json_parsed: parsedResult !== null,
         nitter_optimization_included: nitterOptimization !== null,
