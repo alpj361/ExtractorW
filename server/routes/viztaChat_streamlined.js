@@ -37,38 +37,46 @@ router.post('/query', verifyUserAccess, async (req, res) => {
     const chatSessionId = sessionId || `session_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
 
     // Save user message to memories
-    await memoriesService.saveMessage({
-      sessionId: chatSessionId,
-      userId: userId,
-      role: 'user',
-      content: message,
-      messageType: 'message',
-      modelUsed: 'vizta-streamlined',
-      metadata: { timestamp: new Date().toISOString() }
-    });
+    try {
+      await memoriesService.saveMessage({
+        sessionId: chatSessionId,
+        userId: userId,
+        role: 'user',
+        content: message,
+        messageType: 'message',
+        modelUsed: 'vizta-streamlined',
+        metadata: { timestamp: new Date().toISOString() }
+      });
+    } catch (error) {
+      console.log('⚠️ Could not save user message to memories:', error.message);
+    }
 
     // Process query with streamlined Vizta agent
     console.log('🚀 Processing with streamlined Vizta agent...');
     const result = await viztaAgent.processUserQuery(message, req.user, chatSessionId);
 
-    // Save assistant response to memories
-    await memoriesService.saveMessage({
-      sessionId: chatSessionId,
-      userId: userId,
-      role: 'assistant',
-      content: result.response.message || 'Response processed',
-      messageType: 'response',
-      modelUsed: 'vizta-streamlined',
-      metadata: {
-        agent: result.response.agent,
-        type: result.response.type,
-        intent: result.metadata?.intent,
-        confidence: result.metadata?.confidence,
-        processingTime: result.metadata?.processingTime,
-        toolsUsed: result.metadata?.toolsUsed,
-        version: result.metadata?.version
-      }
-    });
+    // Save assistant response to memories (with valid message type)
+    try {
+      await memoriesService.saveMessage({
+        sessionId: chatSessionId,
+        userId: userId,
+        role: 'assistant',
+        content: result.response.message || 'Response processed',
+        messageType: 'message', // Use 'message' instead of 'response' as it seems to be the valid constraint
+        modelUsed: 'vizta-streamlined',
+        metadata: {
+          agent: result.response.agent,
+          type: result.response.type,
+          intent: result.metadata?.intent,
+          confidence: result.metadata?.confidence,
+          processingTime: result.metadata?.processingTime,
+          toolsUsed: result.metadata?.toolsUsed,
+          version: result.metadata?.version
+        }
+      });
+    } catch (error) {
+      console.log('⚠️ Could not save assistant message to memories:', error.message);
+    }
 
     // Format response for frontend
     const responseData = {

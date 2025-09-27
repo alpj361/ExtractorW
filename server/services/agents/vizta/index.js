@@ -144,7 +144,10 @@ class StreamlinedViztaAgent {
         }
       `;
 
-      const result = await geminiService.generateContent(prompt);
+      const result = await geminiService.generateContent([{
+        role: 'user',
+        content: prompt
+      }]);
       const analysis = JSON.parse(result);
 
       return {
@@ -303,7 +306,10 @@ class StreamlinedViztaAgent {
         Return JSON with enhanced parameters.
       `;
 
-      const enhancement = await geminiService.generateContent(enhancementPrompt);
+      const enhancement = await geminiService.generateContent([{
+        role: 'user',
+        content: enhancementPrompt
+      }]);
       const enhancedParams = JSON.parse(enhancement);
 
       return { ...baseParams, ...enhancedParams };
@@ -358,7 +364,10 @@ class StreamlinedViztaAgent {
         Format as markdown with appropriate sections and emphasis.
       `;
 
-      const synthesizedResponse = await geminiService.generateContent(synthesisPrompt);
+      const synthesizedResponse = await geminiService.generateContent([{
+        role: 'user',
+        content: synthesisPrompt
+      }]);
       return synthesizedResponse;
 
     } catch (error) {
@@ -461,35 +470,35 @@ class StreamlinedViztaAgent {
   async analyzeSentiment(text) {
     // AI-powered sentiment analysis
     const prompt = `Analyze sentiment of: "${text}". Return JSON with sentiment (positive/negative/neutral) and score (0-1).`;
-    const result = await geminiService.generateContent(prompt);
+    const result = await geminiService.generateContent([{ role: 'user', content: prompt }]);
     return JSON.parse(result);
   }
 
   async extractEntities(text) {
     // AI-powered entity extraction
     const prompt = `Extract entities (persons, organizations, locations) from: "${text}". Return JSON array.`;
-    const result = await geminiService.generateContent(prompt);
+    const result = await geminiService.generateContent([{ role: 'user', content: prompt }]);
     return JSON.parse(result);
   }
 
   async analyzePoliticalContext(text) {
     // AI-powered political context analysis
     const prompt = `Analyze political context of: "${text}" in Guatemala. Return JSON with context, relevance, and key topics.`;
-    const result = await geminiService.generateContent(prompt);
+    const result = await geminiService.generateContent([{ role: 'user', content: prompt }]);
     return JSON.parse(result);
   }
 
   async detectTrends(data) {
     // AI-powered trend detection
     const prompt = `Detect trends in data: ${JSON.stringify(data)}. Return JSON with trends and significance.`;
-    const result = await geminiService.generateContent(prompt);
+    const result = await geminiService.generateContent([{ role: 'user', content: prompt }]);
     return JSON.parse(result);
   }
 
   async assessRelevance(content, context) {
     // AI-powered relevance assessment
     const prompt = `Assess relevance of "${content}" to context "${context}". Return JSON with score (0-1) and reasoning.`;
-    const result = await geminiService.generateContent(prompt);
+    const result = await geminiService.generateContent([{ role: 'user', content: prompt }]);
     return JSON.parse(result);
   }
 
