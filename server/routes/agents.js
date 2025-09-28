@@ -107,8 +107,8 @@ async function generateExtractionCode(instructions, siteMap, existingAgent = nul
   // Stage 1: Use Gemini for initial analysis and planning
   const analysisResult = await analyzeWithGemini(instructions, siteMap, existingAgent);
 
-  // Stage 2: Use GPT-5 via OpenRouter for detailed code generation
-  const codeResult = await generateCodeWithGPT5(analysisResult, instructions, siteMap);
+  // Stage 2: Use GPT-4 via OpenAI for detailed code generation
+  const codeResult = await generateCodeWithGPT4(analysisResult, instructions, siteMap);
 
   // Combine results
   return {
@@ -122,7 +122,7 @@ async function generateExtractionCode(instructions, siteMap, existingAgent = nul
     suggestedDescription: analysisResult.suggestedDescription,
     metadata: {
       analysisModel: 'gemini-2.5-flash',
-      codeGenModel: 'gpt-5',
+      codeGenModel: 'gpt-4o',
       timestamp: new Date().toISOString()
     }
   };
@@ -202,13 +202,13 @@ Responde solo con el JSON, sin texto adicional.`;
 }
 
 /**
- * Stage 2: Code generation with GPT-5
+ * Stage 2: Code generation with OpenAI GPT-4
  */
-async function generateCodeWithGPT5(analysis, instructions, siteMap) {
-  const openRouterKey = process.env.OPENROUTER_API_KEY;
+async function generateCodeWithGPT4(analysis, instructions, siteMap) {
+  const openaiKey = process.env.OPENAI_API_KEY;
 
-  if (!openRouterKey) {
-    throw new Error('OpenRouter API key no configurada para GPT-5');
+  if (!openaiKey) {
+    throw new Error('OpenAI API key no configurada para GPT-4');
   }
 
   const messages = [
@@ -271,14 +271,14 @@ Responde solo con el JSON válido.`
     }
   ];
 
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${openRouterKey}`,
+      'Authorization': `Bearer ${openaiKey}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: 'gpt-5',
+      model: 'gpt-4o',
       messages,
       temperature: 0.1,
       max_tokens: 2000
@@ -287,14 +287,14 @@ Responde solo con el JSON válido.`
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`OpenRouter API error: ${response.status} - ${errorText}`);
+    throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
   }
 
   const data = await response.json();
   const content = data.choices?.[0]?.message?.content;
 
   if (!content) {
-    throw new Error('No se recibió respuesta de GPT-5');
+    throw new Error('No se recibió respuesta de GPT-4');
   }
 
   try {
@@ -419,7 +419,7 @@ router.get('/test', verifyUserAccess, async (req, res) => {
       ],
       aiModels: {
         analysis: 'gemini-2.5-flash',
-        codeGeneration: 'gpt-5'
+        codeGeneration: 'gpt-4o'
       }
     });
 
