@@ -29,6 +29,9 @@ if (!AbortControllerCtor) {
 const EXTRACTOR_T_URL = process.env.EXTRACTOR_T_URL || process.env.EXTRACTORT_URL || 'http://localhost:8000';
 const EXTRACTOR_T_TIMEOUT_MS = parseInt(process.env.EXTRACTOR_T_TIMEOUT_MS || process.env.EXTRACTORT_TIMEOUT_MS || '120000', 10);
 
+console.log(`🔧 [Instagram] ExtractorT URL configured: ${EXTRACTOR_T_URL}`);
+console.log(`🔧 [Instagram] ExtractorT timeout: ${EXTRACTOR_T_TIMEOUT_MS}ms`);
+
 /**
  * Extract Instagram comments from a post URL
  * @param {string} url - Instagram post URL
@@ -45,6 +48,14 @@ async function extractInstagramComments(url, options = {}) {
 
     console.log(`📱 [Instagram] Extracting comments from: ${url}`);
     console.log(`📡 [Instagram] Using ExtractorT at: ${EXTRACTOR_T_URL}`);
+
+    const requestBody = {
+      urls: [url], // ExtractorT expects urls array
+      comment_limit: maxComments || 20,
+      include_replies: includeReplies || false
+    };
+
+    console.log(`📤 [Instagram] Request body:`, JSON.stringify(requestBody, null, 2));
 
     // Call ExtractorT service (correct endpoint is /api/instagram_comment/)
     const controller = AbortControllerCtor ? new AbortControllerCtor() : null;
@@ -64,11 +75,7 @@ async function extractInstagramComments(url, options = {}) {
           'User-Agent': 'ExtractorW/2.0 (Instagram Comments)',
           'Authorization': 'Bearer extractorw-auth-token' // Required by ExtractorT
         },
-        body: JSON.stringify({
-          urls: [url], // ExtractorT expects urls array
-          comment_limit: maxComments || 20,
-          include_replies: includeReplies || false
-        }),
+        body: JSON.stringify(requestBody),
         signal: controller ? controller.signal : undefined
       });
     } catch (fetchError) {
@@ -93,22 +100,36 @@ async function extractInstagramComments(url, options = {}) {
     const allComments = [];
     let totalCount = 0;
 
+    console.log(`📊 [Instagram] ExtractorT response status: ${data.status}`);
+    console.log(`📊 [Instagram] ExtractorT response message: ${data.message}`);
+    console.log(`📊 [Instagram] ExtractorT results count: ${data.results?.length || 0}`);
+
     if (data.results && data.results.length > 0) {
       const result = data.results[0]; // We only send one URL, so take first result
       totalCount = result.extracted_count || 0;
 
-      const transformedComments = (result.comments || []).map(comment => ({
-        id: `comment_${Date.now()}_${Math.random()}`,
-        author: comment.user || comment.username || 'Unknown',
-        text: comment.text || '',
-        timestamp: comment.timestamp || Date.now(),
-        likes: comment.likes || 0,
-        verified: comment.is_verified || false,
-        replies: [], // TODO: Handle replies if needed
-        parentId: null
-      }));
+      console.log(`📊 [Instagram] Result extracted_count: ${result.extracted_count}`);
+      console.log(`📊 [Instagram] Result comments array length: ${result.comments?.length || 0}`);
 
+      const transformedComments = (result.comments || []).map((comment, index) => {
+        console.log(`🔄 [Instagram] Transforming comment ${index + 1}: user="${comment.user}", text="${comment.text?.substring(0, 50)}..."`);
+
+        return {
+          id: `comment_${Date.now()}_${Math.random()}`,
+          author: comment.user || comment.username || 'Unknown',
+          text: comment.text || '',
+          timestamp: comment.timestamp || Date.now(),
+          likes: comment.likes || 0,
+          verified: comment.is_verified || false,
+          replies: [], // TODO: Handle replies if needed
+          parentId: null
+        };
+      });
+
+      console.log(`✅ [Instagram] Transformed ${transformedComments.length} comments successfully`);
       allComments.push(...transformedComments);
+    } else {
+      console.log(`❌ [Instagram] No results found in ExtractorT response. Full response:`, JSON.stringify(data, null, 2));
     }
 
     return {
@@ -125,6 +146,11 @@ async function extractInstagramComments(url, options = {}) {
 
   } catch (error) {
     console.error('❌ [Instagram] Error extracting comments:', error);
+    console.error('❌ [Instagram] Error details:', {
+      name: error.name,
+      message: error.message,
+      stack: error.stack?.split('\n').slice(0, 5)
+    });
 
     // Return structured error response
     return {
@@ -134,7 +160,11 @@ async function extractInstagramComments(url, options = {}) {
       error: {
         message: error.message,
         code: 'EXTRACTION_FAILED',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        details: {
+          extractorTUrl: EXTRACTOR_T_URL,
+          errorType: error.name
+        }
       }
     };
   }
