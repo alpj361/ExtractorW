@@ -663,19 +663,83 @@ async function getToolInfo(toolName) {
 }
 
 /**
- * Ejecuta una herramienta específica del MCP Server
+ * Mode-based tool filtering
+ * Defines which tools are available for each mode
+ */
+const TOOL_MODE_ACCESS = {
+  // Chat Mode: Fast, read-only tools only
+  chat: new Set([
+    'perplexity_search',
+    'search_political_context',
+    'user_projects',
+    'user_codex',
+    'project_findings',
+    'project_coverages',
+    'latest_trends',
+    'project_decisions'
+  ]),
+
+  // Agentic Mode: All tools including data manipulation
+  agentic: new Set([
+    'nitter_context',
+    'nitter_profile',
+    'perplexity_search',
+    'search_political_context',
+    'user_projects',
+    'user_codex',
+    'project_findings',
+    'project_coverages',
+    'latest_trends',
+    'project_decisions',
+    'resolve_twitter_handle'
+  ])
+};
+
+/**
+ * Check if a tool is allowed for the given mode
+ * @param {string} toolName - Tool name to check
+ * @param {string} mode - Current mode ('chat' | 'agentic')
+ * @returns {boolean} Whether the tool is allowed
+ */
+function isToolAllowedForMode(toolName, mode = 'chat') {
+  // Default to chat mode if mode is invalid
+  const normalizedMode = (mode === 'agentic') ? 'agentic' : 'chat';
+  const allowedTools = TOOL_MODE_ACCESS[normalizedMode];
+
+  return allowedTools.has(toolName);
+}
+
+/**
+ * Get available tools for a specific mode
+ * @param {string} mode - Mode to get tools for ('chat' | 'agentic')
+ * @returns {Array} Array of available tool names
+ */
+function getToolsForMode(mode = 'chat') {
+  const normalizedMode = (mode === 'agentic') ? 'agentic' : 'chat';
+  return Array.from(TOOL_MODE_ACCESS[normalizedMode]);
+}
+
+/**
+ * Ejecuta una herramienta específica del MCP Server con validación de modo
  * @param {string} toolName - Nombre de la herramienta
  * @param {Object} parameters - Parámetros para la herramienta
  * @param {Object} user - Información del usuario autenticado
+ * @param {string} mode - Modo actual ('chat' | 'agentic')
  * @returns {Object} Resultado de la ejecución
  */
-async function executeTool(toolName, parameters = {}, user = null) {
+async function executeTool(toolName, parameters = {}, user = null, mode = 'chat') {
   try {
-    console.log(`🔧 Ejecutando herramienta MCP: ${toolName}`);
-    
+    console.log(`🔧 Ejecutando herramienta MCP: ${toolName} en modo ${mode}`);
+
     // Validar que la herramienta existe
     if (!AVAILABLE_TOOLS[toolName]) {
       throw new Error(`Herramienta '${toolName}' no encontrada. Herramientas disponibles: ${Object.keys(AVAILABLE_TOOLS).join(', ')}`);
+    }
+
+    // Validar que la herramienta está permitida para el modo actual
+    if (!isToolAllowedForMode(toolName, mode)) {
+      const allowedTools = getToolsForMode(mode);
+      throw new Error(`Herramienta '${toolName}' no permitida en modo ${mode}. Herramientas permitidas: ${allowedTools.join(', ')}`);
     }
     
     // Ejecutar herramienta específica
@@ -2460,5 +2524,9 @@ module.exports = {
   getServerStatus,
   expandSearchTerms,
   enhanceSearchTermsWithPerplexity,
-  AVAILABLE_TOOLS
+  AVAILABLE_TOOLS,
+  // Mode-based tool filtering
+  isToolAllowedForMode,
+  getToolsForMode,
+  TOOL_MODE_ACCESS
 };

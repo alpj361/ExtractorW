@@ -10,6 +10,16 @@ try {
   fetch = global.fetch;
 }
 
+let AbortControllerCtor = global.AbortController;
+if (!AbortControllerCtor) {
+  try {
+    // eslint-disable-next-line global-require
+    AbortControllerCtor = require('abort-controller');
+  } catch (error) {
+    AbortControllerCtor = undefined;
+  }
+}
+
 /**
  * ExtractorT service communication
  * Handles Instagram comment extraction by communicating with ExtractorT
@@ -17,6 +27,7 @@ try {
 
 // Get ExtractorT URL from environment or use default
 const EXTRACTOR_T_URL = process.env.EXTRACTOR_T_URL || process.env.EXTRACTORT_URL || 'http://localhost:8000';
+const EXTRACTOR_T_TIMEOUT_MS = parseInt(process.env.EXTRACTOR_T_TIMEOUT_MS || process.env.EXTRACTORT_TIMEOUT_MS || '120000', 10);
 
 /**
  * Extract Instagram comments from a post URL
@@ -36,20 +47,40 @@ async function extractInstagramComments(url, options = {}) {
     console.log(`📡 [Instagram] Using ExtractorT at: ${EXTRACTOR_T_URL}`);
 
     // Call ExtractorT service (correct endpoint is /api/instagram_comment/)
-    const response = await fetch(`${EXTRACTOR_T_URL}/api/instagram_comment/`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'ExtractorW/2.0 (Instagram Comments)',
-        'Authorization': 'Bearer extractorw-auth-token' // Required by ExtractorT
-      },
-      body: JSON.stringify({
-        urls: [url], // ExtractorT expects urls array
-        comment_limit: maxComments || 20,
-        include_replies: includeReplies || false
-      }),
-      timeout: 30000 // 30 second timeout
-    });
+    const controller = AbortControllerCtor ? new AbortControllerCtor() : null;
+    const timeoutId = controller
+      ? setTimeout(() => {
+          controller.abort();
+        }, EXTRACTOR_T_TIMEOUT_MS)
+      : null;
+
+    let response;
+
+    try {
+      response = await fetch(`${EXTRACTOR_T_URL}/api/instagram_comment/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'ExtractorW/2.0 (Instagram Comments)',
+          'Authorization': 'Bearer extractorw-auth-token' // Required by ExtractorT
+        },
+        body: JSON.stringify({
+          urls: [url], // ExtractorT expects urls array
+          comment_limit: maxComments || 20,
+          include_replies: includeReplies || false
+        }),
+        signal: controller ? controller.signal : undefined
+      });
+    } catch (fetchError) {
+      if (controller && fetchError.name === 'AbortError') {
+        throw new Error(`ExtractorT request timed out after ${EXTRACTOR_T_TIMEOUT_MS}ms`);
+      }
+      throw fetchError;
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
 
     if (!response.ok) {
       throw new Error(`ExtractorT responded with status ${response.status}: ${response.statusText}`);

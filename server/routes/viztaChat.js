@@ -147,6 +147,386 @@ try {
   console.warn('📦 Instala las dependencias con: npm install openai uuid');
 }
 
+// ===================================================================
+// MODE-SPECIFIC PROCESSORS
+// ===================================================================
+
+/**
+ * Chat Mode Processor - Fast, lightweight responses
+ * Tools: perplexity_search, user_projects, user_codex, latest_trends, project_decisions
+ */
+async function processChatMode(message, user, sessionId) {
+  const startTime = Date.now();
+  console.log('💬 Processing in Chat Mode - Fast track');
+
+  // Quick response cache for common questions
+  const quickResponses = {
+    'hola': '¡Hola! Te puedo ayudar con búsquedas rápidas, consultar tus proyectos, revisar tu Codex y ver tendencias recientes. ¿En qué puedo asistirte?',
+    'qué puedes hacer': 'Puedo ayudarte con:\n• Búsquedas rápidas en web\n• Consultar tus proyectos\n• Revisar tu Codex\n• Ver tendencias recientes\n\n¿Con qué empezamos?',
+    'en qué me puedes ayudar': 'En modo Chat puedo ayudarte con:\n• Búsquedas web rápidas\n• Consultar información de tus proyectos\n• Buscar en tu Codex personal\n• Ver las últimas tendencias\n\n¿Qué necesitas hacer?'
+  };
+
+  const lowerMessage = message.toLowerCase().trim();
+  if (quickResponses[lowerMessage]) {
+    console.log('⚡ Chat Mode: Using cached quick response');
+    return {
+      success: true,
+      response: {
+        agent: 'Vizta',
+        message: quickResponses[lowerMessage],
+        type: 'quick_response',
+        timestamp: new Date().toISOString()
+      },
+      conversationId: sessionId,
+      metadata: {
+        mode: 'chat',
+        responseType: 'cached_quick_response',
+        processingTime: Date.now() - startTime,
+        toolsUsed: []
+      }
+    };
+  }
+
+  // Allowed tools for Chat Mode (read-only, fast)
+  const CHAT_MODE_TOOLS = new Set([
+    'perplexity_search',
+    'search_political_context',
+    'user_projects',
+    'user_codex',
+    'project_findings',
+    'project_coverages',
+    'latest_trends',
+    'project_decisions'
+  ]);
+
+  try {
+    // Step 1: Try direct reasoning layer for immediate answers
+    try {
+      const { ReasoningLayer } = require('../services/agents/vizta/reasoningLayer');
+      const dummyVizta = { name: 'Vizta' };
+      const rl = new ReasoningLayer(dummyVizta);
+      const direct = await rl.tryDirectPulseAnswer(message, user, sessionId);
+
+      if (direct && direct.success) {
+        console.log('✅ Chat Mode: Direct reasoning answer found');
+        return {
+          success: true,
+          response: {
+            agent: 'Vizta',
+            message: direct.message,
+            type: 'chat_response',
+            timestamp: new Date().toISOString()
+          },
+          conversationId: sessionId,
+          metadata: {
+            mode: 'chat',
+            responseType: 'direct_reasoning',
+            processingTime: Date.now() - startTime,
+            toolsUsed: []
+          }
+        };
+      }
+    } catch (error) {
+      console.log('⚠️ Chat Mode: Direct reasoning failed, proceeding to tools');
+    }
+
+    // Step 2: Use OpenPipe with restricted tool set
+    console.log('🔧 Chat Mode: Using restricted tool set');
+    const openPipeService = require('../services/openPipeService');
+    const openPipeResult = await openPipeService.processViztaQuery(message, user, sessionId, 'chat');
+
+    if (openPipeResult.success && openPipeResult.type === 'conversational') {
+      return {
+        success: true,
+        response: {
+          agent: 'Vizta',
+          message: openPipeResult.message,
+          type: 'conversational_ai',
+          timestamp: new Date().toISOString()
+        },
+        conversationId: sessionId,
+        metadata: {
+          mode: 'chat',
+          responseType: 'conversational',
+          processingTime: Date.now() - startTime,
+          openPipeUsage: openPipeResult.usage
+        }
+      };
+    }
+
+    if (openPipeResult.success && openPipeResult.type === 'function_call') {
+      // Execute only allowed tools in parallel for speed
+      const calls = Array.isArray(openPipeResult.allFunctionCalls)
+        ? openPipeResult.allFunctionCalls
+        : [openPipeResult.functionCall];
+
+      const filteredCalls = calls.filter(call => {
+        const toolName = call.function?.name || call.name;
+        return CHAT_MODE_TOOLS.has(toolName);
+      });
+
+      // Prioritize faster tools in Chat Mode
+      const TOOL_SPEED_PRIORITY = {
+        'user_projects': 1,
+        'latest_trends': 2,
+        'user_codex': 3,
+        'search_political_context': 4,
+        'perplexity_search': 5
+      };
+
+      filteredCalls.sort((a, b) => {
+        const toolA = a.function?.name || a.name;
+        const toolB = b.function?.name || b.name;
+        const priorityA = TOOL_SPEED_PRIORITY[toolA] || 99;
+        const priorityB = TOOL_SPEED_PRIORITY[toolB] || 99;
+        return priorityA - priorityB;
+      });
+
+      console.log(`🚀 Chat Mode: Executing ${filteredCalls.length} allowed tools`);
+
+      if (filteredCalls.length === 0) {
+        return await generateCasualResponse(message, sessionId, 'chat');
+      }
+
+      // Execute tools in parallel for speed (max 2 concurrent, with timeout)
+      const CHAT_MODE_TIMEOUT = 5000; // 5 seconds max for chat mode
+      const executionPromises = filteredCalls.slice(0, 2).map(async (call) => {
+        const normalized = call.function
+          ? { name: call.function.name, arguments: call.function.arguments }
+          : call;
+
+        const argsObj = typeof normalized.arguments === 'string'
+          ? JSON.parse(normalized.arguments || '{}')
+          : (normalized.arguments || {});
+
+        try {
+          // Use MCP service with mode filtering and timeout
+          const result = await Promise.race([
+            mcpService.executeTool(normalized.name, argsObj, user, 'chat'),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('Timeout')), CHAT_MODE_TIMEOUT)
+            )
+          ]);
+          return { tool: normalized.name, result };
+        } catch (error) {
+          if (error.message === 'Timeout') {
+            console.warn(`⚠️ Chat Mode tool ${normalized.name} timed out after ${CHAT_MODE_TIMEOUT}ms`);
+          } else {
+            console.warn(`⚠️ Chat Mode tool ${normalized.name} failed:`, error.message);
+          }
+          return null;
+        }
+      });
+
+      const results = (await Promise.all(executionPromises)).filter(r => r !== null);
+
+      if (results.length > 0) {
+        const bestResult = results[0].result; // Use first successful result
+        const toolName = results[0].tool;
+
+        return {
+          success: true,
+          response: {
+            agent: bestResult.agent || 'Vizta',
+            message: await formatFunctionResult(bestResult, message),
+            type: 'function_response',
+            timestamp: new Date().toISOString(),
+            functionUsed: toolName,
+            data: bestResult.data
+          },
+          conversationId: sessionId,
+          metadata: {
+            mode: 'chat',
+            responseType: 'function_call',
+            processingTime: Date.now() - startTime,
+            toolsUsed: results.map(r => r.tool)
+          }
+        };
+      }
+    }
+
+    // Step 3: Fallback to casual conversation
+    return await generateCasualResponse(message, sessionId, 'chat');
+
+  } catch (error) {
+    console.error('❌ Chat Mode processing error:', error);
+    return await generateCasualResponse(message, sessionId, 'chat');
+  }
+}
+
+/**
+ * Agentic Mode Processor - Full tool access with complex reasoning
+ * Tools: All available tools including nitter_context, nitter_profile
+ */
+async function processAgenticMode(message, user, sessionId) {
+  const startTime = Date.now();
+  console.log('🤖 Processing in Agentic Mode - Full capabilities');
+
+  try {
+    const openPipeService = require('../services/openPipeService');
+
+    // Check for specialized pipelines (USAC/elections)
+    const msgLower = (message || '').toLowerCase();
+    const isLocalTemporalQuery = (
+      /(eleccion|elecciones|candidato|candidatos|planilla|planillas|consejo estudiantil|convocatoria|inscripci[oó]n|n[oó]mina|postulantes|horario|sede|asamblea|debate|votaci[oó]n)/.test(msgLower) ||
+      /(hoy|mañana|pasado|esta semana|este mes|\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b)/.test(msgLower)
+    );
+
+    let openPipeResult;
+
+    if (isLocalTemporalQuery) {
+      console.log('🎯 Agentic Mode: Using specialized Gemini-first pipeline');
+      try {
+        // Memory context for political queries
+        const memEntities = [];
+        try {
+          const memExec = await mcpService.executeTool('search_political_context', { query: message, limit: 8 }, user, 'agentic');
+          if (memExec?.success && memExec?.data?.results) {
+            memEntities.push(...memExec.data.results.slice(0, 5));
+          }
+        } catch (memError) {
+          console.warn('⚠️ Memory context failed:', memError.message);
+        }
+
+        // Enhanced Gemini analysis with social media integration
+        const geminiService = require('../services/gemini');
+        const enhanced = await geminiService.enhancedAnalyzeWithContext(message, memEntities, user.id);
+
+        if (enhanced?.success) {
+          // Optional: Execute Nitter context for social media data
+          try {
+            const nitterExec = await mcpService.executeTool('nitter_context', { q: message, location: 'Guatemala', limit: 15 }, user, 'agentic');
+            if (nitterExec?.success) {
+              enhanced.extraSocial = nitterExec;
+            }
+          } catch (nitterError) {
+            console.warn('⚠️ Nitter context failed:', nitterError.message);
+          }
+
+          openPipeResult = enhanced;
+        }
+      } catch (pipelineError) {
+        console.warn('⚠️ Specialized pipeline failed, using standard OpenPipe:', pipelineError.message);
+        openPipeResult = await openPipeService.processViztaQuery(message, user, sessionId, 'agentic');
+      }
+    } else {
+      // Standard agentic processing with full tool access
+      console.log('🔧 Agentic Mode: Using full OpenPipe capabilities');
+      openPipeResult = await openPipeService.processViztaQuery(message, user, sessionId, 'agentic');
+    }
+
+    if (openPipeResult.success && openPipeResult.type === 'function_call') {
+      // Execute ALL suggested tools in sequence for comprehensive analysis
+      const calls = Array.isArray(openPipeResult.allFunctionCalls)
+        ? openPipeResult.allFunctionCalls
+        : [openPipeResult.functionCall];
+
+      console.log(`🔗 Agentic Mode: Executing ${calls.length} tools in sequence`);
+
+      const executionResults = [];
+
+      for (const call of calls) {
+        const normalized = call.function
+          ? { name: call.function.name, arguments: call.function.arguments }
+          : call;
+
+        const argsObj = typeof normalized.arguments === 'string'
+          ? JSON.parse(normalized.arguments || '{}')
+          : (normalized.arguments || {});
+
+        try {
+          console.log(`🔧 Executing: ${normalized.name}`);
+          const result = await mcpService.executeTool(normalized.name, argsObj, user, 'agentic');
+
+          if (result?.success) {
+            executionResults.push({ tool: normalized.name, result });
+          }
+        } catch (error) {
+          console.warn(`⚠️ Agentic Mode tool ${normalized.name} failed:`, error.message);
+        }
+      }
+
+      if (executionResults.length > 0) {
+        // Use the most comprehensive result or combine multiple results
+        const primaryResult = executionResults[executionResults.length - 1].result;
+        const allTools = executionResults.map(r => r.tool);
+
+        return {
+          success: true,
+          response: {
+            agent: primaryResult.agent || 'Vizta',
+            message: await formatFunctionResult(primaryResult, message),
+            type: 'agentic_response',
+            timestamp: new Date().toISOString(),
+            functionsUsed: allTools,
+            data: primaryResult.data,
+            comprehensiveAnalysis: executionResults.length > 1
+          },
+          conversationId: sessionId,
+          metadata: {
+            mode: 'agentic',
+            responseType: 'multi_tool_analysis',
+            processingTime: Date.now() - startTime,
+            toolsExecuted: allTools,
+            totalTools: executionResults.length,
+            hasNitterData: allTools.some(t => t.includes('nitter'))
+          }
+        };
+      }
+    }
+
+    if (openPipeResult.success && openPipeResult.type === 'conversational') {
+      return {
+        success: true,
+        response: {
+          agent: 'Vizta',
+          message: openPipeResult.message,
+          type: 'agentic_conversation',
+          timestamp: new Date().toISOString()
+        },
+        conversationId: sessionId,
+        metadata: {
+          mode: 'agentic',
+          responseType: 'conversational',
+          processingTime: Date.now() - startTime
+        }
+      };
+    }
+
+    // Fallback for agentic mode
+    return await generateCasualResponse(message, sessionId, 'agentic');
+
+  } catch (error) {
+    console.error('❌ Agentic Mode processing error:', error);
+    return await generateCasualResponse(message, sessionId, 'agentic');
+  }
+}
+
+/**
+ * Generate casual response with mode context
+ */
+async function generateCasualResponse(message, sessionId, mode) {
+  const capabilities = mode === 'chat'
+    ? 'Te puedo ayudar con búsquedas rápidas, consultar tus proyectos, revisar tu Codex y ver tendencias recientes.'
+    : 'Puedo hacer análisis completos de redes sociales, investigaciones profundas, y guardar datos importantes para ti.';
+
+  return {
+    success: true,
+    response: {
+      agent: 'Vizta',
+      message: `¡Hola! ${capabilities} ¿En qué puedo asistirte?`,
+      type: 'casual_conversation',
+      timestamp: new Date().toISOString()
+    },
+    conversationId: sessionId,
+    metadata: {
+      mode,
+      responseType: 'casual_fallback',
+      processingTime: 100
+    }
+  };
+}
+
 /**
  * POST /api/vizta-chat/query
  * Endpoint principal para consultas de Vizta Chat
@@ -242,532 +622,37 @@ router.post('/query', verifyUserAccess, async (req, res) => {
     console.log('🎯 Iniciando orquestación con sistema modular...');
     
     const startTime = Date.now();
-    
-    // PASO 1: Clasificar intención con LLM
-    const intentClassification = await classifyIntentWithLLM(message);
-    console.log(`🧠 Intención detectada: ${intentClassification.intent} (${intentClassification.confidence})`);
-    console.log(`💭 Razonamiento: ${intentClassification.reasoning}`);
+
+    // ===================================================================
+    // NEW MODE-BASED PROCESSING SYSTEM
+    // ===================================================================
+
+    console.log(`🎯 Processing in ${mode.toUpperCase()} mode`);
 
     let result;
     
+    // Use dedicated mode processors
     if (mode === 'chat') {
-      // MODO CHAT: respuestas rápidas con razonamiento y herramientas ligeras
-      // 1) Intento directo con Reasoning (DeepSeek/GPT-4o-mini) si hay memoria Pulse
-      try {
-        const { ReasoningLayer } = require('../services/agents/vizta/reasoningLayer');
-        const dummyVizta = { name: 'Vizta' };
-        const rl = new ReasoningLayer(dummyVizta);
-        const direct = await rl.tryDirectPulseAnswer(message, req.user, chatSessionId);
-        if (direct && direct.success) {
-          result = { success: true, response: { agent: 'Vizta', message: direct.message, type: 'chat_response', timestamp: new Date().toISOString() }, conversationId: chatSessionId, metadata: { conversationType: 'chat', processingTime: Date.now() - startTime, mode } };
-        }
-      } catch {}
-      if (!result) {
-        // 2) OpenPipe restringido a herramientas de chat (sin nitter_*)
-        const openPipeResult = await openPipeService.processViztaQuery(message, req.user, chatSessionId, 'chat');
-        if (openPipeResult.success && openPipeResult.type === 'conversational') {
-          result = { success: true, response: { agent: 'Vizta', message: openPipeResult.message, type: 'conversational_ai', timestamp: new Date().toISOString() }, conversationId: chatSessionId, metadata: { conversationType: 'ai_conversational', processingTime: Date.now() - startTime, openPipeUsage: openPipeResult.usage, mode } };
-        } else if (openPipeResult.success && openPipeResult.type === 'function_call') {
-          // Ejecutar sólo herramientas permitidas en modo chat
-          const calls = Array.isArray(openPipeResult.allFunctionCalls) && openPipeResult.allFunctionCalls.length > 0 ? openPipeResult.allFunctionCalls : [openPipeResult.functionCall];
-          const allowed = new Set(['perplexity_search','search_political_context','user_projects','user_codex','project_findings','project_coverages','latest_trends']);
-          const filtered = calls.filter(c => allowed.has((c.function?.name) || c.name));
-          let lastExec = null; let lastName = null;
-          for (const call of filtered) {
-            const normalized = call.function ? { name: call.function.name, arguments: call.function.arguments } : call;
-            const argsObj = typeof normalized.arguments === 'string' ? JSON.parse(normalized.arguments || '{}') : (normalized.arguments || {});
-            lastExec = await openPipeService.executeFunctionCall({ name: normalized.name, arguments: argsObj }, req.user, chatSessionId);
-            lastName = normalized.name;
-          }
-          if (lastExec) {
-            result = { success: !!lastExec.success, response: { agent: lastExec.agent || 'Vizta', message: await formatFunctionResult(lastExec, message), type: 'function_response', timestamp: new Date().toISOString(), functionUsed: lastName, data: lastExec.data }, conversationId: chatSessionId, metadata: { conversationType: 'function_call', mode, processingTime: Date.now() - startTime } };
-          }
-        }
-      }
-      // Si sigue sin result, caer a casual
-      if (!result) {
-        result = {
-          success: true,
-          response: { agent: 'Vizta', message: await generateCasualResponse(message), type: 'casual_conversation', timestamp: new Date().toISOString() },
-          conversationId: chatSessionId,
-          metadata: { conversationType: 'casual', processingTime: Date.now() - startTime, mode }
-        };
-      }
-    } else if (intentClassification.intent === 'casual_chat') {
-      // Manejar conversación casual directamente
-      result = {
-        success: true,
-        response: {
-          agent: 'Vizta',
-          message: await generateCasualResponse(message),
-          type: 'casual_conversation',
-          timestamp: new Date().toISOString()
-        },
-        conversationId: chatSessionId,
-        metadata: {
-          conversationType: 'casual',
-          processingTime: Date.now() - startTime
-        }
-      };
-
-      // Guardar respuesta casual en el historial
-      await saveToHistory(req.user.id, message, result.response.message, chatSessionId);
-
-    } else if (intentClassification.intent === 'codex_search') {
-      // PASO 2: Búsqueda en Codex
-      result = await processCodexSearch(message, req.user, chatSessionId);
-      
-    } else if (intentClassification.intent === 'project_search') {
-      // PASO 3: Búsqueda en Proyectos
-      result = await processProjectSearch(message, req.user, chatSessionId);
-      
+      result = await processChatMode(message, req.user, chatSessionId);
+    } else if (mode === 'agentic') {
+      result = await processAgenticMode(message, req.user, chatSessionId);
     } else {
-      // Modo memoria explícita: si el usuario pide "según tu memoria" o menciona Pulse_Politics,
-      // NO usar web ni social hasta tener un tema concreto. Responder con memoria o pedir precisión.
-      const asksMemory = /(seg[uú]n tu memoria|en tu memoria|tu memoria|memoria)/i.test(message) || /pulse[_-]?politics/i.test(message);
-      if (asksMemory) {
-        const generic = /^(que sabes|qué sabes|que conoces|qué conoces|guatemala|info general)/i.test(message.trim());
-        if (generic) {
-          // Pregunta aclaratoria en modo memoria-only
-          return res.json({
-            success: true,
-            response: {
-              agent: 'Vizta',
-              message: '¿Sobre qué tema específico de tu memoria política quieres que revise? Puedo buscar personas, cargos, eventos o fechas. Ejemplos: "personas vinculadas a X", "cargos del Congreso", "eventos en agosto".',
-              type: 'memory_clarification',
-              timestamp: new Date().toISOString()
-            },
-            conversationId: chatSessionId,
-            metadata: { conversationType: 'memory_only' }
-          });
-        }
-        try {
-          const memExec = await openPipeService.executeFunctionCall(
-            { name: 'search_political_context', arguments: { query: message, limit: 10 } },
-            req.user,
-            chatSessionId
-          );
-          const results = memExec?.data?.results || [];
-          const count = memExec?.data?.count ?? results.length;
-          const preview = results.slice(0, 5).map((r, i) => `- ${r?.title || r?.id || `item_${i+1}`}`).join('\n');
-          return res.json({
-            success: true,
-            response: {
-              agent: 'Vizta',
-              message: count > 0
-                ? `En tu memoria política encontré ${count} registros relacionados. Algunos:
-${preview}
-¿Quieres que profundice en alguno o que genere una búsqueda social a partir de esto?`
-                : 'No encontré resultados en tu memoria política con esa descripción. ¿Puedes especificar persona, cargo o evento?',
-              type: 'memory_response',
-              timestamp: new Date().toISOString()
-            },
-            conversationId: chatSessionId,
-            metadata: { conversationType: 'memory_only', count }
-          });
-        } catch (e) {
-          return res.json({
-            success: true,
-            response: {
-              agent: 'Vizta',
-              message: 'Hubo un problema consultando tu memoria política. ¿Puedes especificar el tema para intentarlo de nuevo?',
-              type: 'memory_error',
-              timestamp: new Date().toISOString()
-            },
-            conversationId: chatSessionId,
-            metadata: { conversationType: 'memory_only', error: e.message }
-          });
-        }
-      }
-      // Helper local para sanear queries sociales
-      const sanitizeSocialQuery = (q) => {
-        try {
-          if (!q || typeof q !== 'string') return null;
-          // Eliminar signos de interrogación y fechas tipo dd/mm/yyyy incrustadas al inicio
-          let s = q
-            .replace(/[?¿]/g, ' ')
-            .replace(/\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/g, ' ')
-            .replace(/\s+/g, ' ') // colapsar espacios
-            .trim();
-          // Evitar prefijos tipo enunciado; quedarnos desde el primer hashtag o palabra OR
-          const firstOr = s.search(/\sOR\s/i);
-          const firstHash = s.indexOf('#');
-          if (firstHash > -1 && (firstOr === -1 || firstHash < firstOr)) {
-            s = s.slice(firstHash);
-          }
-          // Asegurar espacios alrededor de OR
-          s = s.replace(/\s*OR\s*/gi, ' OR ');
-          // Quitar palabras genéricas aisladas si no están combinadas (muy agresivo → sólo eliminar si longitud total < 30)
-          if (s.length < 30) {
-            s = s.replace(/\b(hoy|lista|facultades|elecciones)\b/gi, '').replace(/\s+/g, ' ').trim();
-          }
-          // Reglas mínimas: debe contener OR o hashtag o USAC
-          if (!(/\sOR\s/i.test(s) || s.includes('#') || /USAC/i.test(s))) return null;
-          return s;
-        } catch { return null; }
-      };
-      // PASO 3: Pipeline especializado previo para USAC/elecciones: Gemini primero → Perplexity → Nitter
-      const msgLowerPre = (message || '').toLowerCase();
-      const isLocalTemporalQuery = (
-        /(eleccion|elecciones|candidato|candidatos|planilla|planillas|consejo estudiantil|convocatoria|inscripci[oó]n|n[oó]mina|postulantes|horario|sede|asamblea|debate|votaci[oó]n)/.test(msgLowerPre) ||
-        /(hoy|mañana|pasado|esta semana|este mes|\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b)/.test(msgLowerPre)
-      );
-      let openPipeResult;
-      if (isLocalTemporalQuery && mode === 'agentic') {
-        console.log('🧭 Gemini-first pipeline enabled for local/temporal query');
-        try {
-          // 0) Memoria política previa para contexto (consulta original)
-          const memQ = message;
-          let memEntities = [];
-          try {
-            const memExec0 = await openPipeService.executeFunctionCall(
-              { name: 'search_political_context', arguments: { query: memQ, limit: 8 } },
-              req.user,
-              chatSessionId
-            );
-            const res0 = memExec0?.data?.results || [];
-            for (const r of res0) {
-              if (r?.title) memEntities.push(r.title);
-              if (r?.entities && Array.isArray(r.entities)) memEntities.push(...r.entities.slice(0, 5));
-            }
-          } catch {}
-
-          // 1) Gemini: generar pregunta web específica y query social candidata (sin role system)
-          const now = new Date();
-          const dateCtx = now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
-          const gemPrompt = `Devuelve SOLO JSON con: {"web_question":"...","social_q":"..."}.
-Reglas:
-- web_question: pregunta concreta para web, con fecha (${dateCtx}) si aplica; orientada a listas/candidatos/información oficial relevante al tema.
-- social_q: query de X/Twitter en formato tokens con OR, usando jerga/hashtags del dominio, evitando frases completas, preguntas y fechas.
-Entrada:
-- Consulta usuario: ${message}
-- Entidades/memoria: ${memEntities.slice(0,8).join(', ')}`;
-          const rawGem = await geminiService.generateContent([
-            { role: 'user', content: gemPrompt }
-          ], { temperature: 0.2, max_tokens: 400 });
-          const gm = rawGem.match(/\{[\s\S]*\}/);
-          const gj = gm ? JSON.parse(gm[0]) : JSON.parse(rawGem);
-          const webQuestion = (gj?.web_question || message).toString().slice(0, 400);
-          const socialQCandidate = sanitizeSocialQuery(gj?.social_q);
-
-          // 2) Ejecutar OpenPipe normal pero forzando perplexity primero con improve_nitter_search
-          openPipeResult = await openPipeService.processViztaQuery(webQuestion, req.user, chatSessionId);
-
-          // 3) Si ya hubo function_call, seguimos; si no, forzamos una pasada social con socialQCandidate
-          if (!(openPipeResult?.success)) {
-            throw new Error('OpenPipe no devolvió éxito; forzando nitter_context con social_q');
-          }
-
-          // 4) Si tenemos social_q de Gemini, ejecutamos un nitter adicional y combinamos si mejora
-          if (socialQCandidate) {
-            const execN = await openPipeService.executeFunctionCall(
-              { name: 'nitter_context', arguments: { q: socialQCandidate, location: 'Guatemala', limit: 35 } },
-              req.user,
-              chatSessionId
-            );
-            if (execN?.success) {
-              // Enlazar en metadata para que el post-proceso pueda elegir el mejor
-              openPipeResult.extraSocial = execN;
-            }
-          }
-        } catch (e) {
-          console.warn('⚠️ Gemini-first pipeline failed, falling back to OpenPipe default:', e.message);
-          openPipeResult = await openPipeService.processViztaQuery(message, req.user, chatSessionId);
-        }
-      } else if (mode === 'agentic') {
-        // Ruta estándar
-        console.log('🎯 Usando OpenPipe para function calling optimizado...');
-        openPipeResult = await openPipeService.processViztaQuery(message, req.user, chatSessionId, 'agentic');
-      } else {
-        // Modo chat ya manejado arriba; como seguridad, procesar conversacional restringido
-        const openPipeResultChat = await openPipeService.processViztaQuery(message, req.user, chatSessionId, 'chat');
-        result = {
-          success: true,
-          response: { agent: 'Vizta', message: openPipeResultChat.message || '¿En qué puedo ayudarte?', type: 'conversational_ai', timestamp: new Date().toISOString() },
-          conversationId: chatSessionId,
-          metadata: { conversationType: 'ai_conversational', processingTime: Date.now() - startTime, mode: 'chat' }
-        };
-      }
-      
-      if (openPipeResult.success && openPipeResult.type === 'function_call') {
-        // Ejecutar TODAS las herramientas decididas por el modelo en orden
-        const toolCalls = Array.isArray(openPipeResult.allFunctionCalls) && openPipeResult.allFunctionCalls.length > 0
-          ? openPipeResult.allFunctionCalls
-          : [openPipeResult.functionCall];
-        
-        const toolExecutions = [];
-        for (const call of toolCalls) {
-          // Normalizar estructura de tool_call del SDK de OpenAI/OpenPipe
-          const normalized = call.function
-            ? { name: call.function.name, arguments: call.function.arguments }
-            : call; // ya viene como { name, arguments }
-          
-          const toolName = normalized.name || 'desconocido';
-          let argsObj = undefined;
-          try {
-            argsObj = typeof normalized.arguments === 'string'
-              ? JSON.parse(normalized.arguments || '{}')
-              : (normalized.arguments || {});
-          } catch (e) {
-            console.warn(`⚠️ No se pudo parsear arguments de ${toolName}:`, e.message);
-          }
-
-          console.log(`🔧 Ejecutando función: ${toolName}`);
-          const exec = await openPipeService.executeFunctionCall(
-            { name: toolName, arguments: argsObj },
-            req.user,
-            chatSessionId
-          );
-          toolExecutions.push({ call: normalized, exec });
-          
-          // Persistir breve rastro de cada ejecución en memories
-          try {
-            await memoriesService.saveMessage({
-              userId: req.user.id,
-              sessionId: chatSessionId,
-              role: 'assistant',
-              content: exec?.success ? `✅ Herramienta ${toolName} ejecutada` : `❌ Error ejecutando ${toolName}: ${exec?.error || 'desconocido'}`,
-              messageType: 'function_result',
-              metadata: {
-                conversationType: 'function_call',
-                functionCall: call,
-                functionResult: exec
-              }
-            });
-          } catch (e) {
-            console.warn('⚠️ No se pudo guardar rastro de ejecución en memories:', e.message);
-          }
-        }
-        
-        // Construir respuesta final priorizando la última herramienta ejecutada
-        const last = toolExecutions[toolExecutions.length - 1];
-        const lastToolName = last?.call?.name || last?.call?.function?.name || 'desconocido';
-        const lastExec = last?.exec || {};
-        
-        result = {
-          success: lastExec.success,
-          response: {
-            agent: lastExec.agent || 'Vizta',
-            message: await formatFunctionResult(lastExec, message),
-            type: 'function_response',
-            timestamp: new Date().toISOString(),
-            functionUsed: lastToolName,
-            data: lastExec.data
-          },
-          conversationId: chatSessionId,
-          metadata: {
-            conversationType: 'function_call',
-            functionCalls: toolCalls,
-            executions: toolExecutions.map(te => ({
-              tool: te.call?.name || te.call?.function?.name,
-              success: !!te.exec?.success
-            })),
-            executionsDetailed: toolExecutions.map(te => ({
-              tool: te.call?.name || te.call?.function?.name,
-              success: !!te.exec?.success,
-              exec: {
-                function: te.exec?.function,
-                tool: te.exec?.tool,
-                data: te.exec?.data ? {
-                  nitter_optimization: te.exec.data.nitter_optimization,
-                  web_search_result: te.exec.data.web_search_result
-                } : undefined
-              }
-            })),
-            agent: lastExec.agent,
-            processingTime: Date.now() - startTime,
-            openPipeUsage: openPipeResult.usage
-          }
-        };
-        
-      } else if (openPipeResult.success && openPipeResult.type === 'conversational') {
-        // Respuesta conversacional directa de OpenPipe
-        result = {
-          success: true,
-          response: {
-            agent: 'Vizta',
-            message: openPipeResult.message,
-            type: 'conversational_ai',
-            timestamp: new Date().toISOString()
-          },
-          conversationId: chatSessionId,
-          metadata: {
-            conversationType: 'ai_conversational',
-            processingTime: Date.now() - startTime,
-            openPipeUsage: openPipeResult.usage
-          }
-        };
-        
-      } else {
-        // Fallback al sistema modular si OpenPipe falla
-        console.log('⚠️ OpenPipe falló, usando fallback al sistema modular');
-        result = await agentesService.processUserQuery(message, req.user, {
-          sessionId: chatSessionId,
-          previousMessages: previousMessages
-        });
-      }
-    }
-
-    // Post-procesamiento: si la consulta parece de elecciones estudiantiles USAC y no ejecutamos nitter_context, forzar hop social
-    try {
-      const msgLower = (message || '').toLowerCase();
-      const isStudentElectionQuery = (
-        /(eleccion|elecciones|candidato|candidatos|planilla|planillas|consejo estudiantil)/.test(msgLower) &&
-        /(usac|universidad de san carlos|facultad)/.test(msgLower)
-      );
-
-      const alreadyUsedNitter = !!(result?.metadata?.executions || []).some(e => e.tool === 'nitter_context' && e.success);
-
-      if (isStudentElectionQuery && !alreadyUsedNitter) {
-        console.log('🎯 Detected USAC student elections query without social hop. Auto-chaining to nitter_context...');
-
-        // Intentar enriquecer query a partir de text/plain previo o la original
-        const enrichedParts = [];
-        const base = message;
-        if (/derecho/.test(msgLower)) enrichedParts.push('Derecho USAC');
-        if (/ingenier/.test(msgLower)) enrichedParts.push('Ingeniería USAC');
-        if (/medicin/.test(msgLower)) enrichedParts.push('Medicina USAC');
-        enrichedParts.push('consejo estudiantil', 'planillas', 'elecciones USAC');
-
-        const nitterQ = `${enrichedParts.join(' OR ')} Guatemala #USAC`;
-
-        // Si el hop previo fue perplexity_search y trae optimización para nitter, combínala
-        const prevDetailed = (result?.metadata?.executionsDetailed || []).map(e => e.exec || {});
-        const pxx = prevDetailed.find(e => (e.function === 'perplexity_search') || (e.tool === 'perplexity_search'));
-        const pxxOptim = pxx?.data?.nitter_optimization?.optimized_query;
-        const finalQ = pxxOptim ? `${nitterQ} OR ${pxxOptim}` : nitterQ;
-
-        const exec = await openPipeService.executeFunctionCall(
-          { name: 'nitter_context', arguments: { q: finalQ, location: 'Guatemala', limit: 30 } },
-          req.user,
-          chatSessionId
-        );
-
-        if (exec?.success) {
-          // Construir respuesta final usando el resultado social
-          result = {
-            success: true,
-            response: {
-              agent: exec.agent || 'Vizta',
-              message: await formatFunctionResult(exec, message),
-              type: 'function_response',
-              timestamp: new Date().toISOString(),
-              functionUsed: 'nitter_context',
-              data: exec.data
-            },
-            conversationId: chatSessionId,
-            metadata: {
-              ...(result?.metadata || {}),
-              conversationType: 'function_call',
-              autoChained: 'student_elections_usac',
-              processingTime: Date.now() - startTime
-            }
-          };
-        }
-      }
-    } catch (postErr) {
-      console.warn('⚠️ Auto-chaining nitter_context failed:', postErr.message);
-    }
-
-    // Post-procesamiento 2: si ya ejecutamos nitter_context pero devolvió 0-2 tweets, refinar con memoria (Pulse_Politics) + Gemini
-    try {
-      const lastTool = result?.response?.functionUsed;
-      const lastData = result?.response?.data;
-      const fewTweets = lastTool === 'nitter_context' && (!lastData?.tweets || lastData.tweets.length <= 2);
-      const msgLower2 = (message || '').toLowerCase();
-      const isStudentElectionQuery2 = (
-        /(eleccion|elecciones|candidato|candidatos|planilla|planillas|consejo estudiantil)/.test(msgLower2) &&
-        /(usac|universidad de san carlos|facultad)/.test(msgLower2)
-      );
-
-      if (fewTweets && isStudentElectionQuery2) {
-        console.log('🔁 Few tweets found. Refining with Pulse_Politics memory + Gemini query synthesis...');
-
-        // 1) Buscar en memoria política
-        const memoryQuery = /derecho/.test(msgLower2) ? 'elecciones consejo estudiantil Derecho USAC' : 'elecciones consejo estudiantil USAC';
-        const memExec = await openPipeService.executeFunctionCall(
-          { name: 'search_political_context', arguments: { query: memoryQuery, limit: 8 } },
-          req.user,
-          chatSessionId
-        );
-
-        // Extraer posibles nombres/entidades de memoria
-        const memEntities = [];
-        try {
-          const memRes = memExec?.data?.results || [];
-          for (const r of memRes) {
-            if (r?.title) memEntities.push(r.title);
-            if (r?.entities && Array.isArray(r.entities)) memEntities.push(...r.entities.slice(0, 5));
-          }
-        } catch {}
-
-        // 2) Recuperar optimización de Perplexity si existe
-        const prevDetailed2 = (result?.metadata?.executionsDetailed || []).map(e => e.exec || {});
-        const pxx2 = prevDetailed2.find(e => (e.function === 'perplexity_search') || (e.tool === 'perplexity_search'));
-        const pxxOptim2 = pxx2?.data?.nitter_optimization?.optimized_query;
-
-        // 3) Pedir a Gemini que sintetice la mejor query OR para X/Twitter
-        const now = new Date();
-        const dateCtx = now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
-        const userMsg = `Devuelve SOLO JSON con {"q":"..."} (query para X/Twitter en formato tokens con OR, sin preguntas/fechas/frases).\nFecha actual: ${dateCtx}\nConsulta: ${message}\nOptimización Perplexity: ${pxxOptim2 || ''}\nEntidades/Nombres memoria: ${memEntities.slice(0,8).join(', ')}`;
-        let gemOut;
-        try {
-          const rawGem = await geminiService.generateContent([
-            { role: 'user', content: userMsg }
-          ], { temperature: 0.2, max_tokens: 300 });
-          const match = rawGem.match(/\{[\s\S]*\}/);
-          const json = match ? JSON.parse(match[0]) : JSON.parse(rawGem);
-          gemOut = json?.q;
-        } catch (e) {
-          console.warn('⚠️ Gemini synthesis failed, falling back to concatenation');
-        }
-
-        const refinedQ = gemOut || [pxxOptim2, 'consejo estudiantil', 'elecciones USAC', ...memEntities.slice(0, 5)]
-          .filter(Boolean)
-          .join(' OR ');
-
-        if (refinedQ) {
-          const exec2 = await openPipeService.executeFunctionCall(
-            { name: 'nitter_context', arguments: { q: refinedQ, location: 'Guatemala', limit: 35 } },
-            req.user,
-            chatSessionId
-          );
-
-          if (exec2?.success && exec2?.data?.tweets?.length > (lastData?.tweets?.length || 0)) {
-            // Merge simple: usar el mejor resultado
-            result = {
-              success: true,
-              response: {
-                agent: exec2.agent || 'Vizta',
-                message: await formatFunctionResult(exec2, message),
-                type: 'function_response',
-                timestamp: new Date().toISOString(),
-                functionUsed: 'nitter_context',
-                data: exec2.data
-              },
-              conversationId: chatSessionId,
-              metadata: {
-                ...(result?.metadata || {}),
-                conversationType: 'function_call',
-                autoChained: 'student_elections_usac_refined',
-                processingTime: Date.now() - startTime
-              }
-            };
-          }
-        }
-      }
-    } catch (refineErr) {
-      console.warn('⚠️ Refinement with Pulse_Politics + Gemini failed:', refineErr.message);
+      // Default fallback to chat mode
+      console.warn(`⚠️ Unknown mode: ${mode}, defaulting to chat`);
+      result = await processChatMode(message, req.user, chatSessionId);
     }
 
     // Formatear respuesta para el chat y asegurar estructura correcta
     const finalResponse = formatChatResponse(result);
 
-    // Guardar en historial si no es casual
-    if (intentClassification.intent !== 'casual_chat') {
+    // Guardar en historial (excluir solo respuestas casuales)
+    const iscasualResponse = result?.metadata?.responseType === 'casual_fallback' ||
+                             result?.response?.type === 'casual_conversation';
+
+    if (!iscasualResponse) {
       // Extraer solo el texto del mensaje para guardar
-      const messageToSave = typeof finalResponse.response?.message === 'string' 
-        ? finalResponse.response.message 
+      const messageToSave = typeof finalResponse.response?.message === 'string'
+        ? finalResponse.response.message
         : JSON.stringify(finalResponse.response);
 
       await saveToHistory(req.user.id, message, messageToSave, chatSessionId);
