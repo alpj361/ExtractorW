@@ -15,6 +15,7 @@ const tweetCommentsRoutes = require('./tweetComments');
 const aiRoutes = require('./ai');
 const mapsRoutes = require('./maps');
 const webAgentRoutes = require('./webAgent');
+const agentsRoutes = require('./agents');
 const path = require('path');
 const capturadosRoutes = require('./capturados');
 const coveragesRoutes = require('./coverages');
@@ -106,6 +107,9 @@ function setupRoutes(app) {
   // Configurar rutas de WebAgent Proxy
   app.use('/api/webagent', webAgentRoutes);
 
+  // Configurar rutas de Agentes IA
+  app.use('/api/agents', agentsRoutes);
+
   // Nueva ruta para agrupación de Codex
   require('./codexGroups')(app);
 
@@ -149,6 +153,7 @@ function setupRoutes(app) {
         '/api/codex-groups',
         '/api/codex',
         '/api/webagent',
+        '/api/agents',
         '/api/instagram'
       ]
     });

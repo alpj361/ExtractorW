@@ -1,5 +1,9 @@
 const express = require('express');
 const router = express.Router();
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+
+// Initialize Gemini for AI-enhanced exploration
+const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 /**
  * WebAgent Proxy Service
@@ -109,6 +113,77 @@ router.post('/extract', async (req, res) => {
     res.status(500).json({
       error: 'internal_error',
       message: 'Error interno del servidor',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * AI-Enhanced exploration with intelligent site analysis
+ * POST /api/webagent/explore-ai
+ */
+router.post('/explore-ai', async (req, res) => {
+  try {
+    console.log('🤖 AI-Enhanced WebAgent Explorer solicitado:', {
+      url: req.body.url,
+      goal: req.body.goal,
+      maxSteps: req.body.maxSteps
+    });
+
+    const { url, goal, maxSteps = 3, screenshot = false } = req.body;
+
+    if (!url || !goal) {
+      return res.status(400).json({
+        error: 'missing_parameters',
+        message: 'Se requieren "url" y "goal"'
+      });
+    }
+
+    // Validar URL
+    try {
+      new URL(url);
+    } catch (error) {
+      return res.status(400).json({
+        error: 'invalid_url',
+        message: 'La URL proporcionada no es válida'
+      });
+    }
+
+    // Step 1: Regular WebAgent exploration
+    const explorationResult = await performBasicExploration(url, goal, maxSteps, screenshot);
+
+    // Step 2: AI-powered analysis of the exploration results
+    let aiAnalysis = null;
+    if (explorationResult.success && process.env.GEMINI_API_KEY) {
+      try {
+        aiAnalysis = await analyzeExplorationWithAI(url, goal, explorationResult.data);
+      } catch (aiError) {
+        console.warn('⚠️ AI analysis failed, proceeding with basic exploration:', aiError.message);
+      }
+    }
+
+    // Step 3: Combine results
+    const enhancedResult = {
+      ...explorationResult,
+      aiAnalysis: aiAnalysis || null,
+      enhanced: !!aiAnalysis,
+      timestamp: new Date().toISOString()
+    };
+
+    if (aiAnalysis) {
+      console.log('✅ AI-Enhanced WebAgent Explorer completado exitosamente');
+    } else {
+      console.log('✅ WebAgent Explorer completado (sin análisis IA)');
+    }
+
+    res.json(enhancedResult);
+
+  } catch (error) {
+    console.error('❌ Error en AI-Enhanced WebAgent:', error);
+
+    res.status(500).json({
+      error: 'enhanced_exploration_failed',
+      message: 'Error en exploración mejorada con IA',
       timestamp: new Date().toISOString()
     });
   }
@@ -275,5 +350,142 @@ router.get('/info', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+/**
+ * Helper function: Perform basic WebAgent exploration
+ */
+async function performBasicExploration(url, goal, maxSteps, screenshot) {
+  const response = await fetch(`${WEBAGENT_URL}/explore/summarize`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      url,
+      goal,
+      maxSteps: Math.min(Math.max(maxSteps, 1), 10),
+      screenshot
+    })
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(`WebAgent error: ${response.status} - ${errorData.message || 'Unknown error'}`);
+  }
+
+  const result = await response.json();
+
+  return {
+    success: true,
+    data: result
+  };
+}
+
+/**
+ * Helper function: AI-powered analysis of exploration results
+ */
+async function analyzeExplorationWithAI(url, goal, explorationData) {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error('Gemini API key not configured');
+  }
+
+  const model = genai.getGenerativeModel({ model: 'gemini-2.5-flash' });
+
+  const prompt = `Analiza los resultados de esta exploración web y genera insights inteligentes para la creación de agentes de extracción.
+
+URL EXPLORADA: ${url}
+OBJETIVO ORIGINAL: ${goal}
+
+DATOS DE EXPLORACIÓN:
+${JSON.stringify(explorationData, null, 2)}
+
+ANÁLISIS REQUERIDO:
+1. Identifica el tipo de sitio web y su estructura general
+2. Detecta elementos extraíbles y patrones de datos
+3. Evalúa la complejidad de navegación requerida
+4. Sugiere selectores CSS probables para elementos importantes
+5. Identifica oportunidades de extracción de datos
+6. Recomienda estrategias de scraping específicas
+
+FORMATO DE RESPUESTA (JSON válido):
+{
+  "siteAnalysis": {
+    "type": "tipo de sitio (ej: e-commerce, noticias, blog)",
+    "structure": "descripción de la estructura",
+    "complexity": "low|medium|high",
+    "navigationRequired": true/false
+  },
+  "extractableElements": [
+    {
+      "name": "nombre del elemento",
+      "description": "descripción",
+      "suggestedSelectors": ["selector1", "selector2"],
+      "dataType": "text|image|link|number",
+      "importance": "high|medium|low"
+    }
+  ],
+  "scrapingStrategies": [
+    {
+      "strategy": "nombre de la estrategia",
+      "description": "descripción detallada",
+      "steps": ["paso1", "paso2", "paso3"],
+      "difficulty": "low|medium|high"
+    }
+  ],
+  "recommendations": [
+    "recomendación 1",
+    "recomendación 2"
+  ],
+  "confidence": 0.9,
+  "insights": "insights adicionales y observaciones"
+}
+
+Responde solo con el JSON válido, sin texto adicional.`;
+
+  const result = await model.generateContent(prompt);
+  const responseText = result.response.text().trim();
+
+  try {
+    // Clean response if it has markdown code blocks
+    const cleanedResponse = responseText.replace(/```json\n?|\n?```/g, '');
+    return JSON.parse(cleanedResponse);
+  } catch (parseError) {
+    console.error('Error parsing AI analysis response:', parseError);
+    console.log('Raw AI response:', responseText);
+
+    // Fallback response
+    return {
+      siteAnalysis: {
+        type: "sitio web general",
+        structure: "estructura no identificada",
+        complexity: "medium",
+        navigationRequired: false
+      },
+      extractableElements: [
+        {
+          name: "contenido general",
+          description: "elementos de contenido del sitio",
+          suggestedSelectors: [".content", "main", "article"],
+          dataType: "text",
+          importance: "medium"
+        }
+      ],
+      scrapingStrategies: [
+        {
+          strategy: "extracción básica",
+          description: "extracción general de contenido",
+          steps: ["cargar página", "extraer elementos", "procesar datos"],
+          difficulty: "medium"
+        }
+      ],
+      recommendations: [
+        "verificar estructura específica del sitio",
+        "ajustar selectores según contenido real"
+      ],
+      confidence: 0.5,
+      insights: "Análisis de fallback debido a error en parsing de respuesta de IA"
+    };
+  }
+}
 
 module.exports = router;
