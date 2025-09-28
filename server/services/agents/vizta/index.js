@@ -169,33 +169,39 @@ Respond in JSON format:
    */
   async generateConversationalResponse(userMessage, intentAnalysis) {
     const start = Date.now();
+
     if (!this.openaiConfigured) {
-      return this.buildConversationalFallback(userMessage, intentAnalysis, 'missing_api_key');
+      console.error('[VIZTA] ❌ OPENAI_API_KEY is not configured; unable to generate conversational response.');
+      return "Lo siento, no puedo generar una respuesta en este momento. ¿Podrías intentarlo más tarde?";
     }
 
     try {
-      const prompt = `Generate a natural, friendly response to this conversational message:
+      const conversationType = intentAnalysis?.conversationalElement || 'interacción general';
+      const systemMessage = `Eres Vizta, un asistente conversacional en español que apoya a usuarios con análisis político y social. Responde siempre con tono profesional, cercano y útil. Menciona tu nombre cuando sea natural, ofrece ayuda específica y evita respuestas genéricas o repetitivas.`;
+      const userPrompt = `Mensaje del usuario: "${userMessage}"
 
-User: "${userMessage}"
+Contexto adicional:
+- Tipo de interacción detectada: ${conversationType}
+- Perfil del asistente: Analista político y social que ofrece ayuda e información contextualizada.
 
-Context: This is ${intentAnalysis.conversationalElement || 'general conversation'}.
-
-Guidelines:
-- Be warm and helpful
-- Keep it concise (1-2 sentences)
-- Mention I'm Vizta, your political and social analysis assistant
-- If it's a greeting, offer to help
-- If it's thanks, acknowledge and offer continued assistance
-- If it's "how are you", be positive and redirect to how I can help
-
-Respond in Spanish naturally:`;
+Instrucciones al responder:
+1. Responde en español con máximo 2 oraciones claras.
+2. Mantén un tono cálido, proactivo y basado en hechos.
+3. Ofrece explícitamente tu ayuda relacionada con análisis, proyectos o búsquedas cuando corresponda.
+4. Si el usuario agradece, responde con gratitud y reafirma tu disponibilidad.
+5. Si es un saludo o pequeña charla, incluye una invitación a colaborar en lo que necesite.
+6. Evita respuestas enlatadas; adapta la respuesta al mensaje y contexto.`;
 
       const response = await openai.chat.completions.create({
         model: "gpt-3.5-turbo",
-        messages: [{ role: "user", content: prompt }],
+        messages: [
+          { role: "system", content: systemMessage },
+          { role: "user", content: userPrompt }
+        ],
         temperature: 0.7,
         max_tokens: 150
       });
+
       const messageContent = response?.choices?.[0]?.message?.content;
       const normalizedResponse = Array.isArray(messageContent)
         ? messageContent.map(part => (typeof part === 'string' ? part : part?.text || '')).join('').trim()
@@ -211,33 +217,8 @@ Respond in Spanish naturally:`;
     } catch (error) {
       const errorInfo = error?.response?.data?.error?.message || error?.message || 'unknown error';
       console.error(`[VIZTA] ⚠️ AI conversation generation failed: ${errorInfo}`);
-      return this.buildConversationalFallback(userMessage, intentAnalysis, 'openai_error');
+      return "Tuve un inconveniente generando la respuesta. ¿Podrías intentar de nuevo en unos momentos?";
     }
-  }
-
-  buildConversationalFallback(userMessage, intentAnalysis = {}, reason = 'fallback') {
-    const lowerMessage = (userMessage || '').toLowerCase();
-    const element = intentAnalysis?.conversationalElement;
-
-    console.log(`[VIZTA] 🔁 Using conversational fallback (${reason}) for element=${element || 'unknown'}`);
-
-    if (element === 'greeting' || /hola|hi|hello/.test(lowerMessage)) {
-      return "¡Hola! Soy Vizta, tu asistente de análisis político y social. Estoy lista para ayudarte con información o análisis cuando quieras.";
-    }
-
-    if (element === 'thanks' || /gracias|thank/.test(lowerMessage)) {
-      return "¡Con gusto! Si necesitas más información o algún análisis, aquí estoy para apoyarte.";
-    }
-
-    if (/cómo estás|como estas|how are you/.test(lowerMessage)) {
-      return "¡Todo bien por aquí! ¿Sobre qué tema político o social te gustaría que trabajemos?";
-    }
-
-    if (element === 'question' || /funciones|qué puedes hacer|que puedes hacer|ayuda|puedes ayudar/.test(lowerMessage)) {
-      return "Soy Vizta y puedo ayudarte a investigar temas, buscar tendencias en redes, revisar tus proyectos y consultar tu Codex personal. ¿Con qué te gustaría empezar?";
-    }
-
-    return "Soy Vizta, tu asistente de análisis. Cuéntame qué necesitas y preparo la información para ti.";
   }
 
   /**
@@ -318,8 +299,13 @@ Respond in Spanish naturally:`;
         focus: 'general'
       }, user);
 
-      if (result.success && result.analysis_result) {
-        return result.analysis_result;
+      if (result.success) {
+        try {
+          return await this.synthesizeToolResults(userMessage, [{ tool: 'perplexity_search', result }]);
+        } catch (synthesisError) {
+          console.log('[VIZTA] ⚠️ Fallback synthesis failed, returning raw analysis.', synthesisError.message);
+          return result.analysis_result || result.formatted_response || result.message;
+        }
       }
     } catch (error) {
       console.log(`[VIZTA] ⚠️ Fallback search failed:`, error.message);
@@ -417,29 +403,49 @@ Respond in Spanish naturally:`;
    */
   async synthesizeToolResults(userMessage, toolResults) {
     try {
-      const resultsText = toolResults.map(tr =>
-        `Tool: ${tr.tool}\nResult: ${tr.result.analysis_result || tr.result.message || JSON.stringify(tr.result.data)}`
-      ).join('\n\n');
+      const sanitizedResults = toolResults.map(tr => {
+        const searchResults = Array.isArray(tr.result?.search_results)
+          ? tr.result.search_results.slice(0, 5).map(result => ({
+              title: result.title || null,
+              url: result.url || null,
+              snippet: result.snippet || null,
+              date: result.date || null
+            }))
+          : [];
 
-      const prompt = `Synthesize these tool results into a natural, helpful response for the user's query: "${userMessage}"
+        return {
+          tool: tr.tool,
+          summary: tr.result?.analysis_result || tr.result?.formatted_response || tr.result?.message || null,
+          search_results: searchResults,
+          metadata: tr.result?.metadata || null,
+          raw: tr.result?.web_search_result || tr.result?.data || null
+        };
+      });
 
-Tool Results:
-${resultsText}
+      const systemMessage = `Eres Vizta, un analista imparcial que genera respuestas en español basadas en resultados de herramientas. Debes sintetizar la información con rigor, neutralidad y transparencia, citando siempre las fuentes disponibles.`;
+      const userPrompt = `El usuario preguntó: "${userMessage}".
 
-Guidelines:
-- Create a cohesive, informative response in Spanish
-- Focus on the most relevant information
-- Be conversational and helpful
-- Include specific data points when useful
-- Keep it concise but comprehensive
+Recibiste los siguientes datos en formato JSON:
+${JSON.stringify(sanitizedResults, null, 2)}
 
-Response:`;
+Instrucciones para la respuesta final:
+1. Escribe un resumen inicial (1-2 párrafos) objetivo, sin tomar partido ni añadir opiniones.
+2. Incluye una sección **Puntos clave** con viñetas solo si hay datos relevantes.
+3. Cierra con una sección **Fuentes** listando cada URL disponible en los datos. Usa el formato "- [Título](URL)"; si falta el título emplea la URL como texto. No inventes fuentes.
+4. Si varias herramientas aportan información, integra sus hallazgos en una narrativa coherente.
+5. Indica cuando la información es limitada o incierta.
+6. Evita repetir texto o usar frases genéricas.
+
+Responde únicamente en Markdown siguiendo la estructura indicada.`;
 
       const response = await openai.chat.completions.create({
         model: "gpt-3.5-turbo",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.3,
-        max_tokens: 500
+        messages: [
+          { role: 'system', content: systemMessage },
+          { role: 'user', content: userPrompt }
+        ],
+        temperature: 0.2,
+        max_tokens: 600
       });
 
       return response.choices[0].message.content.trim();

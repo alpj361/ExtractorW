@@ -1157,54 +1157,52 @@ async function executePerplexitySearch(query, location = 'Guatemala', focus = 'g
     console.log(`🎯 Consulta optimizada: "${optimizedQuery}"`);
     
          // Preparar prompt especializado para búsquedas web generales - CON ENFOQUE TEMPORAL
-     const webSearchPrompt = `Analiza la consulta "${query}" y proporciona información completa y ACTUALIZADA.
+    const webSearchPrompt = `Analiza la consulta "${query}" y entrega información ACTUALIZADA y verificada.
 
 **FECHA ACTUAL: ${currentDate}**
 **CONTEXTO TEMPORAL: ${currentMonth} ${currentYear}**
 **CONTEXTO GEOGRÁFICO: ${location}**
 **ENFOQUE: ${searchContext}**
 
-⚠️ CRÍTICO - FILTRO TEMPORAL:
-- SOLO busca información de ${currentMonth} ${currentYear} o MUY RECIENTE
-- NO incluyas información histórica o de años anteriores
-- Prioriza eventos, noticias y desarrollos ACTUALES
-- Si no hay información reciente, especifica claramente que no hay datos actuales
+REQUISITOS DE ACTUALIDAD:
+- Limita la información a hechos de ${currentMonth} ${currentYear} o muy recientes.
+- Si no encuentras datos recientes, indícalo claramente.
+- Prioriza fuentes confiables y con fecha clara.
 
-INSTRUCCIONES ESPECÍFICAS:
-1. Busca información ACTUALIZADA sobre "${query}" en el contexto de ${location} para ${currentMonth} ${currentYear}
-2. Enfócate específicamente en ${searchContext}
-3. Proporciona datos concretos de ${currentMonth} ${currentYear}, fechas específicas recientes
-4. Si es sobre personas, incluye información biográfica Y SU ESTADO ACTUAL en ${currentYear}
-5. Si es sobre eventos, incluye SOLO eventos de ${currentMonth} ${currentYear} o próximos
-6. Si es sobre temas actuales, incluye desarrollos de ${currentMonth} ${currentYear}
-7. Contextualiza la información para el público de ${location} CON ENFOQUE EN LO ACTUAL
-8. RECHAZA información obsoleta o de fechas anteriores a ${currentYear}
+INSTRUCCIONES DE RESPUESTA:
+- Mantén un tono neutral, analítico y sin opiniones personales.
+- Integra contexto local relevante para ${location}.
+- Si la consulta es sobre una persona, incluye su situación actual en ${currentYear}.
+- Si se trata de eventos o temas, señala las fechas y desarrollos más recientes.
 
-${improveNitterSearch ? `
-ADICIONAL - OPTIMIZACIÓN PARA REDES SOCIALES:
-- También sugiere hashtags relevantes que podrían estar trending
-- Identifica términos de búsqueda alternativos para redes sociales
-- Incluye variaciones de nombres o eventos que podrían usarse en Twitter/X
-` : ''}
-
-Responde en formato JSON estructurado:
+FORMATO DE RESPUESTA (JSON):
+Devuelve ÚNICAMENTE un objeto JSON válido con la siguiente estructura (sin texto adicional):
 {
   "consulta_original": "${query}",
   "consulta_optimizada": "${optimizedQuery}",
-  "informacion_principal": "Información principal encontrada",
-  "contexto_local": "Relevancia específica para ${location}",
-  "datos_clave": ["dato1", "dato2", "dato3"],
-  "fechas_relevantes": "Fechas importantes relacionadas",
-  "fuentes_sugeridas": ["fuente1", "fuente2"],
-  ${improveNitterSearch ? `
-  "optimizacion_redes_sociales": {
-    "hashtags_sugeridos": ["#hashtag1", "#hashtag2"],
-    "terminos_alternativos": ["termino1", "termino2"],
-    "busqueda_nitter_optimizada": "términos OR optimizados OR para OR twitter"
-  },` : ''}
+  "resumen": "Dos párrafos neutrales con la síntesis principal",
+  "puntos_clave": ["dato concreto 1", "dato concreto 2"],
+  "contexto_local": "Cómo impacta o se relaciona con ${location}",
+  "datos_clave": ["dato numérico o cita", "otro dato"],
+  "categoria": "noticias|eventos|deportes|politica|economia|cultura|general",
   "relevancia": "alta|media|baja",
-  "categoria": "noticias|eventos|deportes|politica|economia|cultura|general"
-}`;
+  "fuentes": [
+    {"titulo": "Título o descripción breve", "url": "https://..."}
+  ],
+  "notas": "Información adicional o limitaciones",
+  ${improveNitterSearch ? `"optimizacion_redes_sociales": {
+    "hashtags_sugeridos": ["#"],
+    "terminos_alternativos": [""],
+    "busqueda_nitter_optimizada": ""
+  },` : ''}
+  "alertas": "Mensajes importantes que el usuario deba conocer"
+}
+
+Reglas adicionales:
+- Asegúrate de incluir al menos dos elementos en "fuentes" cuando existan.
+- No inventes URLs ni datos: valida cada afirmación con las fuentes listadas.
+- Las listas pueden quedar vacías si no hay información reciente, pero conserva las claves.
+- No incluyas texto fuera del JSON.`;
 
     // Ejecutar búsqueda con Perplexity
     const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
@@ -1359,12 +1357,12 @@ ${quickSummary}
 
 (Generado directamente desde Perplexity Search; el análisis avanzado no estuvo disponible a tiempo.)`;
 
-        return {
-          success: true,
-          query_original: query,
-          query_optimized: optimizedQuery,
-          location,
-          focus,
+      return {
+        success: true,
+        query_original: query,
+        query_optimized: optimizedQuery,
+        location,
+        focus,
           web_search_result: { raw_response: fallbackResponse },
           search_results: searchData?.results || [],
           nitter_optimization: null,
@@ -1385,7 +1383,9 @@ ${quickSummary}
             timeout_thresholds_ms: {
               search: searchTimeoutMs,
               chat: chatTimeoutMs
-            }
+            },
+            sources_count: searchData?.results?.length || 0,
+            consulta_optimizada: optimizedQuery
           }
         };
       }
@@ -1406,18 +1406,17 @@ ${quickSummary}
       throw new Error('Respuesta inválida de Perplexity API');
     }
 
-    let rawResponse = data.choices[0].message.content;
+    const rawResponse = data.choices[0].message.content;
     console.log(`✅ Respuesta recibida de Perplexity para: "${query}"`);
-    
-    // Intentar extraer JSON de la respuesta
+
     let parsedResult = null;
     try {
-      const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        parsedResult = JSON.parse(jsonMatch[0]);
+      const trimmed = (rawResponse || '').trim();
+      if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+        parsedResult = JSON.parse(trimmed);
       }
     } catch (parseError) {
-      console.log(`⚠️ No se pudo parsear JSON, usando respuesta raw`);
+      console.log(`⚠️ No se pudo parsear JSON válido desde Perplexity: ${parseError.message}`);
     }
 
     // Optimizar términos para Nitter si se solicitó
@@ -1431,36 +1430,34 @@ ${quickSummary}
       };
     }
 
-    // Formatear respuesta para el agente AI
-    const formattedResponse = parsedResult ? 
-      `BÚSQUEDA WEB COMPLETADA PARA: "${query}"
+    const buildSourcesList = fuentes => {
+      if (!Array.isArray(fuentes) || fuentes.length === 0) {
+        return 'No se encontraron fuentes verificadas.';
+      }
 
-INFORMACIÓN PRINCIPAL:
-${parsedResult.informacion_principal}
+      return fuentes.map((fuente, index) => {
+        const title = fuente?.titulo || fuente?.url || `Fuente ${index + 1}`;
+        const url = fuente?.url ? ` (${fuente.url})` : '';
+        return `- ${title}${url}`;
+      }).join('\n');
+    };
 
-CONTEXTO LOCAL (${location}):
-${parsedResult.contexto_local}
+    const buildList = items => Array.isArray(items) && items.length > 0
+      ? items.map(item => `- ${item}`).join('\n')
+      : null;
 
-DATOS CLAVE:
-${parsedResult.datos_clave ? parsedResult.datos_clave.map(dato => `• ${dato}`).join('\n') : 'No disponible'}
-
-FECHAS RELEVANTES:
-${parsedResult.fechas_relevantes || 'No especificadas'}
-
-FUENTES SUGERIDAS:
-${parsedResult.fuentes_sugeridas ? parsedResult.fuentes_sugeridas.map(fuente => `• ${fuente}`).join('\n') : 'No disponible'}
-
-${nitterOptimization ? `
-OPTIMIZACIÓN PARA REDES SOCIALES:
-• Búsqueda optimizada para Twitter/X: "${nitterOptimization.optimized_query}"
-• Hashtags sugeridos: ${nitterOptimization.suggested_hashtags.join(', ')}
-• Términos alternativos: ${nitterOptimization.alternative_terms.join(', ')}
-` : ''}
-
-RELEVANCIA: ${parsedResult.relevancia || 'No determinada'}
-CATEGORÍA: ${parsedResult.categoria || 'general'}` 
-    : 
-      `BÚSQUEDA WEB COMPLETADA PARA: "${query}"
+    const formattedResponse = parsedResult ? [
+      `**Consulta**: ${parsedResult.consulta_original || query}`,
+      parsedResult.resumen ? `\n**Resumen**\n${parsedResult.resumen}` : null,
+      parsedResult.contexto_local ? `\n**Contexto local (${location})**\n${parsedResult.contexto_local}` : null,
+      buildList(parsedResult.puntos_clave) ? `\n**Puntos clave**\n${buildList(parsedResult.puntos_clave)}` : null,
+      buildList(parsedResult.datos_clave) ? `\n**Datos destacados**\n${buildList(parsedResult.datos_clave)}` : null,
+      parsedResult.notas ? `\n**Notas**\n${parsedResult.notas}` : null,
+      parsedResult.alertas ? `\n**Alertas**\n${parsedResult.alertas}` : null,
+      `\n**Fuentes**\n${buildSourcesList(parsedResult.fuentes)}`,
+      `\n_Relevancia: ${parsedResult.relevancia || 'no determinada'} | Categoría: ${parsedResult.categoria || 'general'}_`
+    ].filter(Boolean).join('\n')
+    : `BÚSQUEDA WEB COMPLETADA PARA: "${query}"
 
 ${rawResponse}
 
@@ -1471,7 +1468,7 @@ Contexto: ${location}`;
     return {
       success: true,
       query_original: query,
-      query_optimized: optimizedQuery,
+      query_optimized: parsedResult?.consulta_optimizada || optimizedQuery,
       location: location,
       focus: focus,
       web_search_result: parsedResult || { raw_response: rawResponse },
@@ -1493,7 +1490,9 @@ Contexto: ${location}`;
         timeout_thresholds_ms: {
           search: searchTimeoutMs,
           chat: chatTimeoutMs
-        }
+        },
+        sources_count: Array.isArray(parsedResult?.fuentes) ? parsedResult.fuentes.length : 0,
+        consulta_optimizada: parsedResult?.consulta_optimizada || optimizedQuery
       }
     };
 
