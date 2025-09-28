@@ -5,6 +5,13 @@
 
 const mcpService = require('../../mcp');
 const { LauraMemoryClient } = require('../laura/memoryClient');
+// Cargar ejemplos/políticas desde Supabase (pk_documents)
+let loadKnowledgeFns = null;
+try {
+  loadKnowledgeFns = require('../../supabaseData');
+} catch (e) {
+  console.warn('[VIZTA] ⚠️ No se pudo cargar supabaseData para knowledge:', e?.message);
+}
 
 // Simple OpenAI client for intent classification
 const OpenAI = require('openai');
@@ -42,6 +49,10 @@ class ViztaAgent {
 
     console.log(`[VIZTA] 🧠 AI-Powered Chatbot v${this.version} initialized`);
     console.log(`[VIZTA] 🔧 Available tools: ${this.availableTools.length}`);
+
+    // Cache de ejemplos para few-shot
+    this._examples = null;
+    this._examplesLoadedAt = 0;
   }
 
   /**
@@ -54,6 +65,12 @@ class ViztaAgent {
     console.log(`[VIZTA] 🧠 Processing with AI: "${userMessage}"`);
 
     try {
+      // Early rule: capability inquiries → conversational summary (avoid tools)
+      if (this.isCapabilityQuestion(userMessage)) {
+        const capabilities = this.describeCapabilities();
+        return this.formatResponse(capabilities, conversationId, startTime, 'capabilities');
+      }
+
       // AI-powered intent classification
       const intentAnalysis = await this.classifyIntentWithAI(userMessage);
       console.log(`[VIZTA] 🎯 AI detected: ${intentAnalysis.intent} (${intentAnalysis.confidence})`);
@@ -95,6 +112,19 @@ class ViztaAgent {
    */
   async classifyIntentWithAI(userMessage) {
     try {
+      // Guard clause: simple chit-chat and capability inquiries without LLM
+      const lower = String(userMessage || '').toLowerCase();
+      if (this.isCapabilityQuestion(lower)) {
+        return {
+          intent: 'conversation',
+          confidence: 0.95,
+          reasoning: 'Direct capability inquiry — answer without tools',
+          suggestedTools: [],
+          conversationalElement: 'question',
+          method: 'rules'
+        };
+      }
+
       const prompt = `Analyze this user message and classify the intent:
 
 Message: "${userMessage}"
@@ -121,7 +151,7 @@ Respond in JSON format:
 }`;
 
       const response = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
+        model: process.env.VIZTA_INTENT_MODEL || "gpt-3.5-turbo",
         messages: [{ role: "user", content: prompt }],
         temperature: 0.1,
         max_tokens: 200
@@ -144,7 +174,7 @@ Respond in JSON format:
       // Simple fallback logic
       const lowerMessage = userMessage.toLowerCase();
 
-      if (/^(hola|hi|hello|gracias|thank|cómo estás|como estas)/.test(lowerMessage)) {
+      if (/^(hola|hi|hello|gracias|thank|cómo estás|como estas)/.test(lowerMessage) || this.isCapabilityQuestion(lowerMessage)) {
         return {
           intent: 'conversation',
           confidence: 0.7,
@@ -177,7 +207,17 @@ Respond in JSON format:
 
     try {
       const conversationType = intentAnalysis?.conversationalElement || 'interacción general';
-      const systemMessage = `Eres Vizta, un asistente conversacional en español que apoya a usuarios con análisis político y social. Responde siempre con tono profesional, cercano y útil. Menciona tu nombre cuando sea natural, ofrece ayuda específica y evita respuestas genéricas o repetitivas.`;
+      const baseSystem = `Eres Vizta, un asistente conversacional en español que apoya a usuarios con análisis político y social. Responde siempre con tono profesional, cercano y útil. Menciona tu nombre cuando sea natural, ofrece ayuda específica y evita respuestas genéricas o repetitivas.`;
+      let policiesText = '';
+      if (loadKnowledgeFns && loadKnowledgeFns.getViztaPoliciesMd) {
+        try {
+          const pol = await loadKnowledgeFns.getViztaPoliciesMd();
+          if (pol && typeof pol === 'string' && pol.trim().length > 0) {
+            policiesText = `\n\nPOLÍTICA INTERNA (resumen en Markdown):\n${pol.substring(0, 4000)}`; // limitar tamaño
+          }
+        } catch {}
+      }
+      const systemMessage = baseSystem + policiesText;
       const userPrompt = `Mensaje del usuario: "${userMessage}"
 
 Contexto adicional:
@@ -192,12 +232,22 @@ Instrucciones al responder:
 5. Si es un saludo o pequeña charla, incluye una invitación a colaborar en lo que necesite.
 6. Evita respuestas enlatadas; adapta la respuesta al mensaje y contexto.`;
 
+      const baseMessages = [
+        { role: "system", content: systemMessage }
+      ];
+
+      // Incluir few-shot examples si existen
+      const fewShots = await this.getFewShotExamples();
+      for (const ex of fewShots) {
+        baseMessages.push({ role: 'user', content: ex.user });
+        baseMessages.push({ role: 'assistant', content: ex.assistant });
+      }
+
+      baseMessages.push({ role: 'user', content: userPrompt });
+
       const response = await openai.chat.completions.create({
         model: "gpt-3.5-turbo",
-        messages: [
-          { role: "system", content: systemMessage },
-          { role: "user", content: userPrompt }
-        ],
+        messages: baseMessages,
         temperature: 0.7,
         max_tokens: 150
       });
@@ -261,7 +311,12 @@ Instrucciones al responder:
       return await this.synthesizeToolResults(userMessage, toolResults);
     }
 
-    return "No pude encontrar información específica sobre eso. ¿Podrías reformular tu pregunta?";
+    // If nothing worked, provide a helpful capabilities summary instead of a dead-end
+    if (this.isCapabilityQuestion(userMessage)) {
+      return this.describeCapabilities();
+    }
+
+    return "No pude encontrar información específica sobre eso. Puedo ayudarte a: ver tus proyectos, buscar en tu Codex, analizar tendencias o buscar en la web. ¿Cuál de estas acciones deseas?";
   }
 
   /**
@@ -391,7 +446,7 @@ Instrucciones al responder:
       return 'nitter_context';
     }
 
-    if (/proyecto|mis|codex/.test(lowerMessage)) {
+    if (/proyecto|mis\s+proyectos|codex/.test(lowerMessage)) {
       return 'user_projects';
     }
 
@@ -415,7 +470,7 @@ Instrucciones al responder:
 
         return {
           tool: tr.tool,
-          summary: tr.result?.analysis_result || tr.result?.formatted_response || tr.result?.message || null,
+          summary: tr.result?.analysis_result || tr.result?.formatted_response || tr.result?.formatted_context || tr.result?.message || null,
           search_results: searchResults,
           metadata: tr.result?.metadata || null,
           raw: tr.result?.web_search_result || tr.result?.data || null
@@ -493,6 +548,55 @@ Responde únicamente en Markdown siguiendo la estructura indicada.`;
         version: this.version
       }
     };
+  }
+
+  // Simple detection for capability questions
+  isCapabilityQuestion(text) {
+    const t = String(text || '').toLowerCase();
+    return /en que (cosas|funciones|areas) me puedes ayudar|que puedes hacer|what can you do|how can you help/.test(t);
+  }
+
+  // Short, user-facing description of capabilities/tools
+  describeCapabilities() {
+    return [
+      'Puedo ayudarte de forma directa y con herramientas:',
+      '',
+      '• Conversación y orientación rápida',
+      '• Proyectos: listar y resumir tus proyectos (user_projects)',
+      '• Codex: buscar documentos/notas/transcripciones (user_codex)',
+      '• Tendencias: ver temas recientes (latest_trends)',
+      '• Redes: analizar Twitter/X por tema o perfil (nitter_context / nitter_profile)',
+      '• Web: investigar con búsqueda actual (perplexity_search)',
+      '',
+      'Dime qué necesitas y lo ejecutamos.'
+    ].join('\n');
+  }
+
+  // Obtener ejemplos (few-shot) desde Supabase (cacheados)
+  async getFewShotExamples() {
+    try {
+      const now = Date.now();
+      if (this._examples && (now - this._examplesLoadedAt) < 5 * 60 * 1000) {
+        return this._examples;
+      }
+      if (!loadKnowledgeFns || !loadKnowledgeFns.getViztaExamplesData) {
+        this._examples = [];
+        return this._examples;
+      }
+      const rows = await loadKnowledgeFns.getViztaExamplesData();
+      // Normalizar estructura mínima { user, assistant }
+      const examples = Array.isArray(rows) ? rows
+        .map(x => ({ user: String(x?.user || '').trim(), assistant: String(x?.assistant || '').trim() }))
+        .filter(x => x.user && x.assistant)
+        .slice(0, 4) : [];
+      this._examples = examples;
+      this._examplesLoadedAt = now;
+      return this._examples;
+    } catch (e) {
+      console.log('[VIZTA] ⚠️ No se pudieron cargar ejemplos:', e?.message);
+      this._examples = [];
+      return this._examples;
+    }
   }
 }
 

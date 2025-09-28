@@ -557,6 +557,58 @@ async function getLatestTrends() {
   return (data && data[0]) ? data[0] : null;
 }
 
+// ----------------------------------------------
+// Knowledge helpers (pk_documents + storage)
+// ----------------------------------------------
+
+async function getLatestPkDocumentByTag(tag) {
+  const { data, error } = await supabase
+    .from('pk_documents')
+    .select('*')
+    .contains('tags', [tag])
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (error) throw new Error(`Error obteniendo pk_document: ${error.message}`);
+  return (data && data[0]) ? data[0] : null;
+}
+
+async function downloadTextFromStorage(path) {
+  const { data, error } = await supabase
+    .storage
+    .from('digitalstorage')
+    .download(path);
+  if (error) throw new Error(`Error descargando archivo de storage: ${error.message}`);
+  // data es un Blob en Node 18+; convertir a string
+  const arrayBuffer = await data.arrayBuffer();
+  return Buffer.from(arrayBuffer).toString('utf-8');
+}
+
+async function getViztaPoliciesMd() {
+  try {
+    const doc = await getLatestPkDocumentByTag('vizta_policies');
+    if (!doc) return null;
+    const path = `pk/${doc.file_sha256}.md`;
+    return await downloadTextFromStorage(path);
+  } catch (e) {
+    console.warn('⚠️ No se pudo cargar Vizta policies desde Supabase:', e.message);
+    return null;
+  }
+}
+
+async function getViztaExamplesData() {
+  try {
+    const doc = await getLatestPkDocumentByTag('vizta_examples');
+    if (!doc) return [];
+    const path = `pk/${doc.file_sha256}.json`;
+    const text = await downloadTextFromStorage(path);
+    const json = JSON.parse(text);
+    return Array.isArray(json) ? json : [];
+  } catch (e) {
+    console.warn('⚠️ No se pudo cargar Vizta examples desde Supabase:', e.message);
+    return [];
+  }
+}
+
 // -------------------------------------------------------------
 // Exportar funciones públicas del servicio
 // -------------------------------------------------------------
@@ -571,5 +623,8 @@ module.exports = {
   getProjectFindings,
   getProjectCoverages,
   getProjectCoveragesStats,
-  getLatestTrends
+  getLatestTrends,
+  // Knowledge helpers for Vizta (server-side)
+  getViztaPoliciesMd,
+  getViztaExamplesData
 };

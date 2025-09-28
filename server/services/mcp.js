@@ -1522,10 +1522,43 @@ async function executeUserProjects(limit = 20, status = null, priority = null, u
     if (status) options.status = status;
     if (priority) options.priority = priority;
 
-    const projects = await getUserProjects(user.id, options);
-    
-    // Obtener estadísticas generales
-    const userStats = await getUserStats(user.id);
+    const projectsRaw = await getUserProjects(user.id, options);
+
+    // Normalizar colecciones/objetos para evitar errores en plantillas
+    const projects = Array.isArray(projectsRaw) ? projectsRaw : (projectsRaw ? [projectsRaw] : []);
+
+    // Obtener estadísticas generales (con valores por defecto seguros)
+    const userStatsRaw = await getUserStats(user.id);
+    const userStats = {
+      totalProjects: Number(userStatsRaw?.totalProjects || projects.length || 0),
+      totalCodexItems: Number(userStatsRaw?.totalCodexItems || 0),
+      totalDecisions: Number(userStatsRaw?.totalDecisions || 0),
+      projectsByStatus: userStatsRaw?.projectsByStatus && typeof userStatsRaw.projectsByStatus === 'object'
+        ? userStatsRaw.projectsByStatus
+        : {}
+    };
+
+    const distributionByStatusEntries = Object.entries(userStats.projectsByStatus || {});
+    const distributionByStatusText = distributionByStatusEntries.length > 0
+      ? distributionByStatusEntries.map(([key, value]) => `• ${key}: ${value} proyectos`).join('\n')
+      : '• Sin datos de estado disponibles';
+
+    const formattedProjectsText = projects.map(project => {
+      const stats = project?.stats || {};
+      const decisionsCount = Number(stats.decisionsCount || 0);
+      const assetsCount = Number(stats.assetsCount || 0);
+      const createdAt = project?.created_at ? new Date(project.created_at) : null;
+      const createdAtText = createdAt ? createdAt.toLocaleDateString('es-ES') : 'N/D';
+      const tags = Array.isArray(project?.tags) ? project.tags : [];
+
+      return `\n📁 ${project?.title || 'Proyecto sin título'} (ID: ${project?.id || 'N/D'})
+   Estado: ${project?.status || 'N/D'} | Prioridad: ${project?.priority || 'N/D'}
+   Categoría: ${project?.category || 'Sin categoría'}
+   Decisiones: ${decisionsCount} | Assets: ${assetsCount}
+   ${project?.description ? `Descripción: ${String(project.description).substring(0, 100)}...` : ''}
+   Creado: ${createdAtText}
+   ${tags.length > 0 ? `Tags: ${tags.join(', ')}` : ''}`;
+    }).join('\n');
 
     // Formatear respuesta para el agente AI
     const formattedResponse = `PROYECTOS DEL USUARIO: ${user.email}
@@ -1536,18 +1569,10 @@ ESTADÍSTICAS GENERALES:
 • Total de decisiones: ${userStats.totalDecisions}
 
 DISTRIBUCIÓN POR ESTADO:
-${Object.entries(userStats.projectsByStatus).map(([key, value]) => `• ${key}: ${value} proyectos`).join('\n')}
+${distributionByStatusText}
 
 PROYECTOS (${projects.length} mostrados):
-${projects.map(project => `
-📁 ${project.title} (ID: ${project.id})
-   Estado: ${project.status} | Prioridad: ${project.priority}
-   Categoría: ${project.category || 'Sin categoría'}
-   Decisiones: ${project.stats.decisionsCount} | Assets: ${project.stats.assetsCount}
-   ${project.description ? `Descripción: ${project.description.substring(0, 100)}...` : ''}
-   Creado: ${new Date(project.created_at).toLocaleDateString('es-ES')}
-   ${project.tags && project.tags.length > 0 ? `Tags: ${project.tags.join(', ')}` : ''}
-`).join('\n')}
+${formattedProjectsText}
 
 Los proyectos están ordenados por fecha de actualización más reciente.`;
 
@@ -1560,6 +1585,7 @@ Los proyectos están ordenados por fecha de actualización más reciente.`;
       user_stats: userStats,
       projects: projects,
       formatted_response: formattedResponse,
+      analysis_result: formattedResponse,
       metadata: {
         service: 'user_projects',
         execution_time: new Date().toISOString(),
@@ -1598,12 +1624,14 @@ async function executeUserCodex(projectId = null, searchQuery = null, limit = 20
     if (type) options.type = type;
     if (tags) options.tags = tags;
 
-    const codexItems = await getUserCodex(user.id, options);
+    const codexItemsRaw = await getUserCodex(user.id, options);
+    const codexItems = Array.isArray(codexItemsRaw) ? codexItemsRaw : (codexItemsRaw ? [codexItemsRaw] : []);
     
     // Si hay búsqueda específica, usar también la función de búsqueda
     let searchResults = null;
     if (searchQuery) {
-      searchResults = await searchUserCodex(searchQuery, user.id, { limit: 10 });
+      const sr = await searchUserCodex(searchQuery, user.id, { limit: 10 });
+      searchResults = Array.isArray(sr) ? sr : (sr ? [sr] : []);
     }
 
     // Formatear respuesta para el agente AI
@@ -1611,7 +1639,7 @@ async function executeUserCodex(projectId = null, searchQuery = null, limit = 20
       projectId ? `Proyecto: ${projectId}` : null,
       searchQuery ? `Búsqueda: "${searchQuery}"` : null,
       type ? `Tipo: ${type}` : null,
-      tags ? `Tags: ${tags.join(', ')}` : null
+      Array.isArray(tags) ? `Tags: ${tags.join(', ')}` : (typeof tags === 'string' && tags.trim() ? `Tags: ${tags}` : null)
     ].filter(Boolean).join(' | ');
 
     const formattedResponse = `CODEX PERSONAL: ${user.email}
@@ -1619,18 +1647,20 @@ async function executeUserCodex(projectId = null, searchQuery = null, limit = 20
 ${filtersText ? `FILTROS APLICADOS: ${filtersText}` : 'MOSTRANDO TODOS LOS ITEMS'}
 
 RESULTADOS DEL CODEX (${codexItems.length} items):
-${codexItems.map(item => `
-📄 ${item.title} (ID: ${item.id})
-   Proyecto: ${item.projectTitle} (${item.projectStatus})
-   Tipo: ${item.type}
-   ${item.file_name ? `Archivo: ${item.file_name}` : ''}
-   ${item.hasTranscription ? '🎵 Tiene transcripción de audio' : ''}
-   ${item.hasAnalysis ? '📊 Tiene análisis de documento' : ''}
-   ${item.tags && item.tags.length > 0 ? `Tags: ${item.tags.join(', ')}` : ''}
-   ${item.contentPreview ? `Contenido: ${item.contentPreview}` : ''}
-   ${item.transcriptionPreview ? `Transcripción: ${item.transcriptionPreview}` : ''}
-   Creado: ${new Date(item.created_at).toLocaleDateString('es-ES')}
-`).join('\n')}
+${codexItems.map(item => {
+  const itemTags = Array.isArray(item?.tags) ? item.tags : [];
+  const createdAt = item?.created_at ? new Date(item.created_at).toLocaleDateString('es-ES') : 'N/D';
+  return `\n📄 ${item?.title || 'Sin título'} (ID: ${item?.id || 'N/D'})
+   Proyecto: ${item?.projectTitle || 'N/D'} (${item?.projectStatus || 'N/D'})
+   Tipo: ${item?.type || 'N/D'}
+   ${item?.file_name ? `Archivo: ${item.file_name}` : ''}
+   ${item?.hasTranscription ? '🎵 Tiene transcripción de audio' : ''}
+   ${item?.hasAnalysis ? '📊 Tiene análisis de documento' : ''}
+   ${itemTags.length > 0 ? `Tags: ${itemTags.join(', ')}` : ''}
+   ${item?.contentPreview ? `Contenido: ${item.contentPreview}` : ''}
+   ${item?.transcriptionPreview ? `Transcripción: ${item.transcriptionPreview}` : ''}
+   Creado: ${createdAt}`;
+}).join('\n')}
 
 ${searchResults && searchResults.length > 0 ? `
 BÚSQUEDA ESPECÍFICA "${searchQuery}" (${searchResults.length} resultados más relevantes):
@@ -1651,6 +1681,7 @@ Total de items disponibles en tu Codex personal.`;
       codex_items: codexItems,
       search_results: searchResults,
       formatted_response: formattedResponse,
+      analysis_result: formattedResponse,
       metadata: {
         service: 'user_codex',
         execution_time: new Date().toISOString(),
