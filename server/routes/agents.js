@@ -2,9 +2,11 @@ const express = require('express');
 const router = express.Router();
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { verifyUserAccess } = require('../middlewares/auth');
+const { AgentExecutor } = require('../services/agentExecutor');
 
-// Initialize Gemini
+// Initialize Gemini and AgentExecutor
 const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const agentExecutor = new AgentExecutor();
 
 /**
  * AI-Powered Agent Code Generation Service
@@ -55,6 +57,81 @@ router.post('/generate-agent-code', verifyUserAccess, async (req, res) => {
     return res.status(500).json({
       error: 'generation_failed',
       message: 'Error al generar código de extracción',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/agents/execute
+ * Execute an agent with AI-generated selectors and workflow
+ */
+router.post('/execute', verifyUserAccess, async (req, res) => {
+  try {
+    const { url, config, site_structure, maxItems = 30, database_config } = req.body;
+    const user = req.user;
+
+    if (!url || !config) {
+      return res.status(400).json({
+        error: 'missing_parameters',
+        message: 'Se requieren "url" y "config"'
+      });
+    }
+
+    console.log(`🤖 Usuario ${user.profile.email} ejecutando agente en: ${url}`);
+    console.log(`🔧 Configuración generada: ${!!config.generated}`);
+    console.log(`🗃️ Base de datos: ${database_config?.enabled ? 'Habilitada' : 'Deshabilitada'}`);
+
+    // Validate URL
+    try {
+      new URL(url);
+    } catch (error) {
+      return res.status(400).json({
+        error: 'invalid_url',
+        message: 'La URL proporcionada no es válida'
+      });
+    }
+
+    // Execute agent based on configuration type
+    let extractionResult;
+
+    if (config.generated && config.selectors && Array.isArray(config.selectors)) {
+      // Execute AI-generated agent with specific selectors
+      extractionResult = await executeAIGeneratedAgent({
+        url,
+        config,
+        site_structure,
+        maxItems,
+        user,
+        databaseConfig: database_config
+      });
+    } else {
+      // Fallback to basic extraction
+      extractionResult = await executeBasicAgent({
+        url,
+        config,
+        site_structure,
+        maxItems,
+        user,
+        databaseConfig: database_config
+      });
+    }
+
+    console.log(`✅ Extracción completada exitosamente para ${url}`);
+
+    return res.json({
+      success: true,
+      data: extractionResult,
+      timestamp: new Date().toISOString(),
+      execution_type: config.generated ? 'ai_generated' : 'basic'
+    });
+
+  } catch (error) {
+    console.error('❌ Error ejecutando agente:', error);
+
+    return res.status(500).json({
+      error: 'execution_failed',
+      message: 'Error al ejecutar el agente',
       details: error.message
     });
   }
@@ -406,20 +483,32 @@ router.get('/test', verifyUserAccess, async (req, res) => {
   try {
     const services = {
       gemini: !!process.env.GEMINI_API_KEY,
-      openrouter: !!process.env.OPENROUTER_API_KEY
+      openrouter: !!process.env.OPENROUTER_API_KEY,
+      supabase: !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY
     };
+
+    // Get AgentExecutor health
+    const agentExecutorHealth = agentExecutor.getHealth();
 
     return res.json({
       success: true,
-      message: 'Servicio de generación de agentes configurado',
+      message: 'Servicio de generación y ejecución de agentes configurado',
       services,
+      agentExecutor: agentExecutorHealth,
       endpoints: [
         'POST /api/agents/generate-agent-code - Generar código de extracción con IA',
+        'POST /api/agents/execute - Ejecutar agente con JavaScript personalizado',
         'POST /api/agents/analyze-site-structure - Análisis mejorado de estructura del sitio'
       ],
       aiModels: {
         analysis: 'gemini-2.5-flash',
         codeGeneration: 'gpt-4o'
+      },
+      executionEngine: {
+        type: 'custom_javascript',
+        sandboxed: true,
+        newscron_pattern: true,
+        systemlogger_integration: true
       }
     });
 
@@ -431,5 +520,168 @@ router.get('/test', verifyUserAccess, async (req, res) => {
     });
   }
 });
+
+/**
+ * Execute AI-generated agent with specific selectors and workflow
+ */
+async function executeAIGeneratedAgent({ url, config, site_structure, maxItems, user, databaseConfig }) {
+  console.log('🎯 Executing AI-generated agent with selectors:', config.selectors?.slice(0, 3));
+
+  try {
+    console.log('🤖 Using custom JavaScript AgentExecutor');
+
+    // Execute using our custom JavaScript agent execution engine
+    const result = await agentExecutor.executeAgent({
+      url,
+      config,
+      site_structure,
+      maxItems: maxItems || 30,
+      user,
+      agentName: config.suggestedName || 'AI_Generated_Agent',
+      databaseConfig
+    });
+
+    console.log(`✅ Custom agent execution completed: ${result.items_extracted} items extracted`);
+
+    return {
+      url,
+      extraction_type: 'ai_generated_javascript',
+      selectors_used: config.selectors?.length || 0,
+      items_extracted: result.items_extracted,
+      confidence: result.confidence,
+      data: result.data,
+      metadata: {
+        ai_generated: true,
+        instructions: config.instructions,
+        generation_date: config.generatedAt,
+        execution_date: new Date().toISOString(),
+        custom_javascript_used: true,
+        execution_id: result.executionId,
+        execution_time_ms: result.metadata?.execution_time_ms
+      }
+    };
+
+  } catch (error) {
+    console.warn('⚠️ Custom JavaScript agent execution failed:', error.message);
+    console.log('🔄 Falling back to basic extraction...');
+
+    // Fallback to basic extraction if custom execution fails
+    return await executeBasicAgentFallback({ url, config, site_structure, maxItems, user, databaseConfig });
+  }
+}
+
+/**
+ * Execute basic agent with fallback extraction
+ */
+async function executeBasicAgent({ url, config, site_structure, maxItems, user, databaseConfig }) {
+  console.log('📝 Executing basic agent with custom JavaScript');
+
+  try {
+    // Use our custom JavaScript engine for basic agents too
+    const result = await agentExecutor.executeAgent({
+      url,
+      config: { ...config, generated: false }, // Mark as non-AI generated
+      site_structure,
+      maxItems: maxItems || 30,
+      user,
+      agentName: config.name || 'Basic_Agent',
+      databaseConfig
+    });
+
+    console.log(`✅ Basic agent execution completed: ${result.items_extracted} items extracted`);
+
+    return {
+      url,
+      extraction_type: 'basic_javascript',
+      items_extracted: result.items_extracted,
+      confidence: result.confidence,
+      data: result.data,
+      metadata: {
+        ai_generated: false,
+        execution_date: new Date().toISOString(),
+        custom_javascript_used: true,
+        execution_id: result.executionId,
+        execution_time_ms: result.metadata?.execution_time_ms
+      }
+    };
+
+  } catch (error) {
+    console.warn('⚠️ Basic JavaScript agent execution failed:', error.message);
+    console.log('🔄 Falling back to WebAgent...');
+
+    // Final fallback to WebAgent
+    return await executeBasicAgentFallback({ url, config, site_structure, maxItems, user, databaseConfig });
+  }
+}
+
+/**
+ * Fallback extraction using WebAgent
+ */
+async function executeBasicAgentFallback({ url, config, site_structure, maxItems, user, databaseConfig }) {
+  console.log('🔄 Using WebAgent fallback extraction');
+
+  // For basic agents, we can delegate to WebAgent
+  const WEBAGENT_URL = process.env.WEBAGENT_URL ||
+    (process.env.DOCKER_ENV === 'true' ? 'http://webagent:8787' : 'http://127.0.0.1:8787');
+
+  try {
+    // Try WebAgent first
+    const response = await fetch(`${WEBAGENT_URL}/explore/summarize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url,
+        goal: config.extraction_target || config.instructions || 'Extracción general de contenido',
+        maxSteps: 5,
+        screenshot: false
+      })
+    });
+
+    if (response.ok) {
+      const webAgentResult = await response.json();
+
+      return {
+        url,
+        extraction_type: 'basic_webagent',
+        items_extracted: 1,
+        confidence: 0.6,
+        data: [{
+          text: webAgentResult.summary || 'Contenido extraído',
+          source: 'webagent',
+          timestamp: new Date().toISOString()
+        }],
+        metadata: {
+          ai_generated: false,
+          webagent_used: true,
+          execution_date: new Date().toISOString()
+        }
+      };
+    } else {
+      console.warn(`⚠️ WebAgent responded with ${response.status}`);
+    }
+  } catch (webAgentError) {
+    console.warn('⚠️ WebAgent fallback failed:', webAgentError.message);
+  }
+
+  // Final fallback: return basic structure with error info
+  return {
+    url,
+    extraction_type: 'basic_error_fallback',
+    items_extracted: 0,
+    confidence: 0.1,
+    data: [{
+      text: `No se pudo extraer contenido de ${url}`,
+      type: 'error',
+      timestamp: new Date().toISOString(),
+      error: 'Todos los métodos de extracción fallaron'
+    }],
+    metadata: {
+      ai_generated: false,
+      fallback_used: true,
+      all_methods_failed: true,
+      execution_date: new Date().toISOString()
+    }
+  };
+}
 
 module.exports = router;
