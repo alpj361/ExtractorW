@@ -19,7 +19,7 @@ const agentExecutor = new AgentExecutor();
  */
 router.post('/generate-agent-code', verifyUserAccess, async (req, res) => {
   try {
-    const { instructions, siteMap, existingAgent } = req.body;
+    const { instructions, siteMap, existingAgent, explorerInsights, selectedElement } = req.body;
     const user = req.user;
 
     if (!instructions || !siteMap) {
@@ -33,8 +33,8 @@ router.post('/generate-agent-code', verifyUserAccess, async (req, res) => {
     console.log(`🎯 Sitio: ${siteMap.site_name} (${siteMap.base_url})`);
     console.log(`📝 Instrucciones: ${instructions.substring(0, 100)}...`);
 
-    // Generate extraction code using AI
-    const codeGeneration = await generateExtractionCode(instructions, siteMap, existingAgent);
+    // Generate extraction code using AI with Explorer insights
+    const codeGeneration = await generateExtractionCode(instructions, siteMap, existingAgent, explorerInsights, selectedElement);
 
     // Log successful generation
     console.log(`✅ Código generado exitosamente para ${siteMap.site_name}`);
@@ -117,13 +117,25 @@ router.post('/execute', verifyUserAccess, async (req, res) => {
       });
     }
 
-    console.log(`✅ Extracción completada exitosamente para ${url}`);
+    // ✅ Determinar success basado en items extraídos
+    const itemsExtracted = extractionResult?.items_extracted || extractionResult?.data?.items?.length || 0;
+    const actualSuccess = itemsExtracted > 0;
+    
+    if (actualSuccess) {
+      console.log(`✅ Extracción completada exitosamente: ${itemsExtracted} items`);
+    } else {
+      console.log(`⚠️ Extracción completada sin items extraídos`);
+    }
 
     return res.json({
-      success: true,
+      success: actualSuccess,  // ✅ Basado en items reales
+      items_extracted: itemsExtracted,
       data: extractionResult,
       timestamp: new Date().toISOString(),
-      execution_type: config.generated ? 'ai_generated' : 'basic'
+      execution_type: config.generated ? 'ai_generated' : 'basic',
+      // ✅ Propagar información de diagnóstico si está disponible
+      page_info: extractionResult?.page_info || null,
+      diagnostic: extractionResult?.diagnostic || null
     });
 
   } catch (error) {
@@ -178,14 +190,48 @@ router.post('/analyze-site-structure', verifyUserAccess, async (req, res) => {
 });
 
 /**
- * Generate extraction code using AI (Gemini + GPT-5)
+ * Generate extraction code using AI (Gemini + GPT-5) with Explorer insights
  */
-async function generateExtractionCode(instructions, siteMap, existingAgent = null) {
-  // Stage 1: Use Gemini for initial analysis and planning
-  const analysisResult = await analyzeWithGemini(instructions, siteMap, existingAgent);
+async function generateExtractionCode(instructions, siteMap, existingAgent = null, explorerInsights = null, selectedElement = null) {
+  // ✅ Stage 0: Diagnose page first to determine execution mode
+  console.log('🔍 Diagnosticando página antes de generar código...');
+  const diagnostic = await diagnosePage(siteMap.base_url);
+  
+  console.log(`📊 Diagnostic results:`, {
+    has_antibot: diagnostic.has_antibot,
+    has_spa: diagnostic.has_spa,
+    execution_mode_recommended: diagnostic.execution_mode_recommended
+  });
+  
+  // ✅ Si requiere WebAgent, no generar código JS
+  if (diagnostic.execution_mode_recommended === 'webagent') {
+    console.log('🌐 Sitio requiere WebAgent - no se generará código JS');
+    return {
+      extractionLogic: null, // No generar JS
+      selectors: null,
+      workflow: null,
+      confidence: 0.9,
+      reasoning: `Este sitio requiere WebAgent debido a: ${diagnostic.reason}. El agente usará navegador real con Playwright.`,
+      suggestedName: `${siteMap.site_name} (WebAgent)`,
+      suggestedTarget: instructions,
+      suggestedDescription: `Extracción usando navegador real debido a ${diagnostic.reason}`,
+      execution_mode: 'webagent', // ✅ Indicar modo de ejecución
+      requires_browser: true,
+      diagnostic: diagnostic.diagnostic, // Información completa del diagnóstico
+      metadata: {
+        analysisModel: 'diagnostic_engine',
+        codeGenModel: 'webagent',
+        timestamp: new Date().toISOString(),
+        reason: diagnostic.reason
+      }
+    };
+  }
+  
+  // Stage 1: Use Gemini for initial analysis and planning with Explorer insights
+  const analysisResult = await analyzeWithGemini(instructions, siteMap, existingAgent, explorerInsights, selectedElement);
 
-  // Stage 2: Use GPT-4 via OpenAI for detailed code generation
-  const codeResult = await generateCodeWithGPT4(analysisResult, instructions, siteMap);
+  // Stage 2: Use GPT-4 via OpenAI for detailed code generation with Explorer insights
+  const codeResult = await generateCodeWithGPT4(analysisResult, instructions, siteMap, explorerInsights, selectedElement);
 
   // Combine results
   return {
@@ -197,6 +243,9 @@ async function generateExtractionCode(instructions, siteMap, existingAgent = nul
     suggestedName: analysisResult.suggestedName,
     suggestedTarget: analysisResult.suggestedTarget,
     suggestedDescription: analysisResult.suggestedDescription,
+    execution_mode: 'sandbox', // ✅ Sandbox para sitios normales
+    requires_browser: false,
+    diagnostic: diagnostic.diagnostic,
     metadata: {
       analysisModel: 'gemini-2.5-flash',
       codeGenModel: 'gpt-4o',
@@ -206,18 +255,143 @@ async function generateExtractionCode(instructions, siteMap, existingAgent = nul
 }
 
 /**
- * Stage 1: Analysis with Gemini
+ * Diagnose page to determine execution mode
  */
-async function analyzeWithGemini(instructions, siteMap, existingAgent) {
+async function diagnosePage(url) {
+  try {
+    // Hacer un fetch simple y analizar
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      },
+      timeout: 10000
+    });
+    
+    const html = await response.text();
+    
+    // Usar el diagnostic engine del AgentExecutor
+    const cheerio = require('cheerio');
+    const $ = cheerio.load(html);
+    
+    const pageAnalysis = agentExecutor.analyzePage(html, $, url);
+    const issues = agentExecutor.detectIssues(html, pageAnalysis, []);
+    
+    const hasAntibot = issues.some(i => i.type === 'antibot');
+    const hasSPA = issues.some(i => i.type === 'spa_dynamic_content');
+    const hasEmptyPage = issues.some(i => i.type === 'empty_page');
+    
+    // Decidir modo de ejecución
+    if (hasAntibot || hasSPA || hasEmptyPage) {
+      const reason = hasAntibot 
+        ? `Anti-bot Protection (${pageAnalysis.antibot_detected})`
+        : hasSPA 
+          ? 'SPA con contenido dinámico'
+          : 'Página vacía o bloqueada';
+      
+      return {
+        execution_mode_recommended: 'webagent',
+        has_antibot: hasAntibot,
+        has_spa: hasSPA,
+        has_empty_page: hasEmptyPage,
+        reason: reason,
+        diagnostic: { issues, page_analysis: pageAnalysis }
+      };
+    }
+    
+    return {
+      execution_mode_recommended: 'sandbox',
+      has_antibot: false,
+      has_spa: false,
+      has_empty_page: false,
+      reason: 'Sitio scrapeable con fetch + cheerio',
+      diagnostic: { issues: [], page_analysis: pageAnalysis }
+    };
+    
+  } catch (error) {
+    console.error('Error diagnosticando página:', error.message);
+    // En caso de error, asumir que requiere WebAgent
+    return {
+      execution_mode_recommended: 'webagent',
+      has_antibot: true,
+      reason: `Error al acceder: ${error.message}`,
+      diagnostic: { issues: [{ type: 'fetch_error', title: error.message }] }
+    };
+  }
+}
+
+/**
+ * Stage 1: Analysis with Gemini enhanced with Explorer insights
+ */
+async function analyzeWithGemini(instructions, siteMap, existingAgent, explorerInsights, selectedElement) {
   const model = genai.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
-  const prompt = `Analiza estas instrucciones para crear un agente de extracción inteligente.
+  let prompt = `Analiza estas instrucciones para crear un agente de extracción inteligente.
 
 INFORMACIÓN DEL SITIO:
 - Nombre: ${siteMap.site_name}
 - URL Base: ${siteMap.base_url}
 - Estructura conocida: ${JSON.stringify(siteMap.site_structure, null, 2)}
-- Resumen de navegación: ${siteMap.navigation_summary || 'No disponible'}
+- Resumen de navegación: ${siteMap.navigation_summary || 'No disponible'}`;
+
+  // Add Explorer insights if available
+  if (explorerInsights) {
+    prompt += `
+
+🤖 ANÁLISIS AUTOMÁTICO DEL EXPLORER (IA):
+- Tipo de sitio: ${explorerInsights.siteAnalysis?.type || 'No detectado'}
+- Complejidad: ${explorerInsights.siteAnalysis?.complexity || 'No detectado'}
+- Estructura: ${explorerInsights.siteAnalysis?.structure || 'No detectado'}
+- Confianza del análisis: ${explorerInsights.confidence ? (explorerInsights.confidence * 100).toFixed(0) + '%' : 'No disponible'}`;
+
+    if (explorerInsights.extractableElements && explorerInsights.extractableElements.length > 0) {
+      prompt += `
+
+ELEMENTOS EXTRAÍBLES DETECTADOS POR IA:`;
+      explorerInsights.extractableElements.forEach((element, index) => {
+        prompt += `
+${index + 1}. ${element.name} (${element.dataType})
+   - Descripción: ${element.description}
+   - Selectores sugeridos: ${element.suggestedSelectors ? element.suggestedSelectors.join(', ') : 'No disponibles'}`;
+      });
+    }
+
+    if (explorerInsights.scrapingStrategies && explorerInsights.scrapingStrategies.length > 0) {
+      prompt += `
+
+ESTRATEGIAS DE EXTRACCIÓN RECOMENDADAS:`;
+      explorerInsights.scrapingStrategies.forEach((strategy, index) => {
+        prompt += `
+${index + 1}. ${strategy.strategy} (${strategy.difficulty})
+   - ${strategy.description}
+   - Pasos: ${strategy.steps ? strategy.steps.join(' → ') : 'No especificados'}`;
+      });
+    }
+
+    if (explorerInsights.recommendations && explorerInsights.recommendations.length > 0) {
+      prompt += `
+
+RECOMENDACIONES DEL EXPLORER:`;
+      explorerInsights.recommendations.forEach((rec, index) => {
+        prompt += `
+${index + 1}. ${rec}`;
+      });
+    }
+  }
+
+  // Add selected element specific information
+  if (selectedElement) {
+    prompt += `
+
+🎯 ELEMENTO ESPECÍFICO SELECCIONADO:
+- Nombre: ${selectedElement.name}
+- Tipo de dato: ${selectedElement.dataType}
+- Descripción: ${selectedElement.description}
+- Selectores específicos: ${selectedElement.suggestedSelectors ? selectedElement.suggestedSelectors.join(', ') : 'No disponibles'}
+
+PRIORIZA ESTE ELEMENTO EN EL ANÁLISIS.`;
+  }
+
+  prompt += `
 
 INSTRUCCIONES DEL USUARIO:
 """
@@ -281,7 +455,7 @@ Responde solo con el JSON, sin texto adicional.`;
 /**
  * Stage 2: Code generation with OpenAI GPT-4
  */
-async function generateCodeWithGPT4(analysis, instructions, siteMap) {
+async function generateCodeWithGPT4(analysis, instructions, siteMap, explorerInsights, selectedElement) {
   const openaiKey = process.env.OPENAI_API_KEY;
 
   if (!openaiKey) {
@@ -314,6 +488,34 @@ SITIO WEB:
 - URL: ${siteMap.base_url}
 - Estructura: ${JSON.stringify(siteMap.site_structure, null, 2)}
 
+${explorerInsights ? `
+🤖 DATOS DEL EXPLORER IA (PRIORIZAR):
+${selectedElement ? `
+🎯 ELEMENTO ESPECÍFICO SELECCIONADO:
+- Nombre: ${selectedElement.name}
+- Tipo: ${selectedElement.dataType}
+- Descripción: ${selectedElement.description}
+- Selectores IA: ${selectedElement.suggestedSelectors ? selectedElement.suggestedSelectors.join(', ') : 'No disponibles'}
+
+` : ''}
+${explorerInsights.extractableElements ? `
+ELEMENTOS DETECTADOS POR IA:
+${explorerInsights.extractableElements.map((el, i) => `${i+1}. ${el.name} (${el.dataType}): ${el.suggestedSelectors ? el.suggestedSelectors.join(', ') : 'sin selectores'}`).join('\n')}
+
+` : ''}
+${explorerInsights.scrapingStrategies ? `
+ESTRATEGIAS RECOMENDADAS:
+${explorerInsights.scrapingStrategies.map((s, i) => `${i+1}. ${s.strategy} (${s.difficulty}): ${s.description}`).join('\n')}
+
+` : ''}
+${explorerInsights.recommendations ? `
+RECOMENDACIONES:
+${explorerInsights.recommendations.map((r, i) => `${i+1}. ${r}`).join('\n')}
+
+` : ''}
+Confianza del análisis Explorer: ${explorerInsights.confidence ? (explorerInsights.confidence * 100).toFixed(0) + '%' : 'No disponible'}
+` : ''}
+
 INSTRUCCIONES ORIGINALES:
 """
 ${instructions}
@@ -324,6 +526,14 @@ GENERA:
 2. Selectores CSS específicos para cada elemento
 3. Flujo de trabajo completo (navegación + extracción)
 4. Manejo de errores y casos edge
+
+REGLAS CRÍTICAS PARA SELECTORES CSS:
+- NUNCA uses 'span[href]' (spans no tienen href, solo <a> tags)
+- Para enlaces: usa 'a[href]', 'a.clase', o 'a[href*="texto"]'
+- Para texto: usa 'span', 'p', 'div', 'h1-h6' pero SIN atributos de enlace
+- Para listas: usa 'ul li', 'ol li', '.lista-clase li'
+- Siempre incluye selectores de respaldo más genéricos
+- Valida que cada selector sea sintácticamente correcto
 
 FORMATO DE RESPUESTA (JSON válido):
 {
@@ -530,15 +740,15 @@ async function executeAIGeneratedAgent({ url, config, site_structure, maxItems, 
   try {
     console.log('🤖 Using custom JavaScript AgentExecutor');
 
-    // Execute using our custom JavaScript agent execution engine
-    const result = await agentExecutor.executeAgent({
+    // Execute using unified execution engine
+    const result = await agentExecutor.executeUnified({
       url,
       config,
       site_structure,
       maxItems: maxItems || 30,
       user,
-      agentName: config.suggestedName || 'AI_Generated_Agent',
-      databaseConfig
+      executionType: 'agent',
+      agentName: config.suggestedName || 'AI_Generated_Agent'
     });
 
     console.log(`✅ Custom agent execution completed: ${result.items_extracted} items extracted`);
@@ -577,15 +787,15 @@ async function executeBasicAgent({ url, config, site_structure, maxItems, user, 
   console.log('📝 Executing basic agent with custom JavaScript');
 
   try {
-    // Use our custom JavaScript engine for basic agents too
-    const result = await agentExecutor.executeAgent({
+    // Use unified execution engine for basic agents too
+    const result = await agentExecutor.executeUnified({
       url,
       config: { ...config, generated: false }, // Mark as non-AI generated
       site_structure,
       maxItems: maxItems || 30,
       user,
-      agentName: config.name || 'Basic_Agent',
-      databaseConfig
+      executionType: 'agent',
+      agentName: config.name || 'Basic_Agent'
     });
 
     console.log(`✅ Basic agent execution completed: ${result.items_extracted} items extracted`);
@@ -682,6 +892,819 @@ async function executeBasicAgentFallback({ url, config, site_structure, maxItems
       execution_date: new Date().toISOString()
     }
   };
+}
+
+/**
+ * POST /api/agents/test-existing
+ * Test an existing agent directly without code modification
+ */
+router.post('/test-existing', verifyUserAccess, async (req, res) => {
+  try {
+    const { agent_id, url, config = {} } = req.body;
+    const user = req.user;
+
+    if (!agent_id) {
+      return res.status(400).json({
+        error: 'missing_parameters',
+        message: 'Se requiere "agent_id"'
+      });
+    }
+
+    console.log(`🚀 Usuario ${user.profile.email} probando agente existente`);
+    console.log(`🎯 Agent ID: ${agent_id}`);
+    console.log(`🔗 URL: ${url || 'URL por defecto del agente'}`);
+
+    // Fetch agent from database
+    const { createClient } = require('@supabase/supabase-js');
+    const supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+
+    const { data: agent, error: fetchError } = await supabase
+      .from('site_agents')
+      .select(`
+        *,
+        site_maps (*)
+      `)
+      .eq('id', agent_id)
+      .single();
+
+    if (fetchError || !agent) {
+      return res.status(404).json({
+        error: 'agent_not_found',
+        message: 'Agente no encontrado'
+      });
+    }
+
+    // Verify user owns this agent or has access
+    if (agent.user_id !== user.id) {
+      return res.status(403).json({
+        error: 'access_denied',
+        message: 'No tienes acceso a este agente'
+      });
+    }
+
+    // Extract the agent's code
+    let agentScript = '';
+    if (agent.extraction_config?.extractionLogic && agent.extraction_config?.generated) {
+      agentScript = agent.extraction_config.extractionLogic;
+    } else if (agent.extraction_target) {
+      // Check if extraction_target contains JavaScript code
+      if (agent.extraction_target.includes('document.querySelector') ||
+          agent.extraction_target.includes('querySelectorAll') ||
+          agent.extraction_target.includes('return ')) {
+        agentScript = agent.extraction_target;
+      } else {
+        return res.status(400).json({
+          error: 'no_executable_code',
+          message: 'Este agente no tiene código JavaScript ejecutable. Genera código primero en la pestaña IA Generativa.'
+        });
+      }
+    } else {
+      return res.status(400).json({
+        error: 'no_code_available',
+        message: 'Este agente no tiene código de extracción disponible'
+      });
+    }
+
+    // Use the agent's site URL if no URL provided
+    const testUrl = url || agent.site_maps?.base_url;
+    if (!testUrl) {
+      return res.status(400).json({
+        error: 'no_url_available',
+        message: 'No hay URL disponible para probar. Proporciona una URL.'
+      });
+    }
+
+    // Create execution context for agent test
+    const testConfig = {
+      url: testUrl,
+      script: agentScript,
+      maxItems: config.maxItems || 50,
+      timeout: config.timeout || 45000,
+      debug: true,
+      agent_id: agent_id,
+      agent_name: agent.agent_name
+    };
+
+    console.log(`📝 Script length: ${agentScript.length} chars`);
+    console.log(`🎯 Testing URL: ${testUrl}`);
+
+    // Execute the agent script using unified execution engine
+    const result = await agentExecutor.executeUnified({
+      url: testUrl,
+      script: agentScript,
+      maxItems: testConfig.maxItems,
+      timeout: testConfig.timeout,
+      user,
+      executionType: 'test',
+      agentName: agent.agent_name
+    });
+
+    // Add agent metadata to result
+    result.agent_metadata = {
+      agent_id: agent.id,
+      agent_name: agent.agent_name,
+      site_name: agent.site_maps?.site_name,
+      extraction_target: agent.extraction_target,
+      code_source: agent.extraction_config?.generated ? 'generated' : 'manual'
+    };
+
+    console.log(`✅ Agent test executed. Success: ${result.success}`);
+    if (result.success && result.data?.items) {
+      console.log(`📊 Items extracted: ${result.data.items.length}`);
+    }
+
+    return res.json({
+      success: result.success,
+      items_extracted: result.items_extracted || (result.data?.items?.length || 0),
+      data: result.data || null,
+      error: result.error || null,
+      details: result.details || null,
+      logs: result.logs || [],
+      metrics: result.metrics || {},
+      status: result.status || 'completed',
+      // ✅ Propagar diagnóstico y página
+      page_info: result.page_info || null,
+      diagnostic: result.diagnostic || null,
+      agent_metadata: result.agent_metadata,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Error testing existing agent:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'agent_test_failed',
+      message: 'Error probando agente existente',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/agents/debug-script
+ * Execute a debug script directly in a sandboxed environment for testing
+ */
+router.post('/debug-script', verifyUserAccess, async (req, res) => {
+  try {
+    const { script, url, config = {} } = req.body;
+    const user = req.user;
+
+    if (!script || !url) {
+      return res.status(400).json({
+        error: 'missing_parameters',
+        message: 'Se requieren "script" y "url"'
+      });
+    }
+
+    console.log(`🐛 Usuario ${user.profile.email} ejecutando script de debug`);
+    console.log(`🎯 URL: ${url}`);
+    console.log(`📝 Script length: ${script.length} chars`);
+
+    // Create execution context for debug
+    const debugConfig = {
+      url,
+      script,
+      maxItems: config.maxItems || 10,
+      timeout: config.timeout || 30000,
+      debug: true
+    };
+
+    // Execute the debug script using unified execution engine
+    const result = await agentExecutor.executeUnified({
+      url,
+      script,
+      maxItems: debugConfig.maxItems,
+      timeout: debugConfig.timeout,
+      user,
+      executionType: 'debug',
+      agentName: 'Debug Script'
+    });
+
+    console.log(`✅ Debug script executed. Success: ${result.success}`);
+    if (result.success && result.data?.items) {
+      console.log(`📊 Items extracted: ${result.data.items.length}`);
+    }
+
+    return res.json({
+      success: result.success,
+      items_extracted: result.items_extracted || (result.data?.items?.length || 0),
+      data: result.data || null,
+      error: result.error || null,
+      details: result.details || null,
+      logs: result.logs || [],
+      metrics: result.metrics || {},
+      status: result.status || 'completed',
+      // ✅ Propagar diagnóstico y página
+      page_info: result.page_info || null,
+      diagnostic: result.diagnostic || null,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Error executing debug script:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'debug_execution_failed',
+      message: 'Error ejecutando script de debug',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/agents/generate-debug-script
+ * Generate a debug script based on natural language instructions
+ */
+router.post('/generate-debug-script', verifyUserAccess, async (req, res) => {
+  try {
+    const { instructions, url, siteMap } = req.body;
+    const user = req.user;
+
+    if (!instructions) {
+      return res.status(400).json({
+        error: 'missing_parameters',
+        message: 'Se requieren "instructions"'
+      });
+    }
+
+    console.log(`🤖 Usuario ${user.profile.email} generando script de debug`);
+    console.log(`📝 Instrucciones: ${instructions.substring(0, 100)}...`);
+
+    // Generate debug script using AI
+    const debugScript = await generateDebugScript(instructions, url, siteMap);
+
+    console.log(`✅ Debug script generado exitosamente`);
+
+    return res.json({
+      success: true,
+      data: {
+        script: debugScript.script,
+        explanation: debugScript.explanation,
+        confidence: debugScript.confidence
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Error generating debug script:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'debug_generation_failed',
+      message: 'Error generando script de debug',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/agents/improve-code
+ * Use AI to improve existing JavaScript code based on execution results
+ */
+router.post('/improve-code', verifyUserAccess, async (req, res) => {
+  try {
+    const { code, results, url, error_message, improvement_type = 'general', diagnostic } = req.body;
+    const user = req.user;
+
+    if (!code) {
+      return res.status(400).json({
+        error: 'missing_parameters',
+        message: 'Se requiere "code"'
+      });
+    }
+
+    console.log(`🤖 Usuario ${user.profile.email} solicitando mejora de código`);
+    console.log(`🔧 Tipo de mejora: ${improvement_type}`);
+    
+    // ✅ Log diagnostic context if available
+    if (diagnostic) {
+      console.log(`📊 Diagnóstico disponible:`, {
+        has_antibot: diagnostic.has_antibot,
+        has_spa: diagnostic.has_spa,
+        has_empty_page: diagnostic.has_empty_page,
+        issues_count: diagnostic.issues?.length || 0
+      });
+    }
+
+    // ✅ Generar código directamente según diagnóstico (sin IA por ahora)
+    let improvement;
+    
+    if (diagnostic?.has_antibot) {
+      // Anti-bot detectado: sugerir usar WebAgent
+      console.log(`🔒 Anti-bot detectado - recomendando WebAgent`);
+      
+      improvement = {
+        improved_code: `// ⚠️ SITIO CON PROTECCIÓN ANTI-BOT DETECTADA
+// Este sitio requiere un navegador real (WebAgent/Puppeteer)
+// 
+// SOLUCIÓN: Configura este agente para usar WebAgent:
+// 1. En la configuración del agente, cambia el modo a "browser" o "webagent"
+// 2. O usa el endpoint /api/webagent/extract directamente
+//
+// Código de respaldo (probablemente retornará vacío):
+
+const items = [];
+
+try {
+  // Selectores genéricos
+  const elementos = document.querySelectorAll('table tbody tr, .item, article, .card, [class*="list"]');
+  
+  console.log('⚠️ Anti-bot detectado - HTML puede estar vacío');
+  console.log('Elementos encontrados:', elementos.length);
+  
+  elementos.forEach((el, index) => {
+    const titulo = el.querySelector('h1, h2, h3, .title, .titulo, [class*="title"]')?.textContent?.trim();
+    const enlace = el.querySelector('a')?.href || el.closest('a')?.href;
+    
+    if (titulo || enlace) {
+      items.push({
+        index: index + 1,
+        titulo: titulo || 'Sin título',
+        enlace: enlace
+      });
+    }
+  });
+  
+  if (items.length === 0) {
+    console.log('❌ Sin contenido extraído');
+    console.log('💡 SOLUCIÓN: Configurar agente con modo "browser"');
+    console.log('📖 Ver: WEBAGENT_DEPLOYMENT_GUIDE.md');
+  }
+  
+} catch (error) {
+  console.error('Error:', error.message);
+}
+
+return items;`,
+        explanation: `⚠️ ANTI-BOT DETECTADO (${diagnostic.page_info?.size_bytes} bytes de HTML vacío). Este agente necesita WebAgent con navegador real. El código actual NO funcionará. ACCIÓN REQUERIDA: Configura el agente para usar modo "browser" o llama a /api/webagent/extract.`,
+        changes: [
+          '❌ Anti-bot detectado - scraping directo imposible',
+          '📝 Agregado código de respaldo con selectores genéricos',
+          '💡 Incluidas instrucciones para configurar WebAgent',
+          '🔧 Recomendación: usar modo "browser" en el agente'
+        ],
+        confidence: 0.3,
+        suggestions: [
+          '🚨 CRÍTICO: Configurar agente con modo "browser"',
+          '🌐 Usar endpoint /api/webagent/extract para este sitio',
+          '📖 Consultar WEBAGENT_DEPLOYMENT_GUIDE.md',
+          '⚠️ El código actual retornará 0 items',
+          '✅ WebAgent bypaseará la protección anti-bot'
+        ]
+      };
+    } else {
+      // Sitio normal o con errores: usar IA
+      console.log(`🤖 Llamando a IA para optimizar código...`);
+      improvement = await improveCodeWithAI(code, results, url, error_message, improvement_type, diagnostic);
+    }
+
+    console.log(`✅ Código mejorado generado exitosamente`);
+    console.log(`📝 Explicación: ${improvement.explanation}`);
+    console.log(`🔧 Cambios: ${improvement.changes?.join(', ')}`);
+    console.log(`💬 Sugerencias: ${improvement.suggestions?.join(', ')}`);
+    console.log(`📄 Código (preview): ${improvement.improved_code?.substring(0, 150)}...`);
+
+    return res.json({
+      success: true,
+      data: {
+        improved_code: improvement.improved_code,
+        explanation: improvement.explanation,
+        changes: improvement.changes,
+        confidence: improvement.confidence,
+        suggestions: improvement.suggestions || []
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Error improving code:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'code_improvement_failed',
+      message: 'Error mejorando código',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/agents/explain-error
+ * Use AI to explain JavaScript execution errors and suggest fixes
+ */
+router.post('/explain-error', verifyUserAccess, async (req, res) => {
+  try {
+    const { code, error_message, url, logs = [] } = req.body;
+    const user = req.user;
+
+    if (!code || !error_message) {
+      return res.status(400).json({
+        error: 'missing_parameters',
+        message: 'Se requieren "code" y "error_message"'
+      });
+    }
+
+    console.log(`🤖 Usuario ${user.profile.email} solicitando explicación de error`);
+    console.log(`❌ Error: ${error_message.substring(0, 100)}`);
+
+    // Explain error using AI
+    const explanation = await explainErrorWithAI(code, error_message, url, logs);
+
+    console.log(`✅ Explicación de error generada exitosamente`);
+
+    return res.json({
+      success: true,
+      data: {
+        explanation: explanation.explanation,
+        probable_cause: explanation.probable_cause,
+        suggested_fix: explanation.suggested_fix,
+        fixed_code: explanation.fixed_code,
+        confidence: explanation.confidence
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Error explaining error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'error_explanation_failed',
+      message: 'Error explicando error',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * Improve JavaScript code using AI based on results and context
+ */
+async function improveCodeWithAI(code, results, url, errorMessage, improvementType, diagnostic = null) {
+  // ✅ Construir contexto del diagnóstico
+  let diagnosticSection = '';
+  if (diagnostic && diagnostic.issues && diagnostic.issues.length > 0) {
+    diagnosticSection = `
+📊 DIAGNÓSTICO DEL PROBLEMA:
+${diagnostic.issues.map((issue, idx) => `
+${idx + 1}. ${issue.title} [${issue.severity}]
+   - ${issue.description}
+   ${issue.suggestions ? `
+   Sugerencias específicas:
+   ${issue.suggestions.map((s, i) => `   ${i + 1}. ${s}`).join('\n')}
+   ` : ''}
+`).join('\n')}
+
+⚠️ PROBLEMAS DETECTADOS:
+${diagnostic.has_antibot ? '🔒 Anti-bot Protection detectado - El scraping simple NO funcionará' : ''}
+${diagnostic.has_spa ? '⚡ SPA/Contenido dinámico - Requiere ejecución de JavaScript' : ''}
+${diagnostic.has_empty_page ? '📄 Página vacía o bloqueada - Verificar acceso' : ''}
+
+Información de la página:
+- Tamaño HTML: ${diagnostic.page_info?.size_bytes || 'N/A'} bytes
+- Contenido texto: ${diagnostic.page_info?.size_text || 'N/A'} bytes
+- Tiene contenido: ${diagnostic.page_info?.has_content ? 'Sí' : 'No'}
+`;
+  }
+
+  const prompt = `Mejora este código JavaScript para web scraping basándote en los resultados de ejecución y el diagnóstico:
+
+CÓDIGO ACTUAL:
+\`\`\`javascript
+${code}
+\`\`\`
+
+URL OBJETIVO: ${url || 'No especificada'}
+TIPO DE MEJORA: ${improvementType}
+
+${results ? `
+RESULTADOS DE EJECUCIÓN:
+- Éxito: ${results.success}
+- Items extraídos: ${results.data?.items?.length || 0}
+- Tiempo de ejecución: ${results.metrics?.execution_time_ms || 'N/A'}ms
+` : ''}
+
+${errorMessage ? `
+ERROR ENCONTRADO:
+${errorMessage}
+` : ''}
+
+${diagnosticSection}
+
+CONTEXTO TÉCNICO:
+- El código se ejecuta en un SANDBOX con cheerio/jsdom
+- Tienes acceso a: document, querySelector, querySelectorAll, console, $
+- NO tienes acceso a: require, puppeteer, fetch, window (limitado)
+- El HTML ya fue descargado con fetch() por el sistema
+
+INSTRUCCIONES - SIEMPRE GENERA CÓDIGO EJECUTABLE:
+
+${diagnostic?.has_antibot ? `
+🔒 ANTI-BOT DETECTADO - GENERA EL MEJOR CÓDIGO POSIBLE:
+
+El sitio tiene protección anti-bot (${diagnostic.page_info?.size_bytes} bytes de HTML vacío).
+El scraping directo NO funcionará PERO:
+
+1. GENERA código válido para el sandbox que intente extraer lo que pueda
+2. INCLUYE en los comentarios que el sitio requiere WebAgent/Browser mode
+3. USA selectores genéricos que podrían funcionar si el HTML tuviera contenido
+
+EJEMPLO:
+
+\`\`\`javascript
+// ⚠️ NOTA: Este sitio tiene protección anti-bot (${diagnostic.page_info?.size_bytes} bytes).
+// Para scraping real, configura WebAgent o modo Browser en el agente.
+// Este código intentará extraer lo que encuentre:
+
+const items = [];
+
+try {
+  // Selectores genéricos que buscan contenido común
+  const elementos = document.querySelectorAll('table tbody tr, .item, article, [class*="card"]');
+  
+  console.log(\`Encontrados \${elementos.length} elementos\`);
+  
+  elementos.forEach((el, index) => {
+    const titulo = el.querySelector('h1, h2, h3, .title, [class*="titulo"]')?.textContent?.trim();
+    const enlace = el.querySelector('a')?.href;
+    const fecha = el.querySelector('[class*="fecha"], [class*="date"], time')?.textContent?.trim();
+    
+    if (titulo || enlace) {
+      items.push({
+        index: index + 1,
+        titulo: titulo || 'Sin título',
+        enlace: enlace,
+        fecha: fecha,
+        _nota: 'Extraído con anti-bot presente - puede estar vacío'
+      });
+    }
+  });
+  
+  if (items.length === 0) {
+    console.log('⚠️ Página bloqueada por anti-bot. Configure WebAgent para scraping real.');
+  }
+  
+} catch (error) {
+  console.error('Error:', error.message);
+}
+
+return items;
+\`\`\`
+
+REGLAS:
+- USA solo document.querySelector(), NO puppeteer
+- NO uses require() o import
+- Genera selectores CSS robustos y genéricos
+- Incluye logging para debugging
+- Menciona en comentarios que necesita WebAgent
+` : ''}
+
+${diagnostic?.has_spa ? `
+⚡ SPA/CONTENIDO DINÁMICO - GENERA CÓDIGO CON ESPERAS:
+
+El sitio carga contenido con JavaScript. El código debe:
+1. Esperar a que los elementos aparezcan
+2. Usar selectores correctos
+3. Manejar contenido que carga dinámicamente
+
+Incluye await page.waitForSelector() y timeouts apropiados.
+` : ''}
+
+${!diagnostic?.has_antibot && !diagnostic?.has_spa ? `
+✅ SITIO SCRAPEBLE - OPTIMIZA SELECTORES:
+1. Mejorar selectores CSS para mayor precisión
+2. Añadir fallbacks y validaciones
+3. Mejorar manejo de errores
+4. Añadir más campos si es necesario
+` : ''}
+
+REGLAS CRÍTICAS:
+- SIEMPRE genera código JavaScript válido para el SANDBOX
+- USA solo: document, querySelector, querySelectorAll, console, $
+- NO uses: require, import, puppeteer, fetch, async/await, window.fetch
+- NO generes código Node.js standalone
+- Incluye try/catch y logging con console.log()
+- Retorna array de items al final con: return items;
+- Si hay errores de sintaxis, CORRÍGELOS
+
+Responde SOLO con JSON válido (sin formato markdown):
+{
+  "improved_code": "código JavaScript para sandbox (sin require/import)",
+  "explanation": "explicación clara de las mejoras",
+  "changes": ["cambio 1", "cambio 2"],
+  "confidence": 0.9,
+  "suggestions": ["sugerencia 1", "sugerencia 2"]
+}`;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+        max_tokens: 2000
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenAI API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const aiResponse = data.choices[0].message.content.trim();
+
+    // Try to parse JSON response
+    try {
+      return JSON.parse(aiResponse);
+    } catch {
+      // If JSON parsing fails, create a structured response
+      return {
+        improved_code: extractCodeFromResponse(aiResponse),
+        explanation: 'Código mejorado por IA',
+        changes: ['Optimización general del código'],
+        confidence: 0.7,
+        suggestions: ['Revisar y probar el código mejorado']
+      };
+    }
+
+  } catch (error) {
+    console.error('Error improving code with AI:', error);
+    throw new Error(`Error mejorando código: ${error.message}`);
+  }
+}
+
+/**
+ * Explain JavaScript execution errors using AI
+ */
+async function explainErrorWithAI(code, errorMessage, url, logs) {
+  const prompt = `Analiza este error de JavaScript y proporciona una explicación clara y una solución:
+
+CÓDIGO:
+\`\`\`javascript
+${code}
+\`\`\`
+
+ERROR:
+${errorMessage}
+
+URL: ${url || 'No especificada'}
+
+${logs.length > 0 ? `
+LOGS:
+${logs.join('\n')}
+` : ''}
+
+Analiza el error y responde en formato JSON:
+{
+  "explanation": "explicación clara del error en español",
+  "probable_cause": "causa más probable del error",
+  "suggested_fix": "sugerencia específica para arreglar el error",
+  "fixed_code": "código corregido si es posible",
+  "confidence": 0.9
+}`;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.2,
+        max_tokens: 1500
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenAI API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const aiResponse = data.choices[0].message.content.trim();
+
+    // Try to parse JSON response
+    try {
+      return JSON.parse(aiResponse);
+    } catch {
+      return {
+        explanation: aiResponse,
+        probable_cause: 'Error en el código JavaScript',
+        suggested_fix: 'Revisar los selectores CSS y la lógica del código',
+        fixed_code: null,
+        confidence: 0.5
+      };
+    }
+
+  } catch (error) {
+    console.error('Error explaining error with AI:', error);
+    throw new Error(`Error explicando error: ${error.message}`);
+  }
+}
+
+/**
+ * Extract JavaScript code from AI response
+ */
+function extractCodeFromResponse(response) {
+  // Look for JavaScript code blocks
+  const codeMatch = response.match(/```(?:javascript)?\n?([\s\S]*?)```/);
+  if (codeMatch) {
+    return codeMatch[1].trim();
+  }
+
+  // If no code blocks found, return the response as-is
+  return response;
+}
+
+/**
+ * Generate a debug script using AI based on instructions
+ */
+async function generateDebugScript(instructions, url, siteMap) {
+  const prompt = `Genera un script JavaScript para extraer datos de una página web basado en estas instrucciones:
+
+INSTRUCCIONES:
+${instructions}
+
+URL OBJETIVO: ${url || 'No especificada'}
+SITIO: ${siteMap?.site_name || 'No especificado'} (${siteMap?.base_url || 'No especificado'})
+
+GENERA un script JavaScript que:
+1. Encuentre elementos en la página usando selectores CSS
+2. Extraiga la información solicitada
+3. Retorne un array de objetos con los datos
+4. Incluya manejo de errores básico
+5. Use selectores CSS válidos (NO spans con href)
+
+REGLAS PARA EL SCRIPT:
+- Usa document.querySelectorAll() para encontrar elementos
+- Valida que los elementos existen antes de extraer datos
+- Usa ?.textContent?.trim() para texto seguro
+- Incluye al menos 2-3 selectores de respaldo
+- Retorna un array de objetos con la estructura esperada
+- Incluye console.log() para debug
+
+EJEMPLO DE ESTRUCTURA:
+const items = [];
+const elements = document.querySelectorAll('SELECTOR_PRINCIPAL');
+
+elements.forEach(element => {
+  const data = {
+    // Campos extraídos aquí
+  };
+
+  if (data.CAMPO_PRINCIPAL) {
+    items.push(data);
+  }
+});
+
+return items;
+
+Responde solo con el código JavaScript, sin explicaciones adicionales.`;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+        max_tokens: 1500
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenAI API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const script = data.choices[0].message.content.trim();
+
+    // Clean the script (remove markdown code blocks if present)
+    const cleanScript = script
+      .replace(/```javascript\n?/g, '')
+      .replace(/```\n?/g, '')
+      .trim();
+
+    return {
+      script: cleanScript,
+      explanation: 'Script generado automáticamente basado en las instrucciones proporcionadas',
+      confidence: 0.8
+    };
+
+  } catch (error) {
+    console.error('Error generating debug script:', error);
+    throw new Error(`Error generando script: ${error.message}`);
+  }
 }
 
 module.exports = router;
