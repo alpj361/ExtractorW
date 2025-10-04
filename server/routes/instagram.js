@@ -405,8 +405,21 @@ function extractPostId(instagramUrl) {
 function normalizeFromEnhanced(json, sourceUrl) {
   try {
     const files = Array.isArray(json.media_files) ? json.media_files : [];
-    const images = files.filter((f) => (f.type || '').toLowerCase() === 'image');
-    const videos = files.filter((f) => (f.type || '').toLowerCase() === 'video');
+    // Build absolute URLs for files; prefer HTTP(S). If we get a local path like /app/temp_media, build /media/:filename
+    const base = String(EXTRACTOR_T_URL).replace(/\/$/, '');
+    const toRemote = (f) => {
+      let u = f.url || f.remote_url || f.public_url || f.media_url;
+      if (typeof u === 'string' && /^https?:\/\//i.test(u)) return u;
+      if (typeof u === 'string' && u.startsWith('/media/')) return `${base}${u}`;
+      // If only have a local path, try to construct from filename
+      const filename = f.filename || (typeof f.path === 'string' ? f.path.split('/').pop() : undefined) || (typeof f.filepath === 'string' ? f.filepath.split('/').pop() : undefined);
+      if (filename) return `${base}/media/${encodeURIComponent(filename)}`;
+      return null;
+    };
+
+    const normalizedFiles = files.map((f) => ({ ...f, _remoteUrl: toRemote(f) })).filter((f) => !!f._remoteUrl);
+    const images = normalizedFiles.filter((f) => (String(f.type || '')).toLowerCase() === 'image');
+    const videos = normalizedFiles.filter((f) => (String(f.type || '')).toLowerCase() === 'video');
     const postId = extractPostId(sourceUrl);
     let type = 'unknown';
     if (videos.length) type = 'video';
@@ -416,10 +429,10 @@ function normalizeFromEnhanced(json, sourceUrl) {
     return {
       post_id: postId,
       type,
-      video_url: firstVideo?.url || undefined,
+      video_url: firstVideo?._remoteUrl || undefined,
       audio_url: json.transcription?.audio_url || undefined,
-      images: images.map((i) => i.url).slice(0, 3),
-      thumbnail_url: json.content?.thumbnail || undefined,
+      images: images.map((i) => i._remoteUrl).slice(0, 3),
+      thumbnail_url: json.content?.thumbnail || json.thumbnail_url || undefined,
       duration: firstVideo?.duration || undefined,
       caption: json.content?.caption || json.content?.description || undefined,
     };
