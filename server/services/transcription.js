@@ -27,6 +27,15 @@ function detectFileType(filePath) {
   return 'unsupported';
 }
 
+function normalizeLanguageCode(lang) {
+  if (!lang || typeof lang !== 'string') return undefined;
+  const trimmed = lang.trim().toLowerCase();
+  if (!trimmed || trimmed === 'auto') return undefined;
+  const isoPattern = /^[a-z]{2,8}(-[a-z0-9]{2,8})?$/;
+  if (!isoPattern.test(trimmed)) return undefined;
+  return trimmed;
+}
+
 async function extractAudioFromVideo(videoPath) {
   const videoName = path.basename(videoPath, path.extname(videoPath));
   const audioPath = path.join(TEMP_DIR, `${videoName}_${Date.now()}.wav`);
@@ -64,7 +73,10 @@ async function transcribeWithOpenAI(audioPath, options = {}) {
       filename: path.basename(audioPath),
       contentType: 'audio/wav'
     });
-    if (options.language) form.append('language', options.language);
+    const normalizedLanguage = normalizeLanguageCode(options.language);
+    if (normalizedLanguage) {
+      form.append('language', normalizedLanguage);
+    }
     if (options.prompt) form.append('prompt', options.prompt);
 
     const axios = require('axios');

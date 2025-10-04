@@ -80,7 +80,7 @@ router.post('/upload', verifyUserAccess, upload.single('audioFile'), async (req,
       });
     }
 
-    const { titulo, descripcion, etiquetas, proyecto, project_id, prompt } = req.body;
+    const { titulo, descripcion, etiquetas, proyecto, project_id, prompt, language, translate_to } = req.body;
     const userId = req.user.id;
     const filePath = req.file.path;
     const fileType = detectFileType(filePath);
@@ -95,13 +95,18 @@ router.post('/upload', verifyUserAccess, upload.single('audioFile'), async (req,
     });
 
     // Preparar opciones de transcripción
+    const normalizedLanguage = typeof language === 'string' ? language.trim().toLowerCase() : undefined;
+    const normalizedTranslateTo = typeof translate_to === 'string' ? translate_to.trim().toLowerCase() : undefined;
+
     const options = {
       titulo: titulo || `Transcripción de ${req.file.originalname}`,
       descripcion,
       etiquetas: etiquetas ? etiquetas.split(',').map(tag => tag.trim()) : [],
       proyecto,
       project_id,
-      prompt: prompt || undefined
+      prompt: prompt || undefined,
+      language: normalizedLanguage,
+      translate_to: normalizedTranslateTo
     };
 
     // Iniciar transcripción
@@ -177,7 +182,7 @@ router.post('/upload', verifyUserAccess, upload.single('audioFile'), async (req,
  */
 router.post('/from-codex', verifyUserAccess, async (req, res) => {
   try {
-    const { codexItemId, titulo, descripcion, etiquetas, proyecto, project_id, prompt } = req.body;
+    const { codexItemId, titulo, descripcion, etiquetas, proyecto, project_id, prompt, language, translate_to } = req.body;
     const userId = req.user.id;
 
     if (!codexItemId) {
@@ -373,13 +378,18 @@ router.post('/from-codex', verifyUserAccess, async (req, res) => {
     }
 
     // Preparar opciones
+    const normalizedLanguage = typeof language === 'string' ? language.trim().toLowerCase() : undefined;
+    const normalizedTranslateTo = typeof translate_to === 'string' ? translate_to.trim().toLowerCase() : undefined;
+
     const options = {
       titulo: titulo || `Transcripción de ${codexItem.titulo}`,
       descripcion: descripcion || `Transcripción del archivo: ${codexItem.titulo}`,
       etiquetas: etiquetas ? etiquetas.split(',').map(tag => tag.trim()) : [...(codexItem.etiquetas || []), 'transcripcion-derivada'],
       proyecto: proyecto || codexItem.proyecto,
       project_id: project_id || codexItem.project_id,
-      prompt: prompt || undefined
+      prompt: prompt || undefined,
+      language: normalizedLanguage,
+      translate_to: normalizedTranslateTo
     };
 
     // Transcribir
