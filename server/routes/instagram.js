@@ -289,4 +289,174 @@ router.get('/health', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/instagram/media
+ * Lightweight wrapper to fetch media for an Instagram post via ExtractorT
+ * Tries the enhanced media endpoint first, then falls back to legacy /download_media
+ */
+router.post('/media', async (req, res) => {
+  try {
+    const { url } = req.body || {};
+    if (!url || typeof url !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'URL is required', code: 'MISSING_URL', timestamp: new Date().toISOString() }
+      });
+    }
+
+    if (!url.includes('instagram.com')) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Invalid Instagram URL', code: 'INVALID_URL', timestamp: new Date().toISOString() }
+      });
+    }
+
+    // Helper to safely fetch JSON with timeout
+    const doFetch = async (endpoint, body, timeoutMs = 45000) => {
+      const controller = AbortControllerCtor ? new AbortControllerCtor() : null;
+      const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+      try {
+        const r = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'ExtractorW/2.0 (Instagram Media)',
+            'Authorization': 'Bearer extractorw-auth-token',
+          },
+          body: JSON.stringify(body),
+          signal: controller ? controller.signal : undefined,
+        });
+        const ok = r.ok;
+        let json = null;
+        try { json = await r.json(); } catch (_) { json = null; }
+        return { ok, status: r.status, json };
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+      }
+    };
+
+    // First try: Enhanced media endpoint
+    const enhancedEndpoint = `${EXTRACTOR_T_URL.replace(/\/$/, '')}/enhanced-media/instagram/process`;
+    const enhancedBody = { url, save_to_codex: false, transcribe: false };
+    let media = null;
+    let triedEnhanced = false;
+    try {
+      const resp = await doFetch(enhancedEndpoint, enhancedBody, 45000);
+      triedEnhanced = true;
+      if (resp.ok && resp.json) {
+        media = normalizeFromEnhanced(resp.json, url);
+      }
+    } catch (e) {
+      // Continue to fallback
+    }
+
+    // Fallback: legacy download_media if enhanced failed or returned nothing useful
+    if (!media || (!media.video_url && !(media.images && media.images.length))) {
+      const legacyEndpoint = `${EXTRACTOR_T_URL.replace(/\/$/, '')}/download_media`;
+      const legacyBody = { tweet_url: url, download_videos: true, download_images: true, quality: 'medium' };
+      try {
+        const legacyResp = await doFetch(legacyEndpoint, legacyBody, 45000);
+        if (legacyResp.ok && legacyResp.json) {
+          media = normalizeFromLegacy(legacyResp.json, url, EXTRACTOR_T_URL);
+        }
+      } catch (e) {
+        // If both fail, propagate at the end
+      }
+    }
+
+    if (!media) {
+      return res.status(502).json({
+        success: false,
+        error: {
+          message: 'Unable to fetch media from ExtractorT',
+          code: triedEnhanced ? 'E_MEDIA_FALLBACK_FAILED' : 'E_MEDIA_ENHANCED_FAILED',
+          extractorTUrl: EXTRACTOR_T_URL,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
+    return res.json({ success: true, ...media });
+  } catch (error) {
+    console.error('❌ [Instagram] /media wrapper error:', error);
+    return res.status(500).json({
+      success: false,
+      error: {
+        message: error.message || 'Internal server error',
+        code: 'INTERNAL_ERROR',
+        timestamp: new Date().toISOString(),
+      },
+    });
+  }
+});
+
+function extractPostId(instagramUrl) {
+  try {
+    const { pathname } = new URL(instagramUrl);
+    const parts = pathname.split('/').filter(Boolean);
+    const idx = parts.findIndex((p) => ['p', 'reel', 'tv'].includes(p.toLowerCase()));
+    if (idx !== -1 && parts[idx + 1]) return parts[idx + 1];
+    return parts[parts.length - 1] || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function normalizeFromEnhanced(json, sourceUrl) {
+  try {
+    const files = Array.isArray(json.media_files) ? json.media_files : [];
+    const images = files.filter((f) => (f.type || '').toLowerCase() === 'image');
+    const videos = files.filter((f) => (f.type || '').toLowerCase() === 'video');
+    const postId = extractPostId(sourceUrl);
+    let type = 'unknown';
+    if (videos.length) type = 'video';
+    else if (images.length > 1) type = 'carousel';
+    else if (images.length === 1) type = 'image';
+    const firstVideo = videos[0];
+    return {
+      post_id: postId,
+      type,
+      video_url: firstVideo?.url || undefined,
+      audio_url: json.transcription?.audio_url || undefined,
+      images: images.map((i) => i.url).slice(0, 3),
+      thumbnail_url: json.content?.thumbnail || undefined,
+      duration: firstVideo?.duration || undefined,
+      caption: json.content?.caption || json.content?.description || undefined,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function normalizeFromLegacy(json, sourceUrl, baseUrl) {
+  try {
+    const files = (json.data?.downloaded_files || json.downloaded_files || []).map((f) => {
+      let url = f.url;
+      if (url && url.startsWith('/media/')) {
+        url = `${String(baseUrl).replace(/\/$/, '')}${url}`;
+      }
+      return { ...f, url };
+    });
+    const images = files.filter((f) => (f.type || '').toLowerCase() === 'image');
+    const videos = files.filter((f) => (f.type || '').toLowerCase() === 'video');
+    const postId = extractPostId(sourceUrl);
+    let type = 'unknown';
+    if (videos.length) type = 'video';
+    else if (images.length > 1) type = 'carousel';
+    else if (images.length === 1) type = 'image';
+    const firstVideo = videos[0];
+    return {
+      post_id: postId,
+      type,
+      video_url: firstVideo?.url || undefined,
+      images: images.map((i) => i.url).slice(0, 3),
+      thumbnail_url: undefined,
+      duration: undefined,
+      caption: undefined,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
 module.exports = router;

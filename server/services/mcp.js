@@ -1319,7 +1319,7 @@ Enfócate EXCLUSIVAMENTE en información actual, relevante y verificable de ${cu
 
     console.log(`📡 Realizando búsqueda web con Perplexity Search API...`);
 
-    const searchTimeoutMs = Number(process.env.PERPLEXITY_SEARCH_TIMEOUT_MS || 4000);
+    const searchTimeoutMs = Number(process.env.PERPLEXITY_SEARCH_TIMEOUT_MS || 8000);
     const searchController = new AbortController();
     const searchStart = Date.now();
     const searchPromise = fetch('https://api.perplexity.ai/search', {
@@ -1371,92 +1371,66 @@ Enfócate EXCLUSIVAMENTE en información actual, relevante y verificable de ${cu
       console.log(`[VIZTA] ⚠️ Perplexity Search API failed: ${searchError.message}`);
     }
 
-    // Now use Chat Completions for analysis with search context
+    // TEMPORAL FIX: Use search results directly without chat completion
     if (searchData?.results?.length > 0) {
-      // Add search context to the prompt
-      const searchContext = searchData.results.slice(0, 8).map((result, i) =>
-        `${i+1}. ${result.title} (${result.date || 'Reciente'})
-           ${result.snippet}
-           Fuente: ${result.url}`
+      console.log(`[VIZTA] 🔄 Using search results directly (chat completion disabled temporarily)`);
+      
+      // Create response based on search results only
+      const searchResults = searchData.results.slice(0, 5);
+      const searchSummary = searchResults.map((result, i) => 
+        `**${i+1}. ${result.title}**\n${result.snippet}\n*Fuente: ${result.url}*`
       ).join('\n\n');
 
-      // Update the system message to include search results
-      payload.messages[0].content += `\n\nCONTEXTO DE BÚSQUEDA WEB ACTUAL:\n${searchContext}\n\nUsa esta información actualizada para tu análisis.`;
-    }
-
-    const chatTimeoutMs = Number(process.env.PERPLEXITY_CHAT_TIMEOUT_MS || 6000);
-    const chatController = new AbortController();
-    const chatStart = Date.now();
-    let response;
-
-    try {
-      response = await Promise.race([
-        fetch('https://api.perplexity.ai/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload),
-          signal: chatController.signal
-        }),
-        new Promise((_, reject) => setTimeout(() => {
-          chatController.abort();
-          reject(new Error(`Perplexity chat timeout after ${chatTimeoutMs}ms`));
-        }, chatTimeoutMs))
-      ]);
-    } catch (chatError) {
-      console.log(`[VIZTA] ⚠️ Perplexity chat completion failed: ${chatError.message}`);
-
-      if (searchData?.results?.length) {
-        const quickSummary = searchData.results.slice(0, 5).map((result, index) => {
-          const dateLabel = result.date ? ` (${result.date})` : '';
-          return `${index + 1}. ${result.title || 'Resultado'}${dateLabel}\n   ${result.snippet || ''}\n   Fuente: ${result.url}`;
-        }).join('\n\n');
-
-        const fallbackResponse = `BÚSQUEDA WEB COMPLETADA PARA: "${query}"
-
-Resumen rápido basado en los resultados recientes:
-${quickSummary}
-
-(Generado directamente desde Perplexity Search; el análisis avanzado no estuvo disponible a tiempo.)`;
+      const analysis = `Basado en búsqueda web actual sobre "${query}" en ${location}:\n\n${searchSummary}\n\n*Información obtenida de ${searchResults.length} fuentes web actualizadas.*`;
 
       return {
         success: true,
-        query_original: query,
-        query_optimized: optimizedQuery,
-        location,
-        focus,
-          web_search_result: { raw_response: fallbackResponse },
-          search_results: searchData?.results || [],
-          nitter_optimization: null,
-          formatted_response: fallbackResponse,
-          analysis_result: fallbackResponse,
+        data: {
+          query: query,
+          location: location,
+          focus: focus,
+          search_results: searchResults,
+          analysis: analysis,
           metadata: {
-            search_performed: true,
-            perplexity_model: 'sonar',
-            search_api_used: true,
-            search_results_count: searchData?.results?.length || 0,
-            response_length: fallbackResponse.length,
-            json_parsed: false,
-            nitter_optimization_included: false,
-            timestamp: new Date().toISOString(),
-            fallback_mode: 'search_summary',
-            search_duration_ms: searchDurationMs,
-            chat_duration_ms: Date.now() - chatStart,
-            timeout_thresholds_ms: {
-              search: searchTimeoutMs,
-              chat: chatTimeoutMs
-            },
-            sources_count: searchData?.results?.length || 0,
-            consulta_optimizada: optimizedQuery
+            search_time_ms: searchDurationMs,
+            results_count: searchResults.length,
+            source: 'perplexity_search_only',
+            chat_completion_disabled: true,
+            timestamp: new Date().toISOString()
           }
-        };
-      }
-
-      throw chatError;
+        },
+        agent: 'Vizta',
+        tool: 'perplexity_search',
+        timestamp: new Date().toISOString()
+      };
     }
 
+    // CHAT COMPLETION DISABLED TEMPORARILY - Using search results only
+    console.log(`[VIZTA] 🔄 Chat completion disabled, using search results only`);
+    
+    // Return fallback response when no search results available
+    return {
+      success: false,
+      error: 'Chat completion temporarily disabled - using search results only',
+      data: {
+        query: query,
+        location: location,
+        focus: focus,
+        search_results: searchData?.results || [],
+        metadata: {
+          search_time_ms: searchDurationMs,
+          results_count: searchData?.results?.length || 0,
+          source: 'search_only_fallback',
+          chat_completion_disabled: true,
+          timestamp: new Date().toISOString()
+        }
+      },
+      agent: 'Vizta',
+      tool: 'perplexity_search',
+      timestamp: new Date().toISOString()
+    };
+
+    /* CHAT COMPLETION CODE COMMENTED OUT TEMPORARILY
     if (!response.ok) {
       const errorText = await response.text().catch(() => '');
       throw new Error(`Error en API de Perplexity: ${response.status} ${response.statusText} ${errorText}`.trim());
@@ -1559,6 +1533,7 @@ Contexto: ${location}`;
         consulta_optimizada: parsedResult?.consulta_optimizada || optimizedQuery
       }
     };
+    END CHAT COMPLETION CODE */
 
   } catch (error) {
     console.error(`❌ Error ejecutando perplexity_search MCP:`, error);
