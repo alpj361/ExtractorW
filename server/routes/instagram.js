@@ -28,9 +28,29 @@ if (!AbortControllerCtor) {
 // Get ExtractorT URL from environment or use default
 const EXTRACTOR_T_URL = process.env.EXTRACTOR_T_URL || process.env.EXTRACTORT_URL || 'http://localhost:8000';
 const EXTRACTOR_T_TIMEOUT_MS = parseInt(process.env.EXTRACTOR_T_TIMEOUT_MS || process.env.EXTRACTORT_TIMEOUT_MS || '120000', 10);
+const DEFAULT_EXTRACTOR_TOKEN = 'extractorw-auth-token';
+const rawExtractorToken = process.env.EXTRACTOR_T_BEARER
+  || process.env.EXTRACTORT_BEARER
+  || process.env.EXTRACTOR_T_TOKEN
+  || process.env.EXTRACTORT_TOKEN
+  || DEFAULT_EXTRACTOR_TOKEN;
+const EXTRACTOR_T_BEARER = rawExtractorToken.trim() || DEFAULT_EXTRACTOR_TOKEN;
+
+if (EXTRACTOR_T_BEARER === DEFAULT_EXTRACTOR_TOKEN) {
+  if (!process.env.EXTRACTOR_T_BEARER && !process.env.EXTRACTOR_T_TOKEN && !process.env.EXTRACTORT_BEARER && !process.env.EXTRACTORT_TOKEN) {
+    console.warn('⚠️ [Instagram] EXTRACTOR_T_BEARER no configurado; usando token por defecto. Configura EXTRACTOR_T_BEARER para mayor seguridad.');
+  } else {
+    console.warn('⚠️ [Instagram] EXTRACTOR_T_BEARER proporcionado estaba vacío; usando token por defecto. Revisa tu configuración.');
+  }
+}
+
+const tokenPreview = EXTRACTOR_T_BEARER.length > 8
+  ? `${EXTRACTOR_T_BEARER.slice(0, 4)}…${EXTRACTOR_T_BEARER.slice(-4)}`
+  : EXTRACTOR_T_BEARER;
 
 console.log(`🔧 [Instagram] ExtractorT URL configured: ${EXTRACTOR_T_URL}`);
 console.log(`🔧 [Instagram] ExtractorT timeout: ${EXTRACTOR_T_TIMEOUT_MS}ms`);
+console.log(`🔐 [Instagram] Bearer token configurado (preview): ${tokenPreview}`);
 
 /**
  * Extract Instagram comments from a post URL
@@ -73,7 +93,7 @@ async function extractInstagramComments(url, options = {}) {
         headers: {
           'Content-Type': 'application/json',
           'User-Agent': 'ExtractorW/2.0 (Instagram Comments)',
-          'Authorization': 'Bearer extractorw-auth-token' // Required by ExtractorT
+          'Authorization': `Bearer ${EXTRACTOR_T_BEARER}` // Required by ExtractorT
         },
         body: JSON.stringify(requestBody),
         signal: controller ? controller.signal : undefined
@@ -87,6 +107,10 @@ async function extractInstagramComments(url, options = {}) {
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
+    }
+
+    if (response.status === 401) {
+      throw new Error('ExtractorT authentication failed (401). Revisa EXTRACTOR_T_BEARER.');
     }
 
     if (!response.ok) {
@@ -321,7 +345,7 @@ router.post('/media', async (req, res) => {
           headers: {
             'Content-Type': 'application/json',
             'User-Agent': 'ExtractorW/2.0 (Instagram Media)',
-            'Authorization': 'Bearer extractorw-auth-token',
+            'Authorization': `Bearer ${EXTRACTOR_T_BEARER}`,
           },
           body: JSON.stringify(body),
           signal: controller ? controller.signal : undefined,
@@ -335,6 +359,16 @@ router.post('/media', async (req, res) => {
       }
     };
 
+    const handleAuthFailure = () => res.status(401).json({
+      success: false,
+      error: {
+        message: 'ExtractorT authentication failed (401). Verifica EXTRACTOR_T_BEARER.',
+        code: 'EXTRACTOR_T_AUTH_FAILED',
+        extractorTUrl: EXTRACTOR_T_URL,
+        timestamp: new Date().toISOString(),
+      },
+    });
+
     // First try: Enhanced media endpoint
     const enhancedEndpoint = `${EXTRACTOR_T_URL.replace(/\/$/, '')}/enhanced-media/instagram/process`;
     const enhancedBody = { url, save_to_codex: false, transcribe: false };
@@ -342,6 +376,9 @@ router.post('/media', async (req, res) => {
     let triedEnhanced = false;
     try {
       const resp = await doFetch(enhancedEndpoint, enhancedBody, 45000);
+      if (resp.status === 401) {
+        return handleAuthFailure();
+      }
       triedEnhanced = true;
       if (resp.ok && resp.json) {
         media = normalizeFromEnhanced(resp.json, url);
@@ -356,6 +393,9 @@ router.post('/media', async (req, res) => {
       const legacyBody = { tweet_url: url, download_videos: true, download_images: true, quality: 'medium' };
       try {
         const legacyResp = await doFetch(legacyEndpoint, legacyBody, 45000);
+        if (legacyResp.status === 401) {
+          return handleAuthFailure();
+        }
         if (legacyResp.ok && legacyResp.json) {
           media = normalizeFromLegacy(legacyResp.json, url, EXTRACTOR_T_URL);
         }

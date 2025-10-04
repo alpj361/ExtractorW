@@ -25,7 +25,7 @@ const openai = new OpenAI({
 class ViztaAgent {
   constructor() {
     this.name = 'Vizta';
-    this.version = '4.0-full-ai-reasoning';
+    this.version = '4.1-intelligent-tool-calling';
 
     // Memory integration - DISABLED TEMPORARILY
     // this.memoryClient = new LauraMemoryClient({
@@ -152,38 +152,44 @@ class ViztaAgent {
     }
 
     try {
-      const prompt = `Analyze this user message and classify the intent with high precision:
+      const prompt = `Analyze this user message and classify with high precision:
 
 Message: "${userMessage}"
 
-Classify as one of:
-- "conversation": Pure social interaction (greetings, thanks, how are you, casual chat, capability questions)
-- "tool_needed": Requires external data/tools (search, analysis, specific information)
-- "hybrid": Conversational + needs tools (e.g., "Hi, what's trending in Guatemala?")
+QUERY TYPES:
+1. **conceptual**: "¿Qué es X?", "¿Qué significa Y?", "Explícame Z" (needs web search or codex)
+2. **news_event**: "¿Qué pasó con X?", "Noticias sobre Y" (needs perplexity + nitter)
+3. **personal_data**: "Mis proyectos", "Busca en mi codex", "Decisiones del proyecto X" (needs user tools)
+4. **social_media**: "Tweets sobre X", "Perfil de @user", "Tendencias" (needs nitter/trends)
+5. **complex_analysis**: Multi-step queries needing reasoning and multiple sources
+6. **conversation**: Greetings, thanks, casual chat, capability questions
 
-Available tools you can suggest:
-- nitter_context: Search and analyze Twitter/X posts by topic or hashtag
-- nitter_profile: Get specific Twitter/X user profile and recent posts
-- perplexity_search: Web search for current events and general information
-- resolve_twitter_handle: Find Twitter handle for a person's name
-- user_projects: Access user's personal projects
-- user_codex: Search user's personal knowledge base and documents
-- latest_trends: Get current trending topics
-- project_decisions: Access project decision logs
+AVAILABLE TOOLS:
+- perplexity_search: Web search (definitions, explanations, current events, general info)
+- nitter_context: Twitter/X search by topic/hashtag
+- nitter_profile: Twitter/X user profile
+- latest_trends: Trending topics
+- user_projects: User's personal projects
+- user_codex: User's knowledge base (definitions, notes, documents)
+- project_decisions: Project decision logs
+- resolve_twitter_handle: Find Twitter handle
 
-Instructions:
-1. Determine if the query needs external data or can be answered conversationally
-2. If tools are needed, suggest the most relevant ones (1-3 tools max)
-3. Explain your reasoning briefly
-4. Be specific about which tools would help
+TOOL SELECTION STRATEGY:
+- **Conceptual questions** → Try user_codex first (if personal context), else perplexity_search
+- **News/events** → perplexity_search + nitter_context (if trending)
+- **Personal data** → user_projects, user_codex, project_decisions
+- **Social media** → nitter_context, nitter_profile, latest_trends
+- **Complex** → Multiple tools in sequence
 
-Respond ONLY with valid JSON:
+Respond with valid JSON:
 {
-  "intent": "conversation|tool_needed|hybrid",
+  "intent": "conceptual|news_event|personal_data|social_media|complex_analysis|conversation",
   "confidence": 0.95,
-  "reasoning": "Brief explanation why this intent was chosen",
+  "reasoning": "Why this classification?",
   "suggested_tools": ["tool1", "tool2"],
-  "conversational_element": "greeting|thanks|question|help_request"
+  "query_type": "question|search|request|analysis",
+  "needs_multiple_sources": false,
+  "conversational_element": "greeting|thanks|question|help_request|none"
 }`;
 
       const response = await openai.chat.completions.create({
@@ -289,54 +295,95 @@ Genera una respuesta natural y útil en español.`;
 
   /**
    * Execute tools and generate intelligent response - AI determines everything
+   * Supports parallel tool execution for faster responses
    */
   async executeToolsAndRespond(userMessage, user, intentAnalysis) {
     const toolResults = [];
+    const intent = intentAnalysis.intent;
 
-    // Execute AI-suggested tools
+    console.log(`[VIZTA] 📊 Intent: ${intent}, Tools: ${intentAnalysis.suggestedTools?.join(', ') || 'none'}`);
+
+    // STRATEGY 1: Execute AI-suggested tools (parallel execution if possible)
     if (intentAnalysis.suggestedTools && intentAnalysis.suggestedTools.length > 0) {
-      for (const toolName of intentAnalysis.suggestedTools) {
-        if (this.availableTools.includes(toolName)) {
-          try {
-            console.log(`[VIZTA] 🔧 Executing AI-suggested tool: ${toolName}`);
-            const result = await this.executeSpecificTool(toolName, userMessage, user);
-            if (result && result.success) {
-              toolResults.push({ tool: toolName, result });
+      const validTools = intentAnalysis.suggestedTools.filter(t => this.availableTools.includes(t));
+      
+      if (validTools.length > 0) {
+        // For news_event or complex_analysis: execute tools in parallel for speed
+        const shouldParallel = intent === 'news_event' || intent === 'complex_analysis';
+        
+        if (shouldParallel && validTools.length > 1) {
+          console.log(`[VIZTA] ⚡ Executing ${validTools.length} tools in parallel...`);
+          const results = await Promise.allSettled(
+            validTools.map(async (toolName) => {
+              try {
+                const result = await this.executeSpecificTool(toolName, userMessage, user);
+                return { tool: toolName, result, success: result?.success };
+              } catch (error) {
+                return { tool: toolName, error: error.message, success: false };
+              }
+            })
+          );
+
+          // Collect successful results
+          for (const promise of results) {
+            if (promise.status === 'fulfilled' && promise.value.success) {
+              toolResults.push({ tool: promise.value.tool, result: promise.value.result });
+            } else if (promise.status === 'fulfilled') {
+              console.log(`[VIZTA] ⚠️ Tool ${promise.value.tool} failed:`, promise.value.error);
             }
-          } catch (error) {
-            console.log(`[VIZTA] ⚠️ Tool ${toolName} failed:`, error.message);
           }
         } else {
-          console.warn(`[VIZTA] ⚠️ AI suggested unavailable tool: ${toolName}`);
+          // Sequential execution for single tool or other intents
+          for (const toolName of validTools) {
+            try {
+              console.log(`[VIZTA] 🔧 Executing AI-suggested tool: ${toolName}`);
+              const result = await this.executeSpecificTool(toolName, userMessage, user);
+              if (result && result.success) {
+                toolResults.push({ tool: toolName, result });
+              }
+            } catch (error) {
+              console.log(`[VIZTA] ⚠️ Tool ${toolName} failed:`, error.message);
+            }
+          }
         }
       }
     }
 
-    // If AI didn't suggest tools or all failed, try fallback tool
+    // STRATEGY 2: Intelligent fallback based on intent
     if (toolResults.length === 0) {
-      console.log('[VIZTA] 💡 No tools executed successfully, trying fallback...');
+      console.log(`[VIZTA] 💡 No tools executed successfully, trying intelligent fallback for intent: ${intent}`);
       
-      // Try latest_trends as fallback for general queries
-      if (intentAnalysis.suggestedTools.includes('perplexity_search')) {
+      const fallbackStrategy = {
+        'conceptual': ['user_codex', 'latest_trends'], // Try personal knowledge first, then trends
+        'news_event': ['latest_trends', 'nitter_context'], // Trends first, then social media
+        'personal_data': ['user_projects', 'user_codex'], // Personal tools only
+        'social_media': ['latest_trends'], // Fallback to trends
+        'complex_analysis': ['latest_trends'], // Simplified fallback
+      };
+
+      const fallbackTools = fallbackStrategy[intent] || ['latest_trends'];
+      
+      for (const fallbackTool of fallbackTools) {
         try {
-          console.log('[VIZTA] 🔧 Trying latest_trends as fallback...');
-          const fallbackResult = await this.executeSpecificTool('latest_trends', userMessage, user);
+          console.log(`[VIZTA] 🔧 Trying fallback: ${fallbackTool}...`);
+          const fallbackResult = await this.executeSpecificTool(fallbackTool, userMessage, user);
           if (fallbackResult && fallbackResult.success) {
-            toolResults.push({ tool: 'latest_trends', result: fallbackResult });
+            toolResults.push({ tool: fallbackTool, result: fallbackResult });
+            break; // Stop at first successful fallback
           }
         } catch (fallbackError) {
-          console.log('[VIZTA] ⚠️ Fallback tool also failed:', fallbackError.message);
+          console.log(`[VIZTA] ⚠️ Fallback ${fallbackTool} failed:`, fallbackError.message);
         }
       }
       
       // If still no results, throw error
       if (toolResults.length === 0) {
-        throw new Error('No se pudieron ejecutar las herramientas sugeridas');
+        throw new Error('No se pudieron ejecutar las herramientas sugeridas ni los fallbacks');
       }
     }
 
-    // Generate intelligent response from tool results
-    return await this.synthesizeToolResults(userMessage, toolResults);
+    // STRATEGY 3: Generate intelligent, context-aware response
+    return await this.synthesizeToolResults(userMessage, toolResults, intentAnalysis);
   }
 
   /**
@@ -518,10 +565,16 @@ Example: {"query": "extracted topic", "focus": "politica", "location": "Guatemal
   }
 
   /**
-   * AI-powered synthesis of tool results
+   * AI-powered synthesis of tool results with deep contextual understanding
+   * Generates responses based on query intent and available data
    */
-  async synthesizeToolResults(userMessage, toolResults) {
+  async synthesizeToolResults(userMessage, toolResults, intentAnalysis = {}) {
     try {
+      const intent = intentAnalysis.intent || 'unknown';
+      const queryType = intentAnalysis.query_type || 'question';
+      
+      console.log(`[VIZTA] 🎨 Synthesizing response for intent: ${intent}, queryType: ${queryType}`);
+
       const sanitizedResults = toolResults.map(tr => {
         const searchResults = Array.isArray(tr.result?.search_results)
           ? tr.result.search_results.slice(0, 5).map(result => ({
@@ -541,30 +594,93 @@ Example: {"query": "extracted topic", "focus": "politica", "location": "Guatemal
         };
       });
 
-      const systemMessage = `Eres Vizta, un analista imparcial que genera respuestas en español basadas en resultados de herramientas. Debes sintetizar la información con rigor, neutralidad y transparencia, citando siempre las fuentes disponibles.`;
-      const userPrompt = `El usuario preguntó: "${userMessage}".
+      // Adaptive system message based on intent
+      const intentStrategies = {
+        'conceptual': 'explicativo y educativo, enfócate en definiciones claras y ejemplos prácticos',
+        'news_event': 'periodístico y actualizado, enfócate en hechos recientes con contexto temporal',
+        'personal_data': 'directo y orientado a la acción, enfócate en lo que el usuario necesita saber',
+        'social_media': 'analítico de tendencias, enfócate en patrones y conversaciones relevantes',
+        'complex_analysis': 'profundo y multi-facético, conecta información de múltiples fuentes',
+        'conversation': 'conversacional y útil'
+      };
 
-Recibiste los siguientes datos en formato JSON:
+      const responseStyle = intentStrategies[intent] || 'claro y útil';
+      
+      const systemMessage = `Eres Vizta, un analista inteligente especializado en Guatemala. 
+
+ESTILO DE RESPUESTA: ${responseStyle}
+
+CONTEXTO:
+- Intención: ${intent}
+- Tipo de consulta: ${queryType}
+- Herramientas usadas: ${toolResults.map(tr => tr.tool).join(', ')}
+
+PRINCIPIOS:
+1. Responde en español de forma natural y clara
+2. Sé objetivo y transparente con las fuentes
+3. Adapta el nivel de detalle al tipo de consulta
+4. Conecta información cuando hay múltiples fuentes
+5. Cita URLs cuando estén disponibles`;
+
+      const userPrompt = `Consulta: "${userMessage}"
+
+Datos obtenidos:
 ${JSON.stringify(sanitizedResults, null, 2)}
 
-Instrucciones para la respuesta final:
-1. Escribe un resumen inicial (1-2 párrafos) objetivo, sin tomar partido ni añadir opiniones.
-2. Incluye una sección **Puntos clave** con viñetas solo si hay datos relevantes.
-3. Cierra con una sección **Fuentes** listando cada URL disponible en los datos. Usa el formato "- [Título](URL)"; si falta el título emplea la URL como texto. No inventes fuentes.
-4. Si varias herramientas aportan información, integra sus hallazgos en una narrativa coherente.
-5. Indica cuando la información es limitada o incierta.
-6. Evita repetir texto o usar frases genéricas.
+INSTRUCCIONES ESPECÍFICAS POR TIPO:
 
-Responde únicamente en Markdown siguiendo la estructura indicada.`;
+${intent === 'conceptual' ? `
+- Explica el concepto de forma clara y didáctica
+- Proporciona contexto relevante para Guatemala
+- Usa ejemplos si ayudan a entender
+- Estructura: Definición → Contexto → Importancia
+` : ''}
+
+${intent === 'news_event' ? `
+- Resalta QUÉ pasó, CUÁNDO y POR QUÉ es relevante
+- Incluye contexto histórico si es necesario
+- Menciona fuentes y fechas específicas
+- Estructura: Evento actual → Contexto → Implicaciones
+` : ''}
+
+${intent === 'personal_data' ? `
+- Presenta la información de forma directa y accionable
+- Organiza por prioridad o relevancia
+- Incluye próximos pasos si aplica
+- Estructura: Resumen → Detalles → Acciones sugeridas
+` : ''}
+
+${intent === 'social_media' ? `
+- Identifica tendencias y patrones principales
+- Menciona voces relevantes o influyentes
+- Conecta con contexto actual si aplica
+- Estructura: Tendencia principal → Conversaciones → Contexto
+` : ''}
+
+${intent === 'complex_analysis' ? `
+- Conecta información de múltiples fuentes
+- Identifica patrones, contradicciones o gaps
+- Proporciona análisis multi-dimensional
+- Estructura: Síntesis → Análisis profundo → Conclusiones
+` : ''}
+
+REGLAS GENERALES:
+1. Integra información de múltiples herramientas en una narrativa coherente
+2. Indica cuando la información es limitada o incierta
+3. Incluye sección **Fuentes** al final con URLs disponibles (formato: - [Título](URL))
+4. Evita repetir texto o usar frases genéricas
+5. Usa Markdown para estructura clara
+
+Genera una respuesta completa, bien estructurada y útil.`;
 
       const response = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
+        model: process.env.VIZTA_SYNTHESIS_MODEL || "gpt-4o-mini", // Use better model for synthesis
         messages: [
           { role: 'system', content: systemMessage },
           { role: 'user', content: userPrompt }
         ],
-        temperature: 0.2,
-        max_tokens: 600
+        temperature: 0.3, // Slightly more creative for better synthesis
+        max_tokens: 1000 // Allow for deeper, more complete responses
       });
 
       return response.choices[0].message.content.trim();
